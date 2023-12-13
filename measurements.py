@@ -1,9 +1,9 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime
-from consts import data_dir
+from .consts import data_dir
 from numpy.fft import fft, fftfreq
-from functions import window
+from .functions import window
 from enum import Enum
 
 
@@ -24,7 +24,7 @@ class Measurement:
         self.position = [None, None]
 
         if post_process_config is None:
-            from consts import post_process_config
+            from .consts import post_process_config
 
         self.post_process_config = post_process_config
         self._data_fd, self._data_td = None, data_td

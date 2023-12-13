@@ -6,16 +6,15 @@ from functools import partial
 from itertools import product
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-from consts import plot_range1, plot_range, c_thz, plot_range2
+from .consts import plot_range1, plot_range, c_thz, plot_range2
 from numpy import array
 from pathlib import Path
 import numpy as np
 import matplotlib.ticker as ticker
-from functions import do_fft, do_ifft, phase_correction, unwrap, window, polyfit, f_axis_idx_map, to_db, zero_pad, \
-    peak_cnt
-from functions import remove_spikes
-from Measurements.measurements import get_all_measurements, MeasurementType
-from mpl_settings import mpl_style_params, fmt
+from .functions import do_fft, do_ifft, phase_correction, unwrap, window, polyfit, f_axis_idx_map, to_db, zero_pad, \
+    peak_cnt, remove_spikes
+from .measurements import get_all_measurements, MeasurementType
+from .mpl_settings import mpl_style_params, fmt
 from scipy.optimize import shgo
 
 
@@ -141,7 +140,7 @@ class Image:
     def _set_info(self):
         if self.sample_idx is None:
             self.sample_idx = 0
-        self.name = f"Sample {self.sample_idx + 1}"
+        self.name = f"Sample {self.sample_idx}"
 
         sample_data_td = self.sams[0].get_data_td()
         samples = int(sample_data_td.shape[0])

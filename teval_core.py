@@ -1,3 +1,3 @@
-from Measurements.image import Image
-
+from .image import *
+from .measurements import *
 

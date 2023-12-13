@@ -1,5 +1,5 @@
 import matplotlib as mpl
-from consts import os_name, Path, result_dir
+from .consts import os_name, Path, result_dir
 import matplotlib.pyplot as plt
 import matplotlib.font_manager
 

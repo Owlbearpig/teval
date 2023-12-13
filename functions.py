@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import pearsonr
 from numpy import array, nan_to_num, zeros, pi
-from consts import c0, THz
+from .consts import c0, THz
 from numpy.fft import irfft, rfft, rfftfreq
 from scipy import signal
 
