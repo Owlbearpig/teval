@@ -19,6 +19,142 @@ from scipy.optimize import shgo
 
 
 # shgo = partial(shgo, workers=1)
+import numpy as np
+from numpy import pi
+from scipy.constants import epsilon_0
+from teval.functions import phase_correction, window, do_fft, f_axis_idx_map, do_ifft, to_db
+from teval.consts import c_thz, THz, plot_range1
+from tmm import coh_tmm as coh_tmm_full
+from tmm_slim import coh_tmm
+import matplotlib.pyplot as plt
+from scipy.optimize import shgo
+
+d_sub = 1000
+angle_in = 0.0
+
+def sub_refidx(img_, point=(22.5, 5)):
+    #img_.plot_point(*point)
+    #plt.show()
+
+    sub_meas = img_.get_measurement(*point)
+    sam_td = sub_meas.get_data_td()
+    ref_td = img_.get_ref(point=point)
+
+    sam_td = window(sam_td, en_plot=False)
+    ref_td = window(ref_td, en_plot=False)
+
+    ref_fd, sam_fd = do_fft(ref_td), do_fft(sam_td)
+
+    freqs = ref_fd[:, 0].real
+    omega = 2*np.pi*freqs
+
+    phi_ref = phase_correction(ref_fd)
+    phi_sam = phase_correction(sam_fd)
+    phi_diff = phi_sam[:, 1] - phi_ref[:, 1]
+
+    n0 = 1 + c_thz * phi_diff / (omega * d_sub)
+    k0 = -c_thz * np.log(np.abs(sam_fd[:, 1]/ref_fd[:, 1]) * (1+n0)**2 / (4*n0)) / (omega*d_sub)
+
+    return np.array([freqs, n0+1j*k0], dtype=complex).T
+
+
+def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000):
+    initial_shgo_iters = 3
+    sub_point = (22, -4)
+
+    if "sample3" in str(img_.data_path):
+        d_film = 0.350
+    elif "sample4" in str(img_.data_path):
+        d_film = 0.250
+    else:
+        d_film = d_film_
+
+    n_sub = sub_refidx(img_, point=sub_point)
+
+    shgo_bounds = [(1, 100), (1, 100)]
+
+    film_td = measurement_.get_data_td()
+    film_ref_td = img_.get_ref(both=False, point=measurement_.position)
+
+    film_td = window(film_td, win_len=16, shift=0, en_plot=False, slope=0.99)
+    film_ref_td = window(film_ref_td, win_len=16, shift=0, en_plot=False, slope=0.99)
+
+    pos_x = (measurement_.position[0] < 25) + (45 < measurement_.position[0])
+    pos_y = (measurement_.position[0] < -11) + (9 < measurement_.position[0])
+    if (np.max(film_td[:, 1])/np.max(film_ref_td[:, 1]) > 0.25) and pos_x and pos_y:
+        return 1000
+
+    film_td[:, 0] -= film_td[0, 0]
+    film_ref_td[:, 0] -= film_ref_td[0, 0]
+
+    film_ref_fd, film_fd = do_fft(film_ref_td), do_fft(film_td)
+
+    # film_ref_fd = phase_correction(film_ref_fd, fit_range=(0.1, 0.2), ret_fd=True, en_plot=False)
+    # film_fd = phase_correction(film_fd, fit_range=(0.1, 0.2), ret_fd=True, en_plot=False)
+
+    # phi = self.get_phase(point)
+    phi = np.angle(film_fd[:, 1] / film_ref_fd[:, 1])
+
+    freqs = film_ref_fd[:, 0].real
+    zero = np.zeros_like(freqs, dtype=complex)
+    one = np.ones_like(freqs, dtype=complex)
+    omega = 2 * pi * freqs
+
+    f_opt_idx = f_axis_idx_map(freqs, selected_freq_)
+
+    d_list = np.array([np.inf, d_sub, d_film, np.inf], dtype=float)
+
+    phase_shift = np.exp(-1j * (d_sub + np.sum(d_film)) * omega / c_thz)
+
+    # film_ref_interpol = self._ref_interpolation(measurement, selected_freq_=selected_freq_, ret_cart=True)
+
+    def cost(p, freq_idx_):
+        n = np.array([1, n_sub[freq_idx_, 1], p[0] + 1j * p[1], 1], dtype=complex)
+        # n = array([1, 1.9+1j*0.1, p[0] + 1j * p[1], 1])
+        lam_vac = c_thz / freqs[freq_idx_]
+        t_tmm_fd = coh_tmm("s", n, d_list, angle_in, lam_vac) * phase_shift[freq_idx_]
+
+        sam_tmm_fd = t_tmm_fd * film_ref_fd[freq_idx_, 1]
+
+        amp_loss = (np.abs(sam_tmm_fd) - np.abs(film_fd[freq_idx_, 1])) ** 2
+        phi_loss = (np.angle(t_tmm_fd) - phi[freq_idx_]) ** 2
+
+        return amp_loss + phi_loss
+
+    res = None
+    sigma, epsilon_r, n_opt = zero.copy(), zero.copy(), zero.copy()
+    for f_idx_, freq in enumerate(freqs):
+        if f_idx_ not in f_opt_idx:
+            continue
+
+        bounds_ = shgo_bounds
+
+        cost_ = cost
+        if freq <= 0.150:
+            res = shgo(cost_, bounds=bounds_, args=(f_idx_,), iters=initial_shgo_iters)
+        elif freq <= 2.0:
+            res = shgo(cost_, bounds=bounds_, args=(f_idx_,), iters=initial_shgo_iters)
+            iters = initial_shgo_iters
+            while res.fun > 1e-14:
+                iters += 1
+                res = shgo(cost_, bounds=bounds_, args=(f_idx_,), iters=iters)
+                if iters >= initial_shgo_iters + 3:
+                    break
+        else:
+            res = shgo(cost_, bounds=bounds_, args=(f_idx_,), iters=initial_shgo_iters)
+
+        n_opt[f_idx_] = res.x[0] + 1j * res.x[1]
+        epsilon_r[f_idx_] = n_opt[f_idx_] ** 2
+        sigma[f_idx_] = 1j * (1 - epsilon_r[f_idx_]) * epsilon_0 * omega[f_idx_] * THz * 0.01  # "WORKS"
+        # sigma[f_idx_] = 1j * (4 - epsilon_r[f_idx_]) * epsilon_0 * omega[f_idx_] * THz * 0.01  # 1/(Ohm cm)
+        # sigma[f_idx_] = 1j * epsilon_r[f_idx_] * epsilon_0 * omega[f_idx_] * THz
+        # sigma[f_idx_] = - 1j * epsilon_r[f_idx_] * epsilon_0 * omega[f_idx_] * THz
+        print(f"Result: {np.round(sigma[f_idx_], 1)} (S/cm), "
+              f"n: {np.round(n_opt[f_idx_], 3)}, at {np.round(freqs[f_idx_], 3)} THz, "
+              f"loss: {res.fun}")
+        print(f"Substrate refractive index: {np.round(n_sub[f_idx_, 1], 3)}\n")
+
+    return 1 / (sigma[f_opt_idx[0]].real * d_film * 1e-4)
 
 
 class Image:
@@ -288,6 +424,15 @@ class Image:
                 x_idx, y_idx = self._coords_to_idx(*measurement.position)
 
                 grid_vals[x_idx, y_idx] = peak_cnt(measurement.get_data_td(), threshold=2.5)
+        elif quantity.lower() == "conductivity":
+            grid_vals = self._empty_grid.copy()
+
+            for i, measurement in enumerate(self.sams):
+                print(f"{round(100 * i / len(self.sams), 2)} % done. "
+                      f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
+                x_idx, y_idx = self._coords_to_idx(*measurement.position)
+                sheet_resistance = conductivity(self, measurement, selected_freq_=selected_freq)
+                grid_vals[x_idx, y_idx] = sheet_resistance
         else:
             # grid_vals = np.argmax(np.abs(self.image_data[:, :, int(17 / info["dt"]):int(20 / info["dt"])]), axis=2)
             grid_vals = np.argmax(np.abs(self.image_data[:, :, int(17 / info["dt"]):int(20 / info["dt"])]), axis=2)
@@ -306,19 +451,21 @@ class Image:
 
     def plot_image(self, selected_freq=None, quantity="p2p", img_extent=None, flip_x=False):
         if quantity.lower() == "p2p":
-            label = ""
+            cbar_label = ""
         elif quantity.lower() == "ref_amp":
-            label = " Interpolated ref. amp. at " + str(np.round(selected_freq, 3)) + " THz"
+            cbar_label = " Interpolated ref. amp. at " + str(np.round(selected_freq, 3)) + " THz"
         elif quantity == "Reference phase":
-            label = " interpolated at " + str(np.round(selected_freq, 3)) + " THz"
+            cbar_label = " interpolated at " + str(np.round(selected_freq, 3)) + " THz"
         elif quantity.lower() == "power":
-            label = f" ({selected_freq[0]}-{selected_freq[1]}) THz"
+            cbar_label = f" ({selected_freq[0]}-{selected_freq[1]}) THz"
         elif quantity.lower() == "loss":
-            label = " function value (log10)"
+            cbar_label = " function value (log10)"
+        elif quantity.lower() == "conductivity":
+            cbar_label = f"Sheet resistance ($\Omega$/sq) @ {np.round(selected_freq, 3)} THz"
         elif quantity.lower() == "pulse_cnt":
-            label = ""
+            cbar_label = ""
         else:
-            label = ""
+            cbar_label = ""
 
         info = self.image_info
         if img_extent is None:
@@ -345,10 +492,12 @@ class Image:
         if img_extent is None:
             img_extent = self.image_info["extent"]
 
+        cbar_min_val, cbar_max_val = self.options["cbar_min"], self.options["cbar_max"]
+
         if self.options["log_scale"]:
             self.options["cbar_min"] = np.log10(self.options["cbar_min"])
             self.options["cbar_max"] = np.log10(self.options["cbar_max"])
-
+        """
         try:
             cbar_min = np.min(grid_vals[grid_vals > self.options["cbar_min"]])
             cbar_max = np.max(grid_vals[grid_vals < self.options["cbar_max"]])
@@ -356,17 +505,18 @@ class Image:
             print("Check cbar bounds")
             cbar_min = np.min(grid_vals[grid_vals > 0])
             cbar_max = np.max(grid_vals[grid_vals < np.inf])
-
+        """
         # grid_vals[grid_vals < self.options["cbar_min"]] = 0
         # grid_vals[grid_vals > self.options["cbar_max"]] = 0 # [x_coords[0], x_coords[-1], y_coords[0], y_coords[-1]]
 
         axes_extent = [img_extent[0] - self.image_info["dx"] / 2, img_extent[1] + self.image_info["dx"] / 2,
                        img_extent[2] - self.image_info["dy"] / 2, img_extent[3] + self.image_info["dy"] / 2]
         img = ax.imshow(grid_vals.transpose((1, 0)),
-                        vmin=cbar_min, vmax=cbar_max,
+                        vmin=cbar_min_val, vmax=cbar_max_val,
                         origin="lower",
                         cmap=plt.get_cmap(self.options["color_map"]),
-                        extent=axes_extent)
+                        extent=axes_extent,
+                        interpolation="hanning")
         if self.options["invert_x"]:
             ax.invert_xaxis()
         if self.options["invert_y"]:
@@ -374,13 +524,14 @@ class Image:
 
         ax.set_xlabel("x (mm)")
         ax.set_ylabel("y (mm)")
-
+        """
         if np.max(grid_vals) > 1000:
             cbar = fig.colorbar(img, format=ticker.FuncFormatter(fmt))
         else:
-            cbar = fig.colorbar(img)
+        """
+        cbar = fig.colorbar(img)
 
-        cbar.set_label(f"{quantity}".title() + label, rotation=270, labelpad=30)
+        cbar.set_label(cbar_label, rotation=270, labelpad=30)
 
     def get_measurement(self, x, y, meas_type=MeasurementType.SAM.value):
         if meas_type == MeasurementType.REF.value:

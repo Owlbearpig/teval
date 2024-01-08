@@ -31,6 +31,7 @@ def mpl_style_params():
     rcParams['figure.autolayout'] = False
     rcParams['savefig.format'] = 'pdf'
     rcParams.update({'font.size': 24})
+    rcParams["axes.formatter.limits"] = (-99, 99)
 
     # Say, "the default sans-serif font is COMIC SANS"
     # rcParams['font.sans-serif'] = 'Liberation Sans'

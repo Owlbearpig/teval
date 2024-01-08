@@ -9,10 +9,10 @@ ROOT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 if 'posix' in os_name:
     base_dir = Path(r"/home/ftpuser/ftp/Data/")
     data_dir = base_dir / "PolymerSamples_Exipnos" / "Meas0"
-    result_dir = Path(r"/home/alex/MEGA/AG/Projects/Material characterization/Exipnos Samples/Results")
+    result_dir = Path(r"/home/alex/MEGA/AG/Projects/HHI_Aachen/Results")
 else:
     data_dir = Path(r"")
-    result_dir = Path(r"")
+    result_dir = Path(r"/home/alex/MEGA/AG/Projects/HHI_Aachen/Results")
 
 try:
     os.scandir(data_dir)
