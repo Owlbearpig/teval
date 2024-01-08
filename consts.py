@@ -12,8 +12,7 @@ if 'posix' in os_name:
     result_dir = Path(r"/home/alex/MEGA/AG/Projects/HHI_Aachen/Results")
 else:
     data_dir = Path(r"")
-    result_dir = Path(r"/home/alex/MEGA/AG/Projects/HHI_Aachen/Results")
-
+    result_dir = Path(r"E:\Mega\AG\Projects\HHI_Aachen\Results")
 try:
     os.scandir(data_dir)
 except FileNotFoundError as e:

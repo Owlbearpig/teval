@@ -17,6 +17,8 @@ def fmt(x, val):
 
 def mpl_style_params():
     rcParams = mpl.rcParams
+    #rcParams['text.usetex'] = True
+    #rcParams['text.latex.preamble'] = r'\usepackage{amssymb}'
     # rcParams['lines.linestyle'] = '--'
     # rcParams['legend.fontsize'] = 'large' #'x-large'
     rcParams['legend.shadow'] = False

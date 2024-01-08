@@ -17,7 +17,6 @@ from .measurements import get_all_measurements, MeasurementType
 from .mpl_settings import mpl_style_params, fmt
 from scipy.optimize import shgo
 
-
 # shgo = partial(shgo, workers=1)
 import numpy as np
 from numpy import pi
@@ -32,7 +31,32 @@ from scipy.optimize import shgo
 d_sub = 1000
 angle_in = 0.0
 
-def sub_refidx(img_, point=(22.5, 5)):
+def sub_refidx_a(img_, point=(22.5, 5)):
+    #img_.plot_point(*point)
+    #plt.show()
+
+    sub_meas = img_.get_measurement(*point)
+    sam_td = sub_meas.get_data_td()
+    ref_td = img_.get_ref(point=point)
+
+    sam_td = window(sam_td, en_plot=False, slope=0.99)
+    ref_td = window(ref_td, en_plot=False, slope=0.99)
+
+    ref_fd, sam_fd = do_fft(ref_td), do_fft(sam_td)
+
+    freqs = ref_fd[:, 0].real
+    omega = 2*np.pi*freqs
+
+    phi_ref = phase_correction(ref_fd, fit_range=(0.1, 1.2))
+    phi_sam = phase_correction(sam_fd, fit_range=(0.1, 1.2))
+    phi_diff = phi_sam[:, 1] - phi_ref[:, 1]
+
+    n0 = 1 + c_thz * phi_diff / (omega * d_sub)
+    k0 = -c_thz * np.log(np.abs(sam_fd[:, 1]/ref_fd[:, 1]) * (1+n0)**2 / (4*n0)) / (omega*d_sub)
+
+    return np.array([freqs, n0+1j*k0], dtype=complex).T
+
+def sub_refidx_tmm(img_, point=(22.5, 5)):
     #img_.plot_point(*point)
     #plt.show()
 
@@ -48,15 +72,14 @@ def sub_refidx(img_, point=(22.5, 5)):
     freqs = ref_fd[:, 0].real
     omega = 2*np.pi*freqs
 
-    phi_ref = phase_correction(ref_fd)
-    phi_sam = phase_correction(sam_fd)
+    phi_ref = phase_correction(ref_fd, fit_range=(0.1, 1.2))
+    phi_sam = phase_correction(sam_fd, fit_range=(0.1, 1.2))
     phi_diff = phi_sam[:, 1] - phi_ref[:, 1]
 
     n0 = 1 + c_thz * phi_diff / (omega * d_sub)
     k0 = -c_thz * np.log(np.abs(sam_fd[:, 1]/ref_fd[:, 1]) * (1+n0)**2 / (4*n0)) / (omega*d_sub)
 
     return np.array([freqs, n0+1j*k0], dtype=complex).T
-
 
 def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000):
     initial_shgo_iters = 3
@@ -69,9 +92,12 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000):
     else:
         d_film = d_film_
 
-    n_sub = sub_refidx(img_, point=sub_point)
+    n_sub = sub_refidx_a(img_, point=sub_point)
 
     shgo_bounds = [(1, 100), (1, 100)]
+
+    if isinstance(measurement_, tuple):
+        measurement_ = img_.get_measurement(*measurement_)
 
     film_td = measurement_.get_data_td()
     film_ref_td = img_.get_ref(both=False, point=measurement_.position)
@@ -199,6 +225,7 @@ class Image:
             options_["log_scale"] = False
 
         if "color_map" not in options_.keys():
+            # some options: ['viridis', 'plasma', 'inferno', 'magma', 'cividis']
             options_["color_map"] = "autumn"
 
         if "invert_x" not in options_.keys():
@@ -387,6 +414,16 @@ class Image:
 
         return False
 
+    def amplitude_transmission(self, measurement_, selected_freq=1.200):
+        ref_td, ref_fd = self.get_ref(point=measurement_.position, both=True)
+        freq_idx = f_axis_idx_map(ref_fd[:, 0].real, selected_freq)
+
+        sam_fd = measurement_.get_data_fd()
+        power_val_sam = np.abs(sam_fd[freq_idx, 1])
+        power_val_ref = np.abs(ref_fd[freq_idx, 1])
+
+        return power_val_sam / power_val_ref
+
     def _calc_grid_vals(self, quantity="p2p", selected_freq=1.200):
         info = self.image_info
 
@@ -433,6 +470,13 @@ class Image:
                 x_idx, y_idx = self._coords_to_idx(*measurement.position)
                 sheet_resistance = conductivity(self, measurement, selected_freq_=selected_freq)
                 grid_vals[x_idx, y_idx] = sheet_resistance
+        elif quantity == "amplitude_transmission":
+            grid_vals = self._empty_grid.copy()
+            for i, measurement in enumerate(self.sams):
+                print(f"{round(100 * i / len(self.sams), 2)} % done. "
+                      f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
+                x_idx, y_idx = self._coords_to_idx(*measurement.position)
+                grid_vals[x_idx, y_idx] = self.amplitude_transmission(measurement, selected_freq)
         else:
             # grid_vals = np.argmax(np.abs(self.image_data[:, :, int(17 / info["dt"]):int(20 / info["dt"])]), axis=2)
             grid_vals = np.argmax(np.abs(self.image_data[:, :, int(17 / info["dt"]):int(20 / info["dt"])]), axis=2)
@@ -462,6 +506,9 @@ class Image:
             cbar_label = " function value (log10)"
         elif quantity.lower() == "conductivity":
             cbar_label = f"Sheet resistance ($\Omega$/sq) @ {np.round(selected_freq, 3)} THz"
+            cbar_label = " function value (log10)"
+        elif quantity.lower() == "amplitude_transmission":
+            cbar_label = f"Amplitude transmission @ {np.round(selected_freq, 2)} THz"
         elif quantity.lower() == "pulse_cnt":
             cbar_label = ""
         else:
