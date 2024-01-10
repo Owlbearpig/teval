@@ -16,7 +16,7 @@ from .functions import do_fft, do_ifft, phase_correction, unwrap, window, polyfi
 from .measurements import get_all_measurements, MeasurementType
 from .mpl_settings import mpl_style_params, fmt
 from scipy.optimize import shgo
-
+from random import choice
 # shgo = partial(shgo, workers=1)
 import numpy as np
 from numpy import pi
@@ -219,9 +219,9 @@ def sub_refidx_tmm(img_, point):
 
     return n
 
-def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000):
+def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, shift_ref=False):
     initial_shgo_iters = 3
-    sub_point = (22, 0)
+    sub_point = (49, -5)
 
     if "sample3" in str(img_.data_path):
         d_film = 0.350
@@ -242,8 +242,15 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000):
     if isinstance(measurement_, tuple):
         measurement_ = img_.get_measurement(*measurement_)
 
+    shifts = [[0,1], [1,1], [1,0]]
+
     film_td = measurement_.get_data_td()
-    film_ref_td = img_.get_ref(both=False, point=measurement_.position)
+    meas_pos = measurement_.position
+    if shift_ref:
+        shift = choice(shifts)
+        meas_pos = (meas_pos[0] + shift[0], meas_pos[1] + shift[1])
+
+    film_ref_td = img_.get_ref(both=False, point=meas_pos)
 
     # film_td = window(film_td, win_len=16, shift=0, en_plot=False, slope=0.99)
     # film_ref_td = window(film_ref_td, win_len=16, shift=0, en_plot=False, slope=0.99)
@@ -251,7 +258,7 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000):
     pos_x = (measurement_.position[0] < 25) + (45 < measurement_.position[0])
     pos_y = (measurement_.position[0] < -11) + (9 < measurement_.position[0])
     if (np.max(film_td[:, 1])/np.max(film_ref_td[:, 1]) > 0.25) and pos_x and pos_y:
-        return 1000
+        return 1000, 0
 
     film_td[:, 0] -= film_td[0, 0]
     film_ref_td[:, 0] -= film_ref_td[0, 0]
@@ -323,7 +330,7 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000):
               f"loss: {res.fun}")
         print(f"Substrate refractive index: {np.round(n_sub[f_idx_, 1], 3)}\n")
 
-    return 1 / (sigma[f_opt_idx[0]].real * d_film * 1e-4)
+    return 1 / (sigma[f_opt_idx[0]].real * d_film * 1e-4), res.fun
 
 
 class Image:
@@ -611,7 +618,13 @@ class Image:
                 print(f"{round(100 * i / len(self.sams), 2)} % done. "
                       f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
                 x_idx, y_idx = self._coords_to_idx(*measurement.position)
-                sheet_resistance = conductivity(self, measurement, selected_freq_=selected_freq)
+                sheet_resistance, err = conductivity(self, measurement, selected_freq_=selected_freq)
+                retries = 5
+                while (err > 1e-10) and (retries > 0):
+                    print(f"Retrying. Min. func. val: {err}")
+                    sheet_resistance, err = conductivity(self, measurement, selected_freq_=selected_freq, shift_ref=True)
+                    retries -= 1
+
                 grid_vals[x_idx, y_idx] = sheet_resistance
         elif quantity == "amplitude_transmission":
             grid_vals = self._empty_grid.copy()
@@ -649,7 +662,6 @@ class Image:
             cbar_label = " function value (log10)"
         elif quantity.lower() == "conductivity":
             cbar_label = f"Sheet resistance ($\Omega$/sq) @ {np.round(selected_freq, 3)} THz"
-            cbar_label = " function value (log10)"
         elif quantity.lower() == "amplitude_transmission":
             cbar_label = f"Amplitude transmission @ {np.round(selected_freq, 2)} THz"
         elif quantity.lower() == "pulse_cnt":
@@ -706,7 +718,8 @@ class Image:
                         origin="lower",
                         cmap=plt.get_cmap(self.options["color_map"]),
                         extent=axes_extent,
-                        interpolation="hanning")
+                        interpolation="hanning"
+                        )
         if self.options["invert_x"]:
             ax.invert_xaxis()
         if self.options["invert_y"]:
