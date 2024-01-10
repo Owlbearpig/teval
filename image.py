@@ -221,12 +221,12 @@ def sub_refidx_tmm(img_, point, selected_freq_=None):
     R = R[f_opt_idx]
     t_abs_meas = t_abs_meas[f_opt_idx]
 
-    eval_ret = {"n": n, "sam_fd": sam_fd, "ref_fd": ref_fd}
+    eval_ret = {"n": n, "sam_fd": sam_fd, "ref_fd": ref_fd, "ref_td": ref_td, "sam_td": sam_td}
 
     return eval_ret
 
 def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, shift_ref=False,
-                 tinkham_method=False, shift_sub=False):
+                 tinkham_method=False, shift_sub=False, p2p_method=False):
     initial_shgo_iters = 3
 
     sub_point = (49, -5)
@@ -251,24 +251,12 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, shift_r
     else:
         d_film = d_film_
 
-    try:
-        sub_res_dir = Path("sub_res")
-        sub_n_file = sub_res_dir / f"sub_n_tmm_{sub_point[0]}_{sub_point[1]}.npy"
-        sub_sam_fd_file = sub_res_dir / f"sub_sam_fd_tmm_{sub_point[0]}_{sub_point[1]}.npy"
-        sub_ref_fd_file = sub_res_dir / f"sub_ref_fd_tmm_{sub_point[0]}_{sub_point[1]}.npy"
-
-        n_sub = np.load(str(sub_n_file))
-        sub_ref_fd = np.load(str(sub_ref_fd_file))
-        sub_sam_fd = np.load(str(sub_sam_fd_file))
-    except FileNotFoundError:
-        sub_eval_res = sub_refidx_tmm(img_, point=sub_point, selected_freq_=selected_freq_)
-        n_sub = sub_eval_res["n"]
-        sub_ref_fd = sub_eval_res["ref_fd"]
-        sub_sam_fd = sub_eval_res["sam_fd"]
-
-        np.save(str(sub_n_file), n_sub)
-        np.save(str(sub_ref_fd_file), sub_ref_fd)
-        np.save(str(sub_sam_fd_file), sub_sam_fd)
+    sub_eval_res = sub_refidx_tmm(img_, point=sub_point, selected_freq_=selected_freq_)
+    n_sub = sub_eval_res["n"]
+    sub_ref_fd = sub_eval_res["ref_fd"]
+    sub_sam_fd = sub_eval_res["sam_fd"]
+    sub_ref_td = sub_eval_res["ref_td"]
+    sub_sam_td = sub_eval_res["sam_td"]
 
     shgo_bounds = [(1, 50), (1, 50)]
 
@@ -331,6 +319,20 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, shift_r
         sigma = tinkham_approx()
 
         return 1 / (sigma[f_opt_idx[0], 1].real * d_film * 1e-4), 0
+
+    def p2p_approx():
+        T_sub = np.max(sub_sam_td[:, 1].real) / np.max(sub_ref_td[:, 1].real)
+        T_sam = np.max(film_td[:, 1]) / np.max(film_ref_td[:, 1])
+
+        sigma_tink = 0.01 * (1 + n_sub[:, 1]) * epsilon_0 * c0 * (T_sub - T_sam) / (T_sam * d_film * 1e-6)
+        sigma_tink = 1 / (sigma_tink * d_film * 1e-4)
+
+        return np.array([sub_ref_fd[:, 0], sigma_tink], dtype=complex).T
+
+    if p2p_method:
+        sigma = p2p_approx()
+
+        return 0.01 / (sigma[f_opt_idx[0], 1].real * d_film * 1e-4), 0
 
     def cost(p, freq_idx_):
         n = np.array([1, n_sub[freq_idx_, 1], p[0] + 1j * p[1], 1], dtype=complex)
@@ -639,6 +641,15 @@ class Image:
             else:
                 print("Selected frequency must be range given as tuple")
                 grid_vals = self._empty_grid
+        elif quantity.lower() == "p2p_cond":
+            grid_vals = self._empty_grid.copy()
+
+            for i, measurement in enumerate(self.sams):
+                print(f"{round(100 * i / len(self.sams), 2)} % done. "
+                      f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
+                x_idx, y_idx = self._coords_to_idx(*measurement.position)
+                sheet_resistance, _ = conductivity(self, measurement, p2p_method=True)
+                grid_vals[x_idx, y_idx] = sheet_resistance
         elif quantity == "tinkham_cond":
             grid_vals = self._empty_grid.copy()
 
@@ -735,6 +746,8 @@ class Image:
     def plot_image(self, selected_freq=None, quantity="p2p", img_extent=None, flip_x=False):
         if quantity.lower() == "p2p":
             cbar_label = ""
+        elif quantity.lower() == "p2p_cond":
+            cbar_label = "p2p_cond"
         elif quantity.lower() == "tinkham_cond":
             cbar_label = f"Sheet resistance ($\Omega$/sq) @ {np.round(selected_freq, 3)} THz"
         elif quantity.lower() == "meas_time_delta":
