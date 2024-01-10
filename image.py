@@ -6,7 +6,7 @@ from functools import partial
 from itertools import product
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-from .consts import plot_range1, plot_range, c_thz, plot_range2
+from .consts import plot_range1, plot_range, c_thz, plot_range2, c0
 from numpy import array
 from pathlib import Path
 import numpy as np
@@ -56,7 +56,7 @@ def sub_refidx_a(img_, point=(22.5, 5)):
 
     return np.array([freqs, n0+1j*k0], dtype=complex).T
 
-def sub_refidx_tmm(img_, point):
+def sub_refidx_tmm(img_, point, selected_freq_=None):
     initial_shgo_iters = 3
     freq_range = (0.25, 2.5)
     en_plot = False
@@ -66,6 +66,7 @@ def sub_refidx_tmm(img_, point):
     sub_meas = img_.get_measurement(*point)
     sam_td = sub_meas.get_data_td()
     ref_td = img_.get_ref(point=point)
+    # ref_td = img_.get_ref()
 
     sam_td[:, 0] -= sam_td[0, 0]
 
@@ -81,7 +82,10 @@ def sub_refidx_tmm(img_, point):
     one = np.ones_like(freqs, dtype=complex)
     omega = 2*np.pi*freqs
 
-    f_opt_idx = f_axis_idx_map(freqs, freq_range)
+    if selected_freq_ is None:
+        f_opt_idx = f_axis_idx_map(freqs, freq_range)
+    else:
+        f_opt_idx = list(f_axis_idx_map(freqs, selected_freq_))
 
     d_list = np.array([np.inf, d_sub, np.inf], dtype=float)
 
@@ -141,7 +145,7 @@ def sub_refidx_tmm(img_, point):
 
         bounds_ = [(1.95, 2.00), (0.000, 0.010)]
         if freq > 1.7:
-            bounds_ = [(1.965, 1.97), (0.007, 0.015)]
+            bounds_ = [(1.965, 1.99), (0.007, 0.015)]
         n_sub_a_f_idx = n_sub_a[f_idx_, 1]
         bounds_ = [(n_sub_a_f_idx.real-0.05, n_sub_a_f_idx.real+0.05),
                    (n_sub_a_f_idx.imag-0.005, n_sub_a_f_idx.imag+0.005)]
@@ -217,11 +221,28 @@ def sub_refidx_tmm(img_, point):
     R = R[f_opt_idx]
     t_abs_meas = t_abs_meas[f_opt_idx]
 
-    return n
+    eval_ret = {"n": n, "sam_fd": sam_fd, "ref_fd": ref_fd}
 
-def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, shift_ref=False):
+    return eval_ret
+
+def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, shift_ref=False,
+                 tinkham_method=False, shift_sub=False):
     initial_shgo_iters = 3
+
     sub_point = (49, -5)
+    # sub_point = (22, -5)
+
+    if shift_sub:
+        from itertools import product
+        from random import choice
+        sub_points = list(product(range(21, 24), range(-14, 10)))
+        sub_points.extend(list(product(range(46, 50), range(-14, 10))))
+        sub_point = choice(sub_points)
+
+        # sub_point = (49, -5)
+        sub_point = (22, -5)
+
+        print(f"New sub point: {[sub_point[0], sub_point[1]]}")
 
     if "sample3" in str(img_.data_path):
         d_film = 0.350
@@ -230,12 +251,24 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, shift_r
     else:
         d_film = d_film_
 
-    sub_file = f"n_sub_tmm_{sub_point[0]}_{sub_point[1]}.npy"
     try:
-        n_sub = np.load(sub_file)
+        sub_res_dir = Path("sub_res")
+        sub_n_file = sub_res_dir / f"sub_n_tmm_{sub_point[0]}_{sub_point[1]}.npy"
+        sub_sam_fd_file = sub_res_dir / f"sub_sam_fd_tmm_{sub_point[0]}_{sub_point[1]}.npy"
+        sub_ref_fd_file = sub_res_dir / f"sub_ref_fd_tmm_{sub_point[0]}_{sub_point[1]}.npy"
+
+        n_sub = np.load(str(sub_n_file))
+        sub_ref_fd = np.load(str(sub_ref_fd_file))
+        sub_sam_fd = np.load(str(sub_sam_fd_file))
     except FileNotFoundError:
-        n_sub = sub_refidx_tmm(img_, point=sub_point)
-        np.save(sub_file, n_sub)
+        sub_eval_res = sub_refidx_tmm(img_, point=sub_point, selected_freq_=selected_freq_)
+        n_sub = sub_eval_res["n"]
+        sub_ref_fd = sub_eval_res["ref_fd"]
+        sub_sam_fd = sub_eval_res["sam_fd"]
+
+        np.save(str(sub_n_file), n_sub)
+        np.save(str(sub_ref_fd_file), sub_ref_fd)
+        np.save(str(sub_sam_fd_file), sub_sam_fd)
 
     shgo_bounds = [(1, 50), (1, 50)]
 
@@ -251,13 +284,14 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, shift_r
         meas_pos = (meas_pos[0] + shift[0], meas_pos[1] + shift[1])
 
     film_ref_td = img_.get_ref(both=False, point=meas_pos)
+    # film_ref_td = img_.get_ref(both=False)
 
     # film_td = window(film_td, win_len=16, shift=0, en_plot=False, slope=0.99)
     # film_ref_td = window(film_ref_td, win_len=16, shift=0, en_plot=False, slope=0.99)
 
-    pos_x = (measurement_.position[0] < 25) + (45 < measurement_.position[0])
-    pos_y = (measurement_.position[0] < -11) + (9 < measurement_.position[0])
-    if (np.max(film_td[:, 1])/np.max(film_ref_td[:, 1]) > 0.25) and pos_x and pos_y:
+    pos_x = (measurement_.position[0] < 25) or (45 < measurement_.position[0])
+    pos_y = (measurement_.position[1] < -11) or (9 < measurement_.position[1])
+    if (np.max(film_td[:, 1])/np.max(film_ref_td[:, 1]) > 0.50) or (pos_x and pos_y):
         return 1000, 0
 
     film_td[:, 0] -= film_td[0, 0]
@@ -283,6 +317,20 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, shift_r
     phase_shift = np.exp(-1j * (d_sub + np.sum(d_film)) * omega / c_thz)
 
     # film_ref_interpol = self._ref_interpolation(measurement, selected_freq_=selected_freq_, ret_cart=True)
+
+    def tinkham_approx():
+        T_sub = sub_sam_fd[:, 1] / sub_ref_fd[:, 1]
+        T_sam = film_fd[:, 1] / film_ref_fd[:, 1]
+
+        sigma_tink = 0.01 * (1 + n_sub[:, 1]) * epsilon_0 * c0 * (T_sub - T_sam) / (T_sam * d_film * 1e-6)
+        sigma_tink = 1 / (sigma_tink * d_film * 1e-4)
+
+        return np.array([sub_ref_fd[:, 0], sigma_tink], dtype=complex).T
+
+    if tinkham_method:
+        sigma = tinkham_approx()
+
+        return 1 / (sigma[f_opt_idx[0], 1].real * d_film * 1e-4), 0
 
     def cost(p, freq_idx_):
         n = np.array([1, n_sub[freq_idx_, 1], p[0] + 1j * p[1], 1], dtype=complex)
@@ -329,6 +377,8 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, shift_r
               f"n: {np.round(n_opt[f_idx_], 3)}, at {np.round(freqs[f_idx_], 3)} THz, "
               f"loss: {res.fun}")
         print(f"Substrate refractive index: {np.round(n_sub[f_idx_, 1], 3)}\n")
+
+    # mean_cond = 0.5*(sigma[f_opt_idx[0]].real + sigma[f_opt_idx[0]].imag)
 
     return 1 / (sigma[f_opt_idx[0]].real * d_film * 1e-4), res.fun
 
@@ -574,6 +624,12 @@ class Image:
 
         return power_val_sam / power_val_ref
 
+    def get_ref_pos(self, measurement_):
+        ref_td = self.get_ref(point=measurement_.position)
+        t, y = ref_td[:, 0], ref_td[:, 1]
+
+        return t[np.argmax(y)]
+
     def _calc_grid_vals(self, quantity="p2p", selected_freq=1.200):
         info = self.image_info
 
@@ -583,6 +639,24 @@ class Image:
             else:
                 print("Selected frequency must be range given as tuple")
                 grid_vals = self._empty_grid
+        elif quantity == "tinkham_cond":
+            grid_vals = self._empty_grid.copy()
+
+            for i, measurement in enumerate(self.sams):
+                print(f"{round(100 * i / len(self.sams), 2)} % done. "
+                      f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
+                x_idx, y_idx = self._coords_to_idx(*measurement.position)
+                sheet_resistance, _ = conductivity(self, measurement, selected_freq_=selected_freq, tinkham_method=True)
+                grid_vals[x_idx, y_idx] = sheet_resistance
+        elif quantity == "meas_time_delta":
+            grid_vals = self._empty_grid.copy()
+
+            for i, measurement in enumerate(self.sams):
+                print(f"{round(100 * i / len(self.sams), 2)} % done. "
+                      f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
+                x_idx, y_idx = self._coords_to_idx(*measurement.position)
+                meas_time_dt = self.get_ref(point=measurement.position, ret_dt=True)
+                grid_vals[x_idx, y_idx] = meas_time_dt
         elif quantity == "p2p":
             grid_vals = np.max(self.image_data, axis=2) - np.min(self.image_data, axis=2)
         elif quantity.lower() == "ref_amp":
@@ -595,6 +669,15 @@ class Image:
                 amp_, _ = self._ref_interpolation(measurement, selected_freq_=selected_freq,
                                                   ret_cart=False)
                 grid_vals[x_idx, y_idx] = amp_
+        elif quantity.lower() == "ref_pos":
+            grid_vals = self._empty_grid.copy()
+
+            for i, measurement in enumerate(self.sams):
+                print(f"{round(100 * i / len(self.sams), 2)} % done. "
+                      f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
+                x_idx, y_idx = self._coords_to_idx(*measurement.position)
+                ref_pos_ = self.get_ref_pos(measurement)
+                grid_vals[x_idx, y_idx] = ref_pos_
         elif quantity == "Reference phase":
             grid_vals = self._empty_grid.copy()
 
@@ -619,10 +702,10 @@ class Image:
                       f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
                 x_idx, y_idx = self._coords_to_idx(*measurement.position)
                 sheet_resistance, err = conductivity(self, measurement, selected_freq_=selected_freq)
-                retries = 5
+                retries = 1
                 while (err > 1e-10) and (retries > 0):
-                    print(f"Retrying. Min. func. val: {err}")
-                    sheet_resistance, err = conductivity(self, measurement, selected_freq_=selected_freq, shift_ref=True)
+                    print(f"Shifting sub. point (min. func. val: {err})")
+                    sheet_resistance, err = conductivity(self, measurement, selected_freq_=selected_freq, shift_sub=True)
                     retries -= 1
 
                 grid_vals[x_idx, y_idx] = sheet_resistance
@@ -652,6 +735,12 @@ class Image:
     def plot_image(self, selected_freq=None, quantity="p2p", img_extent=None, flip_x=False):
         if quantity.lower() == "p2p":
             cbar_label = ""
+        elif quantity.lower() == "tinkham_cond":
+            cbar_label = f"Sheet resistance ($\Omega$/sq) @ {np.round(selected_freq, 3)} THz"
+        elif quantity.lower() == "meas_time_delta":
+            cbar_label = "Time to nearest ref. (s)"
+        elif quantity.lower() == "ref_pos":
+            cbar_label = "Ref. pulse pos. (ps)"
         elif quantity.lower() == "ref_amp":
             cbar_label = " Interpolated ref. amp. at " + str(np.round(selected_freq, 3)) + " THz"
         elif quantity == "Reference phase":
@@ -686,7 +775,7 @@ class Image:
         if self.options["log_scale"]:
             grid_vals = np.log10(grid_vals)
 
-        fig = plt.figure(f"{self.name}")
+        fig = plt.figure(f"{self.name} {quantity}")
         ax = fig.add_subplot(111)
         ax.set_title(f"{self.name}")
         fig.subplots_adjust(left=0.2)
@@ -777,7 +866,7 @@ class Image:
         else:
             return y_td, do_fft(y_td)
 
-    def get_ref(self, both=False, normalize=False, sub_offset=False, point=None, ret_meas=False):
+    def get_ref(self, both=False, normalize=False, sub_offset=False, point=None, ret_meas=False, ret_dt=False):
         if point is not None:
             closest_sam = self.get_measurement(*point, meas_type=MeasurementType.SAM.value)
 
@@ -790,6 +879,9 @@ class Image:
             dt = (closest_sam.meas_time - closest_ref.meas_time).total_seconds()
             print(f"Time between ref and sample: {dt} seconds")
             chosen_ref = closest_ref
+
+            if ret_dt:
+                return dt
         else:
             chosen_ref = self.refs[-1]
 
@@ -919,16 +1011,18 @@ class Image:
     def system_stability(self, selected_freq_=0.800):
         f_idx = np.argmin(np.abs(self.freq_axis - selected_freq_))
 
-        ref_ampl_arr, ref_angle_arr = [], []
+        ref_ampl_arr, ref_angle_arr, ref_pos = [], [], []
 
         t0 = self.refs[0].meas_time
         meas_times = [(ref.meas_time - t0).total_seconds() / 3600 for ref in self.refs]
         for i, ref in enumerate(self.refs):
             ref_td = ref.get_data_td()
+            t, y = ref_td[:, 0], ref_td[:, 1]
             # ref_td = window(ref_td, win_len=12, shift=0, en_plot=False, slope=0.05)
             ref_fd = do_fft(ref_td)
             # ref_fd = phase_correction(ref_fd, fit_range=(0.8, 1.6), extrapolate=True, ret_fd=True, en_plot=False)
 
+            ref_pos.append(t[np.argmax(y)])
             ref_ampl_arr.append(np.sum(np.abs(ref_fd[f_idx, 1])) / 1)
             phi = np.angle(ref_fd[f_idx, 1])
             """ ???
@@ -952,6 +1046,12 @@ class Image:
 
         sam_t2 = (sam2.meas_time - t0).total_seconds() / 3600
         amp_interpol2, phi_interpol2 = self._ref_interpolation(sam2, ret_cart=False, selected_freq_=selected_freq_)
+
+        plt.figure("System stability reference pulse position")
+        plt.title(f"Reference pulse position")
+        plt.plot(meas_times, ref_pos, label=t0)
+        plt.xlabel("Measurement time (hour)")
+        plt.ylabel("Time (ps)")
 
         plt.figure("System stability amplitude")
         plt.title(f"Reference amplitude at {selected_freq_} THz")
