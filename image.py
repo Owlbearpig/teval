@@ -225,12 +225,12 @@ def sub_refidx_tmm(img_, point, selected_freq_=None):
 
     return eval_ret
 
-def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, shift_ref=False,
+def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, ref_idx=0,
                  tinkham_method=False, shift_sub=False, p2p_method=False):
     initial_shgo_iters = 3
 
-    sub_point = (49, -5)
-    # sub_point = (22, -5)
+    # sub_point = (49, -5)
+    sub_point = (22, -5)
 
     if shift_sub:
         from itertools import product
@@ -239,8 +239,8 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, shift_r
         sub_points.extend(list(product(range(46, 50), range(-14, 10))))
         sub_point = choice(sub_points)
 
-        # sub_point = (49, -5)
-        sub_point = (22, -5)
+        sub_point = (49, -5)
+        # sub_point = (22, -5)
 
         print(f"New sub point: {[sub_point[0], sub_point[1]]}")
 
@@ -258,17 +258,20 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, shift_r
     sub_ref_td = sub_eval_res["ref_td"]
     sub_sam_td = sub_eval_res["sam_td"]
 
-    shgo_bounds = [(1, 50), (1, 50)]
+    shgo_bounds = [(1, 75), (1, 75)]
 
     if isinstance(measurement_, tuple):
         measurement_ = img_.get_measurement(*measurement_)
 
-    shifts = [[0,1], [1,1], [1,0]]
-
     film_td = measurement_.get_data_td()
     meas_pos = measurement_.position
-    if shift_ref:
-        shift = choice(shifts)
+
+    shifts = [[-4, 0], [-2, 0], [2, 0], [4, 0]]
+    if ref_idx:
+        try:
+            shift = shifts[ref_idx]
+        except IndexError:
+            shift = [ref_idx, 0]
         meas_pos = (meas_pos[0] + shift[0], meas_pos[1] + shift[1])
 
     film_ref_td = img_.get_ref(both=False, point=meas_pos)
@@ -538,7 +541,8 @@ class Image:
 
         self._empty_grid = np.zeros((w, h), dtype=complex)
 
-        return {"w": w, "h": h, "dx": dx, "dy": dy, "dt": dt, "samples": samples, "extent": extent}
+        return {"w": w, "h": h, "dx": dx, "dy": dy, "dt": dt, "samples": samples, "extent": extent,
+                "x_coords": x_coords, "y_coords": y_coords}
 
     def _image_cache(self):
         """
@@ -713,11 +717,15 @@ class Image:
                       f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
                 x_idx, y_idx = self._coords_to_idx(*measurement.position)
                 sheet_resistance, err = conductivity(self, measurement, selected_freq_=selected_freq)
+
                 retries = 1
                 while (err > 1e-10) and (retries > 0):
-                    print(f"Shifting sub. point (min. func. val: {err})")
+                    print(f"Shifting ref. point (min. func. val: {err})")
                     sheet_resistance, err = conductivity(self, measurement, selected_freq_=selected_freq, shift_sub=True)
                     retries -= 1
+
+                if sheet_resistance > self.options["cbar_max"]:
+                    sheet_resistance = self.options["cbar_max"]
 
                 grid_vals[x_idx, y_idx] = sheet_resistance
         elif quantity == "amplitude_transmission":
@@ -837,6 +845,28 @@ class Image:
         cbar = fig.colorbar(img)
 
         cbar.set_label(cbar_label, rotation=270, labelpad=30)
+
+        x_center, y_center = 0, 0
+        if self.sample_idx == 3:
+            y_center = -1.0
+            x_center = 35.0
+        if self.sample_idx == 4:
+            y_center = -1.0
+            x_center = 35.0
+
+        x_coords, y_coords = self.image_info["x_coords"], self.image_info["y_coords"]
+        x_idx, y_idx = self._coords_to_idx(x_center, y_center)
+
+        plt.figure("x-slice")
+        plt.plot(x_coords, grid_vals[:, x_idx], label=f"Sample {self.sample_idx} ({np.round(selected_freq, 3)} THz)")
+        plt.xlabel("x (mm)")
+        plt.ylabel(cbar_label)
+
+        plt.figure("y-slice")
+        plt.plot(y_coords, grid_vals[y_idx, :], label=f"Sample {self.sample_idx} ({np.round(selected_freq, 3)} THz)")
+        plt.xlabel("y (mm)")
+        plt.ylabel(cbar_label)
+
 
     def get_measurement(self, x, y, meas_type=MeasurementType.SAM.value):
         if meas_type == MeasurementType.REF.value:
@@ -1044,8 +1074,8 @@ class Image:
             """
             ref_angle_arr.append(phi)
         ref_angle_arr = np.unwrap(ref_angle_arr)
-        ref_angle_arr -= np.mean(ref_angle_arr)
-        ref_ampl_arr -= np.mean(ref_ampl_arr)
+        #ref_angle_arr -= np.mean(ref_angle_arr)
+        #ref_ampl_arr -= np.mean(ref_ampl_arr)
 
         random.seed(10)
         rnd_sam = random.choice(self.sams)
