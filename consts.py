@@ -13,10 +13,6 @@ if 'posix' in os_name:
 else:
     data_dir = Path(r"")
     result_dir = Path(r"E:\Mega\AG\Projects\HHI_Aachen\Results")
-try:
-    os.scandir(data_dir)
-except FileNotFoundError as e:
-    raise e
 
 post_process_config = {"sub_offset": True, "en_windowing": False}
 

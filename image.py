@@ -15,21 +15,19 @@ from .functions import do_fft, do_ifft, phase_correction, unwrap, window, polyfi
     peak_cnt, remove_spikes
 from .measurements import get_all_measurements, MeasurementType
 from .mpl_settings import mpl_style_params, fmt
-from scipy.optimize import shgo
 from random import choice
 # shgo = partial(shgo, workers=1)
-import numpy as np
 from numpy import pi
 from scipy.constants import epsilon_0
 from teval.functions import phase_correction, window, do_fft, f_axis_idx_map, do_ifft, to_db
 from teval.consts import c_thz, THz, plot_range1
 from tmm import coh_tmm as coh_tmm_full
-from tmm_slim import coh_tmm
-import matplotlib.pyplot as plt
-from scipy.optimize import shgo
+from scipy.optimize import shgo, minimize
+from scipy.special import erfc
 
 d_sub = 1000
 angle_in = 0.0
+
 
 def sub_refidx_a(img_, point=(22.5, 5)):
     #img_.plot_point(*point)
@@ -45,16 +43,17 @@ def sub_refidx_a(img_, point=(22.5, 5)):
     ref_fd, sam_fd = do_fft(ref_td), do_fft(sam_td)
 
     freqs = ref_fd[:, 0].real
-    omega = 2*np.pi*freqs
+    omega = 2 * np.pi * freqs
 
     phi_ref = phase_correction(ref_fd, fit_range=(0.1, 1.2))
     phi_sam = phase_correction(sam_fd, fit_range=(0.1, 1.2))
     phi_diff = phi_sam[:, 1] - phi_ref[:, 1]
 
     n0 = 1 + c_thz * phi_diff / (omega * d_sub)
-    k0 = -c_thz * np.log(np.abs(sam_fd[:, 1]/ref_fd[:, 1]) * (1+n0)**2 / (4*n0)) / (omega*d_sub)
+    k0 = -c_thz * np.log(np.abs(sam_fd[:, 1] / ref_fd[:, 1]) * (1 + n0) ** 2 / (4 * n0)) / (omega * d_sub)
 
-    return np.array([freqs, n0+1j*k0], dtype=complex).T
+    return np.array([freqs, n0 + 1j * k0], dtype=complex).T
+
 
 def sub_refidx_tmm(img_, point, selected_freq_=None):
     initial_shgo_iters = 3
@@ -80,7 +79,7 @@ def sub_refidx_tmm(img_, point, selected_freq_=None):
 
     zero = np.zeros_like(freqs, dtype=complex)
     one = np.ones_like(freqs, dtype=complex)
-    omega = 2*np.pi*freqs
+    omega = 2 * np.pi * freqs
 
     if selected_freq_ is None:
         f_opt_idx = f_axis_idx_map(freqs, freq_range)
@@ -147,8 +146,8 @@ def sub_refidx_tmm(img_, point, selected_freq_=None):
         if freq > 1.7:
             bounds_ = [(1.965, 1.99), (0.007, 0.015)]
         n_sub_a_f_idx = n_sub_a[f_idx_, 1]
-        bounds_ = [(n_sub_a_f_idx.real-0.05, n_sub_a_f_idx.real+0.05),
-                   (n_sub_a_f_idx.imag-0.005, n_sub_a_f_idx.imag+0.005)]
+        bounds_ = [(n_sub_a_f_idx.real - 0.05, n_sub_a_f_idx.real + 0.05),
+                   (n_sub_a_f_idx.imag - 0.005, n_sub_a_f_idx.imag + 0.005)]
 
         cost_ = cost
         if freq <= 0.150:
@@ -225,6 +224,7 @@ def sub_refidx_tmm(img_, point, selected_freq_=None):
 
     return eval_ret
 
+
 def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, ref_idx=0,
                  tinkham_method=False, shift_sub=False, p2p_method=False):
     initial_shgo_iters = 3
@@ -282,7 +282,7 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, ref_idx
 
     pos_x = (measurement_.position[0] < 25) or (45 < measurement_.position[0])
     pos_y = (measurement_.position[1] < -11) or (9 < measurement_.position[1])
-    if (np.max(film_td[:, 1])/np.max(film_ref_td[:, 1]) > 0.50) or (pos_x and pos_y):
+    if (np.max(film_td[:, 1]) / np.max(film_ref_td[:, 1]) > 0.50) or (pos_x and pos_y):
         return 1000, 0
 
     film_td[:, 0] -= film_td[0, 0]
@@ -422,9 +422,9 @@ class Image:
             options_["one2onesub"] = False
 
         if "cbar_min" not in options_.keys():
-            options_["cbar_min"] = 0
+            options_["cbar_min"] = None
         if "cbar_max" not in options_.keys():
-            options_["cbar_max"] = np.inf
+            options_["cbar_max"] = None
 
         if "log_scale" not in options_.keys():
             options_["log_scale"] = False
@@ -438,23 +438,22 @@ class Image:
         if "invert_y" not in options_.keys():
             options_["invert_y"] = False
 
-        if "load_mpl_style" not in options_.keys():
-            options_["load_mpl_style"] = True
-        else:
-            options_["load_mpl_style"] = False
-
         if "en_window" not in options_.keys():
             options_["en_window"] = False
+
+        if "selected_freq" not in options_.keys():
+            options_["selected_freq"] = (1.0, 1.2)
+
+        if "rcParams" not in options_.keys():
+            options_["rcParams"] = {}
 
         self.options.update(options_)
         self._apply_options()
 
     def _apply_options(self):
-        if self.options["load_mpl_style"]:
-            mpl.rcParams = mpl_style_params()
+        mpl.rcParams.update(self.options["rcParams"])
 
     def _set_measurements(self):
-        # TODO handle empty cases, since same thing is done three times maybe write method
         all_measurements = get_all_measurements(data_dir_=self.data_path)
         refs, sams, other = self._filter_measurements(all_measurements)
 
@@ -525,17 +524,23 @@ class Image:
             y_coords.append(sam_measurement.position[1])
 
         x_coords, y_coords = array(sorted(set(x_coords))), array(sorted(set(y_coords)))
+        w, h = max(len(x_coords), 1), max(len(y_coords), 1)
 
         self.all_points = list(itertools.product(x_coords, y_coords))
 
-        w, h = len(x_coords), len(y_coords)
         x_diff, y_diff = np.abs(np.diff(x_coords)), np.abs(np.diff(y_coords))
+        print(x_diff)
+        if len(x_diff) > 0:
+            dx = np.mean(x_diff[np.nonzero(x_diff)])
+        else:
+            dx = 1
+        print(dx)
+        if len(y_diff) > 0:
+            dy = np.mean(y_diff[np.nonzero(y_diff)])
+        else:
+            dy = 1
 
-        dx, dy = 1, 1
-        if w != 1:
-            dx = np.min(x_diff[np.nonzero(x_diff)])
-        if h != 1:
-            dy = np.min(y_diff[np.nonzero(y_diff)])
+        dx, dy = round(dx, 3), round(dy, 3)
 
         extent = [x_coords[0], x_coords[-1], y_coords[0], y_coords[-1]]
 
@@ -556,28 +561,37 @@ class Image:
         except FileNotFoundError:
             w, h, samples = self.image_info["w"], self.image_info["h"], self.image_info["samples"]
             dx, dy = self.image_info["dx"], self.image_info["dy"]
+            x_coords, y_coords = self.image_info["x_coords"], self.image_info["y_coords"]
             img_data = np.zeros((w, h, samples))
             min_x, max_x, min_y, max_y = self.image_info["extent"]
 
             for sam_measurement in self.sams:
                 x_pos, y_pos = sam_measurement.position
-                x_idx, y_idx = int((x_pos - min_x) / dx), int((y_pos - min_y) / dy)
+                x_idx, y_idx = self._coords_to_idx(x_pos, y_pos)
                 img_data[x_idx, y_idx] = sam_measurement.get_data_td(get_raw=True)[:, 1]
 
             np.save(str(self.cache_path / "_raw_img_cache.npy"), img_data)
 
         return img_data
 
-    def _coords_to_idx(self, x, y):
-        x_idx = int((x - self.image_info["extent"][0]) / self.image_info["dx"])
-        y_idx = int((y - self.image_info["extent"][2]) / self.image_info["dy"])
+    def _coords_to_idx(self, x_, y_):
+        w, h = self.image_info["w"], self.image_info["h"]
+        min_x, min_y = self.image_info["x_coords"][0], self.image_info["y_coords"][0]
+        dx, dy = self.image_info["dx"], self.image_info["dy"]
+
+        x = np.arange(min_x, min_x + (w + 1) * dx, dx)
+        y = np.arange(min_y, min_y + (h + 1) * dy, dy)
+
+        x_idx = np.argmin(np.abs(x - x_))
+        y_idx = np.argmin(np.abs(y - y_))
 
         return x_idx, y_idx
 
     def _idx_to_coords(self, x_idx, y_idx):
         dx, dy = self.image_info["dx"], self.image_info["dy"]
-        y = self.image_info["extent"][2] + y_idx * dy
-        x = self.image_info["extent"][0] + x_idx * dx
+
+        y = self.image_info["y_coords"][0] + y_idx * dy
+        x = self.image_info["x_coords"][0] + x_idx * dx
 
         return x, y
 
@@ -615,8 +629,7 @@ class Image:
 
         for area in areas:
             x, y = self._idx_to_coords(*idx_tuple)
-            if (area[0] <= x <= area[1]) * (area[2] <= y <= area[3]):
-                return True
+            return (area[0] <= x <= area[1]) * (area[2] <= y <= area[3])
 
         return False
 
@@ -721,7 +734,8 @@ class Image:
                 retries = 1
                 while (err > 1e-10) and (retries > 0):
                     print(f"Shifting ref. point (min. func. val: {err})")
-                    sheet_resistance, err = conductivity(self, measurement, selected_freq_=selected_freq, shift_sub=True)
+                    sheet_resistance, err = conductivity(self, measurement, selected_freq_=selected_freq,
+                                                         shift_sub=True)
                     retries -= 1
 
                 if sheet_resistance > self.options["cbar_max"]:
@@ -751,7 +765,10 @@ class Image:
 
         return filtered_grid
 
-    def plot_image(self, selected_freq=None, quantity="p2p", img_extent=None, flip_x=False):
+    def plot_image(self, selected_freq=None, quantity="p2p", img_extent=None):
+        if selected_freq is None:
+            selected_freq = self.options["selected_freq"]
+
         if quantity.lower() == "p2p":
             cbar_label = ""
         elif quantity.lower() == "p2p_cond":
@@ -804,22 +821,19 @@ class Image:
         if img_extent is None:
             img_extent = self.image_info["extent"]
 
-        cbar_min_val, cbar_max_val = self.options["cbar_min"], self.options["cbar_max"]
+        if self.options["cbar_min"] is None:
+            cbar_min_val = np.min(grid_vals)
+        else:
+            cbar_min_val = self.options["cbar_min"]
+
+        if self.options["cbar_max"] is None:
+            cbar_max_val = np.max(grid_vals)
+        else:
+            cbar_max_val = self.options["cbar_max"]
 
         if self.options["log_scale"]:
-            self.options["cbar_min"] = np.log10(self.options["cbar_min"])
-            self.options["cbar_max"] = np.log10(self.options["cbar_max"])
-        """
-        try:
-            cbar_min = np.min(grid_vals[grid_vals > self.options["cbar_min"]])
-            cbar_max = np.max(grid_vals[grid_vals < self.options["cbar_max"]])
-        except ValueError:
-            print("Check cbar bounds")
-            cbar_min = np.min(grid_vals[grid_vals > 0])
-            cbar_max = np.max(grid_vals[grid_vals < np.inf])
-        """
-        # grid_vals[grid_vals < self.options["cbar_min"]] = 0
-        # grid_vals[grid_vals > self.options["cbar_max"]] = 0 # [x_coords[0], x_coords[-1], y_coords[0], y_coords[-1]]
+            self.options["cbar_min"] = np.log10(cbar_min_val)
+            self.options["cbar_max"] = np.log10(cbar_max_val)
 
         axes_extent = [img_extent[0] - self.image_info["dx"] / 2, img_extent[1] + self.image_info["dx"] / 2,
                        img_extent[2] - self.image_info["dy"] / 2, img_extent[3] + self.image_info["dy"] / 2]
@@ -843,9 +857,9 @@ class Image:
         else:
         """
         cbar = fig.colorbar(img)
-
         cbar.set_label(cbar_label, rotation=270, labelpad=30)
 
+        """ # TODO separate method
         x_center, y_center = 0, 0
         if self.sample_idx == 3:
             y_center = -1.0
@@ -866,7 +880,7 @@ class Image:
         plt.plot(y_coords, grid_vals[y_idx, :], label=f"Sample {self.sample_idx} ({np.round(selected_freq, 3)} THz)")
         plt.xlabel("y (mm)")
         plt.ylabel(cbar_label)
-
+        """
 
     def get_measurement(self, x, y, meas_type=MeasurementType.SAM.value):
         if meas_type == MeasurementType.REF.value:
@@ -1013,7 +1027,7 @@ class Image:
         plt.plot(sam_fd[plot_range1, 0], 100 * absorb, label=label)
 
         plt.figure("Absorbance")
-        plt.plot(sam_fd[plot_range1, 0], -20*np.log10(absorb), label=label)
+        plt.plot(sam_fd[plot_range1, 0], -20 * np.log10(absorb), label=label)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Absorbance (dB)")
 
@@ -1034,7 +1048,7 @@ class Image:
 
         n = 1 + phi * c_thz / (omega * d)
 
-        alpha = (1/1e-4) * (-2 / d) * np.log(np.abs(sam_fd[:, 1] / ref_fd[:, 1]) * (n + 1) ** 2 / (4 * n))
+        alpha = (1 / 1e-4) * (-2 / d) * np.log(np.abs(sam_fd[:, 1] / ref_fd[:, 1]) * (n + 1) ** 2 / (4 * n))
 
         if en_plot:
             freq = ref_fd[:, 0].real
@@ -1047,7 +1061,6 @@ class Image:
             plt.plot(freq[plot_range2], alpha[plot_range2], label=label)
             plt.xlabel("Frequency (THz)")
             plt.ylabel("Absorption coefficient (1/cm)")
-
 
         return array([ref_fd[:, 0].real, n]).T, array([ref_fd[:, 0].real, alpha]).T
 
@@ -1157,3 +1170,58 @@ class Image:
             return amp_interpol * np.exp(1j * phi_interpol)
         else:
             return amp_interpol, phi_interpol
+
+    def knife_edge(self, x=None, y=None, coord_slice=None):
+        if x is None and y is None:
+            return
+
+        freq_range = self.options["selected_freq"]
+        power_grid = self._calc_power_grid(freq_range=freq_range).real ** 2
+
+        # vertical direction / slice
+        if x is not None:
+            y_coords = self.image_info["y_coords"]
+            x_idx, y_idx = self._coords_to_idx(x, y_coords[0])
+            pos_axis, vals = y_coords, power_grid[x_idx, :]
+            plot_x_label = "y (mm)"
+        else:  # horizontal direction / slice
+            x_coords = self.image_info["x_coords"]
+            x_idx, y_idx = self._coords_to_idx(x_coords[0], y)
+            pos_axis, vals = x_coords, power_grid[:, y_idx]
+            plot_x_label = "x (mm)"
+
+        pos_axis = pos_axis[np.nonzero(vals)]
+        vals = vals[np.nonzero(vals)]
+
+        if coord_slice is not None:
+            val_mask = (coord_slice[0] < pos_axis) * (pos_axis < coord_slice[1])
+            vals = vals[val_mask]
+            pos_axis = pos_axis[val_mask]
+
+        def _model(p):
+            p_max, p_offset, w, h0 = p
+            vals_model_ = p_offset + 0.5 * p_max * erfc(np.sqrt(2) * (pos_axis - h0) / w)
+
+            return vals_model_
+
+        def _cost(p):
+            return np.sum((vals - _model(p)) ** 2)
+
+        plt.figure("Knife edge")
+        plt.xlabel(plot_x_label)
+        plt.ylabel(f"Power (arb. u.) summed over {freq_range[0]}-{freq_range[1]} THz")
+
+        p0 = np.array([vals[0], 0.0, 0.5, 34.0])
+        opt_res = minimize(_cost, p0)
+
+        plt.scatter(pos_axis, vals, label="Measurement", s=30, c="red", zorder=3)
+        plt.plot(pos_axis, _model(opt_res.x), label="Optimization result")
+        plt.plot(pos_axis, _model(p0), label="Initial guess")
+
+        s = "\n".join(["".join(s) for s in
+                       zip(["$P_{max}$: ", "$P_{offset}$: ", "Beam radius: ", "$h_0$: "],
+                           [str(np.round(np.abs(param), 2)) for param in opt_res.x],
+                           ["", "", " (mm)", " (mm)"])])
+        plt.text(pos_axis[0], 0.04, s)
+
+        return opt_res

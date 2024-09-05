@@ -63,6 +63,11 @@ class Measurement:
         str_splits = str(self.filepath).split("_")
         x = float(str_splits[-2].split(" mm")[0])
         y = float(str_splits[-1].split(" mm")[0])
+        if np.isclose(x, 0):
+            x = 0.0
+        if np.isclose(y, 0):
+            y = 0.0
+
         self.position = [x, y]
 
     def do_preprocess(self, force=False):
