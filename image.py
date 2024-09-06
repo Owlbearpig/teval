@@ -529,14 +529,20 @@ class Image:
         self.all_points = list(itertools.product(x_coords, y_coords))
 
         x_diff, y_diff = np.abs(np.diff(x_coords)), np.abs(np.diff(y_coords))
-        print(x_diff)
+
         if len(x_diff) > 0:
-            dx = np.mean(x_diff[np.nonzero(x_diff)])
+            x_diffs = x_diff[np.nonzero(x_diff)]
+            # dx = np.mean(x_diffs)
+            values, counts = np.unique(x_diffs, return_counts=True)
+            dx = values[np.argmax(counts)]
         else:
             dx = 1
-        print(dx)
+
         if len(y_diff) > 0:
-            dy = np.mean(y_diff[np.nonzero(y_diff)])
+            y_diffs = y_diff[np.nonzero(x_diff)]
+            # dy = np.mean(y_diffs)
+            values, counts = np.unique(y_diffs, return_counts=True)
+            dy = values[np.argmax(counts)]
         else:
             dy = 1
 
@@ -549,6 +555,29 @@ class Image:
         return {"w": w, "h": h, "dx": dx, "dy": dy, "dt": dt, "samples": samples, "extent": extent,
                 "x_coords": x_coords, "y_coords": y_coords}
 
+    def _coords_to_idx(self, x_, y_):
+        w, h = self.image_info["w"], self.image_info["h"]
+        min_x, min_y = self.image_info["x_coords"][0], self.image_info["y_coords"][0]
+        dx, dy = self.image_info["dx"], self.image_info["dy"]
+
+        x = np.arange(min_x, min_x + (w + 1) * dx, dx)
+        y = np.arange(min_y, min_y + (h + 1) * dy, dy)
+
+        x_precision, y_precision = int(np.log10(1 / dx)), int(np.log10(1 / dy))
+
+        x_idx = np.argmin(np.abs(round(x_, x_precision) - x))
+        y_idx = np.argmin(np.abs(round(y_, y_precision) - y))
+
+        return x_idx, y_idx
+
+    def _idx_to_coords(self, x_idx, y_idx):
+        dx, dy = self.image_info["dx"], self.image_info["dy"]
+
+        y = self.image_info["y_coords"][0] + y_idx * dy
+        x = self.image_info["x_coords"][0] + x_idx * dx
+
+        return x, y
+
     def _image_cache(self):
         """
         read all measurements into array and save as npy at location of first measurement
@@ -560,10 +589,7 @@ class Image:
             img_data = np.load(str(self.cache_path / "_raw_img_cache.npy"))
         except FileNotFoundError:
             w, h, samples = self.image_info["w"], self.image_info["h"], self.image_info["samples"]
-            dx, dy = self.image_info["dx"], self.image_info["dy"]
-            x_coords, y_coords = self.image_info["x_coords"], self.image_info["y_coords"]
             img_data = np.zeros((w, h, samples))
-            min_x, max_x, min_y, max_y = self.image_info["extent"]
 
             for sam_measurement in self.sams:
                 x_pos, y_pos = sam_measurement.position
@@ -573,27 +599,6 @@ class Image:
             np.save(str(self.cache_path / "_raw_img_cache.npy"), img_data)
 
         return img_data
-
-    def _coords_to_idx(self, x_, y_):
-        w, h = self.image_info["w"], self.image_info["h"]
-        min_x, min_y = self.image_info["x_coords"][0], self.image_info["y_coords"][0]
-        dx, dy = self.image_info["dx"], self.image_info["dy"]
-
-        x = np.arange(min_x, min_x + (w + 1) * dx, dx)
-        y = np.arange(min_y, min_y + (h + 1) * dy, dy)
-
-        x_idx = np.argmin(np.abs(x - x_))
-        y_idx = np.argmin(np.abs(y - y_))
-
-        return x_idx, y_idx
-
-    def _idx_to_coords(self, x_idx, y_idx):
-        dx, dy = self.image_info["dx"], self.image_info["dy"]
-
-        y = self.image_info["y_coords"][0] + y_idx * dy
-        x = self.image_info["x_coords"][0] + x_idx * dx
-
-        return x, y
 
     def _calc_power_grid(self, freq_range):
         def power(measurement_):
@@ -1212,7 +1217,15 @@ class Image:
         plt.ylabel(f"Power (arb. u.) summed over {freq_range[0]}-{freq_range[1]} THz")
 
         p0 = np.array([vals[0], 0.0, 0.5, 34.0])
-        opt_res = minimize(_cost, p0)
+        opt_res = minimize(_cost, p0,
+                           options={"iters": 100, "maxiter": np.inf, "maxev": np.inf, "maxfev": 1e3, "disp": False, },
+                           tol=-1)
+        # opt_res = minimize(_cost, p0,)
+
+        opt_res = shgo(_cost, bounds=([p0[0]-1, p0[0]+1],
+                                      [p0[1], p0[1]+0.01],
+                                      [p0[2]-0.4, p0[2]+2.0],
+                                      [p0[3]-2, p0[3]+2]))
 
         plt.scatter(pos_axis, vals, label="Measurement", s=30, c="red", zorder=3)
         plt.plot(pos_axis, _model(opt_res.x), label="Optimization result")
