@@ -24,6 +24,7 @@ from teval.consts import c_thz, THz, plot_range1
 from tmm import coh_tmm as coh_tmm_full
 from scipy.optimize import shgo, minimize
 from scipy.special import erfc
+from enum import Enum
 
 d_sub = 1000
 angle_in = 0.0
@@ -103,7 +104,7 @@ def sub_refidx_tmm(img_, point, selected_freq_=None):
                 continue
             lam_vac = c_thz / freq_
             n = n_list_[f_idx_]
-            t_tmm_fd = coh_tmm("s", n, d_list, angle_in, lam_vac) * phase_shift[f_idx_]
+            t_tmm_fd = coh_tmm_full("s", n, d_list, angle_in, lam_vac)["t"] * phase_shift[f_idx_]
             ts_tmm_fd[f_idx_] = t_tmm_fd
             if ret_T_and_R:
                 dict_res = coh_tmm_full("s", n, d_list, angle_in, lam_vac)
@@ -125,7 +126,7 @@ def sub_refidx_tmm(img_, point, selected_freq_=None):
         n = np.array([1, p[0] + 1j * p[1], 1], dtype=complex)
         # n = array([1, 1.9+1j*0.1, p[0] + 1j * p[1], 1])
         lam_vac = c_thz / freqs[freq_idx_]
-        t_tmm_fd = coh_tmm("s", n, d_list, angle_in, lam_vac) * phase_shift[freq_idx_]
+        t_tmm_fd = coh_tmm_full("s", n, d_list, angle_in, lam_vac)["t"] * phase_shift[freq_idx_]
 
         sam_tmm_fd = t_tmm_fd * ref_fd[freq_idx_, 1]
 
@@ -231,6 +232,7 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, ref_idx
 
     # sub_point = (49, -5)
     sub_point = (22, -5)
+    sub_point = (40, -10)
 
     if shift_sub:
         from itertools import product
@@ -240,7 +242,8 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, ref_idx
         sub_point = choice(sub_points)
 
         sub_point = (49, -5)
-        # sub_point = (22, -5)
+        sub_point = (22, -5)
+        sub_point = (40, -10)
 
         print(f"New sub point: {[sub_point[0], sub_point[1]]}")
 
@@ -341,7 +344,7 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, ref_idx
         n = np.array([1, n_sub[freq_idx_, 1], p[0] + 1j * p[1], 1], dtype=complex)
         # n = array([1, 1.9+1j*0.1, p[0] + 1j * p[1], 1])
         lam_vac = c_thz / freqs[freq_idx_]
-        t_tmm_fd = coh_tmm("s", n, d_list, angle_in, lam_vac) * phase_shift[freq_idx_]
+        t_tmm_fd = coh_tmm_full("s", n, d_list, angle_in, lam_vac)["t"] * phase_shift[freq_idx_]
 
         sam_tmm_fd = t_tmm_fd * film_ref_fd[freq_idx_, 1]
 
@@ -387,6 +390,16 @@ def conductivity(img_, measurement_, d_film_=None, selected_freq_=2.000, ref_idx
 
     return 1 / (sigma[f_opt_idx[0]].real * d_film * 1e-4), res.fun
 
+class GridQuantity(Enum):
+    P2P = 0
+    Power = 1
+    MeasTimeDeltaRef2Sam = 2
+    RefAmp = 3
+    RefArgmax = 4
+    RefPhase = 5
+    PeakCnt = 6
+    TransmissionAmp = 7
+
 
 class Image:
     plotted_ref = False
@@ -398,9 +411,8 @@ class Image:
     options = {}
     name = ""
 
-    def __init__(self, data_path, sub_image=None, sample_idx=None, options=None):
+    def __init__(self, data_path, sample_idx=None, options=None):
         self.data_path = data_path
-        self.sub_image = sub_image
 
         self.refs, self.sams, self.other = self._set_measurements()
         if sample_idx is not None:
@@ -408,7 +420,7 @@ class Image:
 
         self.image_info = self._set_info()
         self._set_options(options)
-        self.image_data = self._image_cache()
+        self.image_data_td, self.image_data_fd = self._image_cache()
         self._evaluated_points = {}
 
     def _set_options(self, options_):
@@ -539,7 +551,7 @@ class Image:
             dx = 1
 
         if len(y_diff) > 0:
-            y_diffs = y_diff[np.nonzero(x_diff)]
+            y_diffs = y_diff[np.nonzero(y_diff)]
             # dy = np.mean(y_diffs)
             values, counts = np.unique(y_diffs, return_counts=True)
             dy = values[np.argmax(counts)]
@@ -556,17 +568,8 @@ class Image:
                 "x_coords": x_coords, "y_coords": y_coords}
 
     def _coords_to_idx(self, x_, y_):
-        w, h = self.image_info["w"], self.image_info["h"]
-        min_x, min_y = self.image_info["x_coords"][0], self.image_info["y_coords"][0]
-        dx, dy = self.image_info["dx"], self.image_info["dy"]
-
-        x = np.arange(min_x, min_x + (w + 1) * dx, dx)
-        y = np.arange(min_y, min_y + (h + 1) * dy, dy)
-
-        x_precision, y_precision = int(np.log10(1 / dx)), int(np.log10(1 / dy))
-
-        x_idx = np.argmin(np.abs(round(x_, x_precision) - x))
-        y_idx = np.argmin(np.abs(round(y_, y_precision) - y))
+        x, y = self.image_info["x_coords"], self.image_info["y_coords"]
+        x_idx, y_idx = np.argmin(np.abs(x_ - x)), np.argmin(np.abs(y_ - y))
 
         return x_idx, y_idx
 
@@ -586,42 +589,29 @@ class Image:
         self.cache_path.mkdir(parents=True, exist_ok=True)
 
         try:
-            img_data = np.load(str(self.cache_path / "_raw_img_cache.npy"))
+            img_data_td = np.load(str(self.cache_path / "_raw_img_td_cache.npy"))
+            img_data_fd = np.load(str(self.cache_path / "_raw_img_fd_cache.npy"))
         except FileNotFoundError:
             w, h, samples = self.image_info["w"], self.image_info["h"], self.image_info["samples"]
-            img_data = np.zeros((w, h, samples))
+            dx, dy = self.image_info["dx"], self.image_info["dy"]
+            img_data_td = np.zeros((w, h, samples))
+            fd_samples = (samples + 1) // 2 if (samples % 2) else 1 + samples // 2
+            img_data_fd = np.zeros((w, h, fd_samples))
+            min_x, max_x, min_y, max_y = self.image_info["extent"]
 
-            for sam_measurement in self.sams:
+            for i, sam_measurement in enumerate(self.sams):
+                if i % 100 == 0:
+                    print(f"{round(100 * i / len(self.sams), 2)} % processed")
+
                 x_pos, y_pos = sam_measurement.position
-                x_idx, y_idx = self._coords_to_idx(x_pos, y_pos)
-                img_data[x_idx, y_idx] = sam_measurement.get_data_td(get_raw=True)[:, 1]
+                x_idx, y_idx = int((x_pos - min_x) / dx), int((y_pos - min_y) / dy)
+                img_data_td[x_idx, y_idx] = sam_measurement.get_data_td(get_raw=True)[:, 1]
+                img_data_fd[x_idx, y_idx] = sam_measurement.get_data_fd()[:, 1]
 
-            np.save(str(self.cache_path / "_raw_img_cache.npy"), img_data)
+            np.save(str(self.cache_path / "_raw_img_td_cache.npy"), img_data_td)
+            np.save(str(self.cache_path / "_raw_img_fd_cache.npy"), img_data_fd)
 
-        return img_data
-
-    def _calc_power_grid(self, freq_range):
-        def power(measurement_):
-            freq_slice = (freq_range[0] < self.freq_axis) * (self.freq_axis < freq_range[1])
-
-            ref_td, ref_fd = self.get_ref(point=measurement_.position, both=True)
-
-            sam_fd = measurement_.get_data_fd()
-            power_val_sam = np.sum(np.abs(sam_fd[freq_slice, 1])) / np.sum(freq_slice)
-            power_val_ref = np.sum(np.abs(ref_fd[freq_slice, 1])) / np.sum(freq_slice)
-
-            return (power_val_sam / power_val_ref) ** 2
-
-        grid_vals = self._empty_grid.copy()
-
-        for i, sam_measurement in enumerate(self.sams):
-            print(f"{round(100 * i / len(self.sams), 2)} % done. "
-                  f"(Measurement: {i}/{len(self.sams)}, {sam_measurement.position} mm)")
-            x_idx, y_idx = self._coords_to_idx(*sam_measurement.position)
-            val = power(sam_measurement)
-            grid_vals[x_idx, y_idx] = val
-
-        return grid_vals
+        return img_data_td, img_data_fd
 
     def _is_excluded(self, idx_tuple):
         if self.options["excluded_areas"] is None:
@@ -654,15 +644,131 @@ class Image:
 
         return t[np.argmax(y)]
 
-    def _calc_grid_vals(self, quantity="p2p", selected_freq=1.200):
+    def _calc_power_grid(self, freq_range):
+        def power(measurement_):
+            freq_slice = (freq_range[0] < self.freq_axis) * (self.freq_axis < freq_range[1])
+
+            ref_td, ref_fd = self.get_ref(point=measurement_.position, both=True)
+
+            sam_fd = measurement_.get_data_fd()
+            power_val_sam = np.sum(np.abs(sam_fd[freq_slice, 1])) / np.sum(freq_slice)
+            power_val_ref = np.sum(np.abs(ref_fd[freq_slice, 1])) / np.sum(freq_slice)
+
+            return (power_val_sam / power_val_ref) ** 2
+
+        grid_vals = self._empty_grid.copy()
+
+        for i, sam_measurement in enumerate(self.sams):
+            print(f"{round(100 * i / len(self.sams), 2)} % done. "
+                  f"(Measurement: {i}/{len(self.sams)}, {sam_measurement.position} mm)")
+            x_idx, y_idx = self._coords_to_idx(*sam_measurement.position)
+            val = power(sam_measurement)
+            grid_vals[x_idx, y_idx] = val
+
+        return grid_vals
+
+    def _p2p(self):
+        return np.max(self.image_data_td, axis=2) - np.min(self.image_data_td, axis=2)
+
+    def _power(self, meas_, freq_range_):
+        freq_slice = (freq_range_[0] < self.freq_axis) * (self.freq_axis < freq_range_[1])
+
+        _, ref_fd = self.get_ref(point=meas_.position, both=True)
+        sam_fd = meas_.get_data_fd()
+
+        power_val_sam = np.sum(np.abs(sam_fd[freq_slice, 1])) / np.sum(freq_slice)
+        power_val_ref = np.sum(np.abs(ref_fd[freq_slice, 1])) / np.sum(freq_slice)
+
+        return (power_val_sam / power_val_ref) ** 2
+
+    def _meas_time_delta(self, meas_):
+        grid_vals = self._empty_grid.copy()
+
+        for i, measurement in enumerate(self.sams):
+            print(f"{round(100 * i / len(self.sams), 2)} % done. "
+                  f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
+            x_idx, y_idx = self._coords_to_idx(*measurement.position)
+            meas_time_dt = self.get_ref(point=measurement.position, ret_dt=True)
+            grid_vals[x_idx, y_idx] = meas_time_dt
+
+    def _ref_max(self, meas_):
+        grid_vals = self._empty_grid.copy()
+
+        for i, measurement in enumerate(self.sams):
+            print(f"{round(100 * i / len(self.sams), 2)} % done. "
+                  f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
+            x_idx, y_idx = self._coords_to_idx(*measurement.position)
+            amp_, _ = self._ref_interpolation(measurement, selected_freq_=selected_freq,
+                                              ret_cart=False)
+            grid_vals[x_idx, y_idx] = amp_
+
+    def _ref_argmax(self, meas_):
+        grid_vals = self._empty_grid.copy()
+
+        for i, measurement in enumerate(self.sams):
+            print(f"{round(100 * i / len(self.sams), 2)} % done. "
+                  f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
+            x_idx, y_idx = self._coords_to_idx(*measurement.position)
+            ref_pos_ = self.get_ref_pos(measurement)
+            grid_vals[x_idx, y_idx] = ref_pos_
+
+    def _ref_phase(self, meas_):
+        grid_vals = self._empty_grid.copy()
+
+        for i, measurement in enumerate(self.sams):
+            print(f"{round(100 * i / len(self.sams), 2)} % done. "
+                  f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
+            x_idx, y_idx = self._coords_to_idx(*measurement.position)
+            _, phi_ = self._ref_interpolation(measurement, selected_freq_=selected_freq,
+                                              ret_cart=False)
+            grid_vals[x_idx, y_idx] = phi_
+
+    def _peak_cnt(self, meas_):
+        grid_vals = self._empty_grid.copy()
+        for i, measurement in enumerate(self.sams):
+            x_idx, y_idx = self._coords_to_idx(*measurement.position)
+
+            grid_vals[x_idx, y_idx] = peak_cnt(measurement.get_data_td(), threshold=2.5)
+
+    def _transmission_amplitude(self, meas_):
+        grid_vals = self._empty_grid.copy()
+        for i, measurement in enumerate(self.sams):
+            print(f"{round(100 * i / len(self.sams), 2)} % done. "
+                  f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
+            x_idx, y_idx = self._coords_to_idx(*measurement.position)
+            grid_vals[x_idx, y_idx] = self.amplitude_transmission(measurement, selected_freq)
+
+    def _calc_grid_vals(self, quantity=GridQuantity.P2P, freq_range=1.200):
         info = self.image_info
 
-        if quantity.lower() == "power":
-            if isinstance(selected_freq, tuple):
-                grid_vals = self._calc_power_grid(freq_range=selected_freq)
-            else:
-                print("Selected frequency must be range given as tuple")
-                grid_vals = self._empty_grid
+        func_map = {GridQuantity.Power: partial(self._power, freq_range_=freq_range),
+                    GridQuantity.MeasTimeDeltaRef2Sam: self._meas_time_delta,
+                    GridQuantity.RefAmp: self._ref_max,
+                    GridQuantity.RefArgmax: self._ref_argmax,
+                    GridQuantity.RefPhase: self._ref_phase,
+                    GridQuantity.PeakCnt: self._peak_cnt,
+                    GridQuantity.TransmissionAmp: self._transmission_amplitude
+                    }
+
+        if quantity == GridQuantity.P2P:
+            return self._p2p()
+        elif callable(quantity):
+            func = quantity
+        elif quantity in func_map:
+            func = func_map[quantity]
+        else:
+            raise NotImplemented("quantity not implemented")
+
+        grid_vals = self._empty_grid.copy()
+        for i, measurement in enumerate(self.sams):
+            print(f"{round(100 * i / len(self.sams), 2)} % done. "
+                  f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
+
+            x_idx, y_idx = self._coords_to_idx(*measurement.position)
+
+            grid_vals[x_idx, y_idx] = func(measurement)
+
+        """
         elif quantity.lower() == "p2p_cond":
             grid_vals = self._empty_grid.copy()
 
@@ -681,58 +787,16 @@ class Image:
                 x_idx, y_idx = self._coords_to_idx(*measurement.position)
                 sheet_resistance, _ = conductivity(self, measurement, selected_freq_=selected_freq, tinkham_method=True)
                 grid_vals[x_idx, y_idx] = sheet_resistance
-        elif quantity == "meas_time_delta":
-            grid_vals = self._empty_grid.copy()
-
-            for i, measurement in enumerate(self.sams):
-                print(f"{round(100 * i / len(self.sams), 2)} % done. "
-                      f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
-                x_idx, y_idx = self._coords_to_idx(*measurement.position)
-                meas_time_dt = self.get_ref(point=measurement.position, ret_dt=True)
-                grid_vals[x_idx, y_idx] = meas_time_dt
-        elif quantity == "p2p":
-            grid_vals = np.max(self.image_data, axis=2) - np.min(self.image_data, axis=2)
-        elif quantity.lower() == "ref_amp":
-            grid_vals = self._empty_grid.copy()
-
-            for i, measurement in enumerate(self.sams):
-                print(f"{round(100 * i / len(self.sams), 2)} % done. "
-                      f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
-                x_idx, y_idx = self._coords_to_idx(*measurement.position)
-                amp_, _ = self._ref_interpolation(measurement, selected_freq_=selected_freq,
-                                                  ret_cart=False)
-                grid_vals[x_idx, y_idx] = amp_
-        elif quantity.lower() == "ref_pos":
-            grid_vals = self._empty_grid.copy()
-
-            for i, measurement in enumerate(self.sams):
-                print(f"{round(100 * i / len(self.sams), 2)} % done. "
-                      f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
-                x_idx, y_idx = self._coords_to_idx(*measurement.position)
-                ref_pos_ = self.get_ref_pos(measurement)
-                grid_vals[x_idx, y_idx] = ref_pos_
-        elif quantity == "Reference phase":
-            grid_vals = self._empty_grid.copy()
-
-            for i, measurement in enumerate(self.sams):
-                print(f"{round(100 * i / len(self.sams), 2)} % done. "
-                      f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
-                x_idx, y_idx = self._coords_to_idx(*measurement.position)
-                _, phi_ = self._ref_interpolation(measurement, selected_freq_=selected_freq,
-                                                  ret_cart=False)
-                grid_vals[x_idx, y_idx] = phi_
-        elif quantity == "pulse_cnt":
-            grid_vals = self._empty_grid.copy()
-            for i, measurement in enumerate(self.sams):
-                x_idx, y_idx = self._coords_to_idx(*measurement.position)
-
-                grid_vals[x_idx, y_idx] = peak_cnt(measurement.get_data_td(), threshold=2.5)
+        
         elif quantity.lower() == "conductivity":
             grid_vals = self._empty_grid.copy()
 
             for i, measurement in enumerate(self.sams):
                 print(f"{round(100 * i / len(self.sams), 2)} % done. "
                       f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
+                x, y = measurement.position
+                
+                
                 x_idx, y_idx = self._coords_to_idx(*measurement.position)
                 sheet_resistance, err = conductivity(self, measurement, selected_freq_=selected_freq)
 
@@ -743,20 +807,12 @@ class Image:
                                                          shift_sub=True)
                     retries -= 1
 
-                if sheet_resistance > self.options["cbar_max"]:
-                    sheet_resistance = self.options["cbar_max"]
+
+                #if sheet_resistance > self.options["cbar_max"]:
+                #    sheet_resistance = self.options["cbar_max"]
 
                 grid_vals[x_idx, y_idx] = sheet_resistance
-        elif quantity == "amplitude_transmission":
-            grid_vals = self._empty_grid.copy()
-            for i, measurement in enumerate(self.sams):
-                print(f"{round(100 * i / len(self.sams), 2)} % done. "
-                      f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
-                x_idx, y_idx = self._coords_to_idx(*measurement.position)
-                grid_vals[x_idx, y_idx] = self.amplitude_transmission(measurement, selected_freq)
-        else:
-            # grid_vals = np.argmax(np.abs(self.image_data[:, :, int(17 / info["dt"]):int(20 / info["dt"])]), axis=2)
-            grid_vals = np.argmax(np.abs(self.image_data[:, :, int(17 / info["dt"]):int(20 / info["dt"])]), axis=2)
+        """
 
         return grid_vals.real
 
