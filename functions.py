@@ -79,18 +79,6 @@ def phase_correction(data_fd, disable=False, fit_range=None, en_plot=False, extr
         return array([freqs, phase_corrected]).T
 
 
-def peak_cnt(data_td, threshold=1):
-    y_ = data_td[:, 1]
-    y_ -= (np.mean(y_[:10]) + np.mean(y_[-10:])) * 0.5
-
-    y_[y_ < threshold] = 0
-    peaks_idx = []
-    for idx_ in range(1, len(y_)-1):
-        if (y_[idx_-1] < y_[idx_]) * (y_[idx_] > y_[idx_+1]):
-            peaks_idx.append(idx_)
-
-    return len(peaks_idx)
-
 
 def zero_pad(data_td, length=100):
     t, y = data_td[:, 0], data_td[:, 1]
