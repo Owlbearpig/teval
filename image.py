@@ -1175,22 +1175,20 @@ class Image:
         if x is None and y is None:
             return
 
+        x_coords, y_coords = self.image_info["y_coords"], self.image_info["x_coords"]
         freq_range = self.options["selected_freq"]
-
-        power_grid = self._power(freq_range=freq_range).real
 
         # vertical direction / slice
         if x is not None:
-            y_coords = self.image_info["y_coords"]
-            x_idx, y_idx = self._coords_to_idx(x, y_coords[0])
-            pos_axis, vals = y_coords, power_grid[x_idx, :]
+            vertical_measurements = [self.get_measurement(x, y_) for y_ in y_coords]
+            pos_axis, vals = y_coords, [self._power(meas_, freq_range) for meas_ in vertical_measurements]
             plot_x_label = "y (mm)"
         else:  # horizontal direction / slice
-            x_coords = self.image_info["x_coords"]
-            x_idx, y_idx = self._coords_to_idx(x_coords[0], y)
-            pos_axis, vals = x_coords, power_grid[:, y_idx]
+            horizontal_measurements = [self.get_measurement(x_, y) for x_ in x_coords]
+            pos_axis, vals = x_coords, [self._power(meas_, freq_range) for meas_ in horizontal_measurements]
             plot_x_label = "x (mm)"
 
+        vals = np.array(vals)
         pos_axis = pos_axis[np.nonzero(vals)]
         vals = vals[np.nonzero(vals)]
 
