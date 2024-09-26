@@ -16,6 +16,7 @@ from scipy.optimize import shgo, minimize
 from scipy.special import erfc
 from enum import Enum
 from measurements import Measurement
+import logging
 
 
 d_sub = 1000
@@ -25,8 +26,10 @@ angle_in = 0.0
 class Quantity:
     func = None
 
-    def __init__(self, label="label"):
+    def __init__(self, label="label", func=None):
         self.label = label
+        if func is not None:
+            self.func = func
 
     def __repr__(self):
         return self.label
@@ -56,6 +59,7 @@ class Image:
     options = {}
     selected_freq = None
     selected_quantity = None
+    grid_func = None
     name = ""
 
     def __init__(self, data_path, sample_idx=None, options=None):
@@ -240,7 +244,7 @@ class Image:
 
             for i, sam_measurement in enumerate(self.sams):
                 if i % 100 == 0:
-                    print(f"{round(100 * i / len(self.sams), 2)} % processed")
+                    print(f"Reading files. {round(100 * i / len(self.sams), 2)} % processed")
 
                 x_pos, y_pos = sam_measurement.position
                 x_idx, y_idx = int((x_pos - min_x) / dx), int((y_pos - min_y) / dy)
@@ -278,7 +282,8 @@ class Image:
 
     def _power(self, meas_):
         if not isinstance(self.selected_freq, tuple):
-            raise ValueError("selected_freq must be a tuple")
+            logging.warning("Selected_freq must be a tuple. Using default range")
+            self.selected_freq = (1.0, 1.2)
 
         freq_range_ = self.selected_freq
         freq_slice = (freq_range_[0] < self.freq_axis) * (self.freq_axis < freq_range_[1])
@@ -297,12 +302,12 @@ class Image:
         return (meas_.meas_time - ref_meas.meas_time).total_seconds()
 
     def _ref_max(self, meas_):
-        amp_, _ = self._ref_interpolation(meas_, self.selected_freq)
+        amp_, _ = self._ref_interpolation(meas_)
 
         return amp_
 
     def _ref_phase(self, meas_):
-        _, phi_ = self._ref_interpolation(meas_, self.selected_freq)
+        _, phi_ = self._ref_interpolation(meas_)
 
         return phi_
 
@@ -329,10 +334,14 @@ class Image:
 
         return power_val_sam / power_val_ref
 
-    def select_quantity(self, quantity):
+    def select_quantity(self, quantity, label=""):
         if isinstance(quantity, Quantity):
+            self.grid_func = quantity.func
             self.selected_quantity = quantity
-            return
+
+        if callable(quantity):
+            self.grid_func = quantity
+            self.selected_quantity = Quantity(label)
 
         func_map = {QuantityEnum.P2P: lambda x: x,
                     QuantityEnum.Power: self._power,
@@ -345,7 +354,7 @@ class Image:
                     }
 
         if quantity in func_map:
-            quantity.value.func = func_map[quantity]
+            self.grid_func = func_map[quantity]
             self.selected_quantity = quantity.value
 
     def _calc_grid_vals(self):
@@ -359,7 +368,7 @@ class Image:
 
             x_idx, y_idx = self._coords_to_idx(*measurement.position)
 
-            grid_vals[x_idx, y_idx] = np.real(self.selected_quantity(measurement))
+            grid_vals[x_idx, y_idx] = np.real(self.grid_func(measurement))
 
         return grid_vals.real
 
@@ -476,7 +485,7 @@ class Image:
 
         return array([ref_fd[:, 0].real, n]).T, array([ref_fd[:, 0].real, alpha]).T
 
-    def _ref_interpolation(self, sam_meas, selected_freq_, ret_cart=False):
+    def _ref_interpolation(self, sam_meas, ret_cart=False):
         sam_meas_time = sam_meas.meas_time
 
         nearest_ref_idx, smallest_time_diff, time_diff = None, np.inf, 0
@@ -500,7 +509,7 @@ class Image:
 
         ref_before_fd, ref_after_fd = do_fft(ref_before_td), do_fft(ref_after_td)
 
-        f_idx = np.argmin(np.abs(self.freq_axis - selected_freq_))
+        f_idx = np.argmin(np.abs(self.freq_axis - self.selected_freq))
         y_amp = [np.sum(np.abs(ref_before_fd[f_idx, 1])) / 1,
                  np.sum(np.abs(ref_after_fd[f_idx, 1])) / 1]
         y_phi = [np.angle(ref_before_fd[f_idx, 1]), np.angle(ref_after_fd[f_idx, 1])]
@@ -613,10 +622,10 @@ class Image:
         sam2 = self.get_measurement(*position2)  # rnd_sam
 
         sam_t1 = (sam1.meas_time - t0).total_seconds() / 3600
-        amp_interpol1, phi_interpol1 = self._ref_interpolation(sam1, ret_cart=False, selected_freq_=selected_freq_)
+        amp_interpol1, phi_interpol1 = self._ref_interpolation(sam1, ret_cart=False)
 
         sam_t2 = (sam2.meas_time - t0).total_seconds() / 3600
-        amp_interpol2, phi_interpol2 = self._ref_interpolation(sam2, ret_cart=False, selected_freq_=selected_freq_)
+        amp_interpol2, phi_interpol2 = self._ref_interpolation(sam2, ret_cart=False)
 
         plt.figure("System stability reference pulse position")
         plt.title(f"Reference pulse position")
@@ -712,7 +721,7 @@ class Image:
             print(f"{round(100 * i / len(measurements), 2)} % done. "
                   f"(Measurement: {i}/{len(measurements)}, {measurement.position} mm)")
 
-            vals.append(np.real(self.selected_quantity.func(measurement)))
+            vals.append(np.real(self.grid_func(measurement)))
 
         label_ = f"Sample {self.sample_idx} ({np.round(self.selected_freq, 3)} THz)"
 
@@ -785,8 +794,9 @@ class Image:
 
 
 if __name__ == '__main__':
-    img = Image(r"/home/ftpuser/ftp/Data/HHI_Aachen/remeasure_02_09_2024/sample3/img3")
-    img.select_quantity(QuantityEnum.MeasTimeDeltaRef2Sam)
+    # img = Image(r"/home/ftpuser/ftp/Data/HHI_Aachen/remeasure_02_09_2024/sample3/img3")
+    img = Image(r"E:\measurementdata\HHI_Aachen\remeasure_02_09_2024\sample4\img1")
+    img.select_quantity(QuantityEnum.Power)
     img.plot_image()
 
     plt_show()
