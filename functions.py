@@ -1,4 +1,6 @@
 import matplotlib.pyplot as plt
+import matplotlib as mpl
+from pathlib import Path
 import numpy as np
 from scipy.stats import pearsonr
 from numpy import array, nan_to_num, zeros, pi
@@ -325,3 +327,47 @@ def remove_spikes(arr):
             arr[i + 1] = (arr[i] + arr[i + 2]) / 2
 
     return arr
+
+
+def save_fig(fig_num_, mpl=None, save_dir=None, filename=None, **kwargs):
+    if mpl is None:
+        import matplotlib as mpl
+
+    plt = mpl.pyplot
+
+    rcParams = mpl.rcParams
+
+    if save_dir is None:
+        save_dir = Path(rcParams["savefig.directory"])
+
+    fig = plt.figure(fig_num_)
+
+    if filename is None:
+        filename_s = str(fig.canvas.get_window_title())
+    else:
+        filename_s = str(filename)
+
+    unwanted_chars = ["(", ")"]
+    for char in unwanted_chars:
+        filename_s = filename_s.replace(char, '')
+    filename_s.replace(" ", "_")
+
+    fig.set_size_inches((12, 9), forward=False)
+    plt.subplots_adjust(wspace=0.3)
+    plt.savefig(save_dir / (filename_s + ".pdf"), bbox_inches='tight', dpi=300, pad_inches=0, **kwargs)
+
+
+def plt_show(mpl_=None, en_save=False):
+    if mpl_ is None:
+        mpl_ = mpl
+    plt_ = mpl_.pyplot
+    for fig_num in plt_.get_fignums():
+        fig = plt_.figure(fig_num)
+        for ax in fig.get_axes():
+            h, labels = ax.get_legend_handles_labels()
+            if labels:
+                ax.legend()
+
+        if en_save:
+            save_fig(fig_num, mpl_)
+    plt_.show()

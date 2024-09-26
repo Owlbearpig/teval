@@ -1,44 +1,49 @@
 import itertools
 import random
-import re
-import timeit
 from functools import partial
-from itertools import product
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-from .consts import plot_range1, plot_range, c_thz, plot_range2, c0
+from teval.consts import plot_range1, plot_range, c_thz, plot_range2, c0
 from numpy import array
 from pathlib import Path
 import numpy as np
-import matplotlib.ticker as ticker
-from .functions import do_fft, do_ifft, phase_correction, unwrap, window, polyfit, f_axis_idx_map, to_db, zero_pad, \
-    peak_cnt, remove_spikes
-from .measurements import get_all_measurements, MeasurementType
-from .mpl_settings import mpl_style_params, fmt
-from random import choice
-# shgo = partial(shgo, workers=1)
-from numpy import pi
-from scipy.constants import epsilon_0
-from teval.functions import phase_correction, window, do_fft, f_axis_idx_map, do_ifft, to_db
+from teval.functions import unwrap, plt_show
+from teval.measurements import get_all_measurements, MeasurementType
+from teval.mpl_settings import mpl_style_params
+from teval.functions import phase_correction, window, do_fft, f_axis_idx_map
 from teval.consts import c_thz, THz, plot_range1
-from tmm import coh_tmm as coh_tmm_full
 from scipy.optimize import shgo, minimize
 from scipy.special import erfc
 from enum import Enum
+from measurements import Measurement
+
 
 d_sub = 1000
 angle_in = 0.0
 
 
-class GridQuantity(Enum):
-    P2P = 0
-    Power = 1
-    MeasTimeDeltaRef2Sam = 2
-    RefAmp = 3
-    RefArgmax = 4
-    RefPhase = 5
-    PeakCnt = 6
-    TransmissionAmp = 7
+class Quantity:
+    func = None
+
+    def __init__(self, label="label"):
+        self.label = label
+
+    def __repr__(self):
+        return self.label
+
+    def __call__(self, *args, **kwargs):
+        return self.func(*args, **kwargs)
+
+
+class QuantityEnum(Enum):
+    P2P = Quantity("P2p")
+    Power = Quantity("Power")
+    MeasTimeDeltaRef2Sam = Quantity("MeasTimeDeltaRef2Sam")
+    RefAmp = Quantity("RefAmp")
+    RefArgmax = Quantity("RefArgmax")
+    RefPhase = Quantity("RefPhase")
+    PeakCnt = Quantity("PeakCnt")
+    TransmissionAmp = Quantity("TransmissionAmp")
 
 
 class Image:
@@ -49,6 +54,8 @@ class Image:
     sample_idx = None
     all_points = None
     options = {}
+    selected_freq = None
+    selected_quantity = None
     name = ""
 
     def __init__(self, data_path, sample_idx=None, options=None):
@@ -60,44 +67,33 @@ class Image:
 
         self.image_info = self._set_info()
         self._set_options(options)
+        self._set_defaults()
+
         self.image_data_td, self.image_data_fd = self._image_cache()
         self._evaluated_points = {}
 
-    def _set_options(self, options_):
+    def _set_defaults(self):
+        if self.selected_freq is None:
+            self.selected_freq = 1.000
+
+        if self.selected_quantity is None:
+            self.select_quantity(QuantityEnum.P2P)
+
+    def _set_options(self, options_=None):
         if options_ is None:
             options_ = {}
 
-        # set defaults if missing # TODO use default_dict ?
-        if "excluded_areas" not in options_.keys():
-            options_["excluded_areas"] = None
-        if "one2onesub" not in options_.keys():
-            options_["one2onesub"] = False
-
-        if "cbar_min" not in options_.keys():
-            options_["cbar_min"] = None
-        if "cbar_max" not in options_.keys():
-            options_["cbar_max"] = None
-
-        if "log_scale" not in options_.keys():
-            options_["log_scale"] = False
-
-        if "color_map" not in options_.keys():
-            # some options: ['viridis', 'plasma', 'inferno', 'magma', 'cividis']
-            options_["color_map"] = "autumn"
-
-        if "invert_x" not in options_.keys():
-            options_["invert_x"] = False
-        if "invert_y" not in options_.keys():
-            options_["invert_y"] = False
-
-        if "en_window" not in options_.keys():
-            options_["en_window"] = False
-
-        if "selected_freq" not in options_.keys():
-            options_["selected_freq"] = (1.0, 1.2)
-
-        if "rcParams" not in options_.keys():
-            options_["rcParams"] = {}
+        default_options = {"excluded_areas": None,
+                           "one2onesub": False,
+                           "cbar_lim": (None, None),
+                           "log_scale": False,
+                           "color_map": "autumn",
+                           "invert_x": False, "invert_y": False,
+                           "en_window": False,
+                           "rcParams": mpl_style_params(),
+                           }
+        self.options.update(default_options)
+        # some color_map options: ['viridis', 'plasma', 'inferno', 'magma', 'cividis']
 
         self.options.update(options_)
         self._apply_options()
@@ -106,6 +102,9 @@ class Image:
         mpl.rcParams.update(self.options["rcParams"])
 
     def _set_measurements(self):
+        if not isinstance(self.data_path, Path):
+            self.data_path = Path(self.data_path)
+
         all_measurements = get_all_measurements(data_dir_=self.data_path)
         refs, sams, other = self._filter_measurements(all_measurements)
 
@@ -269,7 +268,7 @@ class Image:
         return False
 
     def _get_ref_pos(self, measurement_):
-        ref_td = self.get_ref(point=measurement_.position)
+        ref_td = self.get_ref_data(point=measurement_.position)
         t, y = ref_td[:, 0], ref_td[:, 1]
 
         return t[np.argmax(y)]
@@ -277,10 +276,14 @@ class Image:
     def _p2p(self):
         return np.max(self.image_data_td, axis=2) - np.min(self.image_data_td, axis=2)
 
-    def _power(self, meas_, freq_range_):
+    def _power(self, meas_):
+        if not isinstance(self.selected_freq, tuple):
+            raise ValueError("selected_freq must be a tuple")
+
+        freq_range_ = self.selected_freq
         freq_slice = (freq_range_[0] < self.freq_axis) * (self.freq_axis < freq_range_[1])
 
-        _, ref_fd = self.get_ref(point=meas_.position, both=True)
+        _, ref_fd = self.get_ref_data(point=meas_.position, both=True)
         sam_fd = meas_.get_data_fd()
 
         power_val_sam = np.sum(np.abs(sam_fd[freq_slice, 1])) / np.sum(freq_slice)
@@ -293,13 +296,13 @@ class Image:
 
         return (meas_.meas_time - ref_meas.meas_time).total_seconds()
 
-    def _ref_max(self, meas_, selected_freq_):
-        amp_, _ = self._ref_interpolation(meas_, selected_freq_)
+    def _ref_max(self, meas_):
+        amp_, _ = self._ref_interpolation(meas_, self.selected_freq)
 
         return amp_
 
-    def _ref_phase(self, meas_, selected_freq_):
-        _, phi_ = self._ref_interpolation(meas_, selected_freq_)
+    def _ref_phase(self, meas_):
+        _, phi_ = self._ref_interpolation(meas_, self.selected_freq)
 
         return phi_
 
@@ -316,9 +319,9 @@ class Image:
 
         return len(peaks_idx)
 
-    def _amplitude_transmission(self, measurement_, selected_freq_):
-        ref_td, ref_fd = self.get_ref(point=measurement_.position, both=True)
-        freq_idx = f_axis_idx_map(ref_fd[:, 0].real, selected_freq_)
+    def _amplitude_transmission(self, measurement_):
+        ref_td, ref_fd = self.get_ref_data(point=measurement_.position, both=True)
+        freq_idx = f_axis_idx_map(ref_fd[:, 0].real, self.selected_freq)
 
         sam_fd = measurement_.get_data_fd()
         power_val_sam = np.abs(sam_fd[freq_idx, 1])
@@ -326,24 +329,28 @@ class Image:
 
         return power_val_sam / power_val_ref
 
-    def _calc_grid_vals(self, quantity, freq_range=1.200):
-        func_map = {GridQuantity.Power: partial(self._power, freq_range_=freq_range),
-                    GridQuantity.MeasTimeDeltaRef2Sam: self._meas_time_delta,
-                    GridQuantity.RefAmp: partial(self._ref_max, selected_freq_=freq_range),
-                    GridQuantity.RefArgmax: self._get_ref_pos,
-                    GridQuantity.RefPhase: self._ref_phase,
-                    GridQuantity.PeakCnt: partial(self._peak_cnt, threshold=2.5),
-                    GridQuantity.TransmissionAmp: partial(self._amplitude_transmission, selected_freq_=freq_range)
+    def select_quantity(self, quantity):
+        if isinstance(quantity, Quantity):
+            self.selected_quantity = quantity
+            return
+
+        func_map = {QuantityEnum.P2P: lambda x: x,
+                    QuantityEnum.Power: self._power,
+                    QuantityEnum.MeasTimeDeltaRef2Sam: self._meas_time_delta,
+                    QuantityEnum.RefAmp: self._ref_max,
+                    QuantityEnum.RefArgmax: self._get_ref_pos,
+                    QuantityEnum.RefPhase: self._ref_phase,
+                    QuantityEnum.PeakCnt: partial(self._peak_cnt, threshold=2.5),
+                    QuantityEnum.TransmissionAmp: self._amplitude_transmission,
                     }
 
-        if quantity == GridQuantity.P2P:
-            return self._p2p()
-        elif callable(quantity):
-            func = quantity
-        elif quantity in func_map:
-            func = func_map[quantity]
-        else:
-            raise NotImplemented("quantity not implemented")
+        if quantity in func_map:
+            quantity.value.func = func_map[quantity]
+            self.selected_quantity = quantity.value
+
+    def _calc_grid_vals(self):
+        if self.selected_quantity == QuantityEnum.P2P:
+            return np.real(self._p2p())
 
         grid_vals = self._empty_grid.copy()
         for i, measurement in enumerate(self.sams):
@@ -352,7 +359,7 @@ class Image:
 
             x_idx, y_idx = self._coords_to_idx(*measurement.position)
 
-            grid_vals[x_idx, y_idx] = np.real(func(measurement))
+            grid_vals[x_idx, y_idx] = np.real(self.selected_quantity(measurement))
 
         return grid_vals.real
 
@@ -366,126 +373,7 @@ class Image:
 
         return filtered_grid
 
-    def plot_image(self, selected_freq=None, quantity="p2p", img_extent=None):
-        if selected_freq is None:
-            selected_freq = self.options["selected_freq"]
-
-        if quantity.lower() == "p2p":
-            cbar_label = ""
-        elif quantity.lower() == "p2p_cond":
-            cbar_label = "p2p_cond"
-        elif quantity.lower() == "tinkham_cond":
-            cbar_label = f"Sheet resistance ($\Omega$/sq) @ {np.round(selected_freq, 3)} THz"
-        elif quantity.lower() == "meas_time_delta":
-            cbar_label = "Time to nearest ref. (s)"
-        elif quantity.lower() == "ref_pos":
-            cbar_label = "Ref. pulse pos. (ps)"
-        elif quantity.lower() == "ref_amp":
-            cbar_label = " Interpolated ref. amp. at " + str(np.round(selected_freq, 3)) + " THz"
-        elif quantity == "Reference phase":
-            cbar_label = " interpolated at " + str(np.round(selected_freq, 3)) + " THz"
-        elif quantity.lower() == "power":
-            cbar_label = f" ({selected_freq[0]}-{selected_freq[1]}) THz"
-        elif quantity.lower() == "loss":
-            cbar_label = " function value (log10)"
-        elif quantity.lower() == "conductivity":
-            cbar_label = f"Sheet resistance ($\Omega$/sq) @ {np.round(selected_freq, 3)} THz"
-        elif quantity.lower() == "amplitude_transmission":
-            cbar_label = f"Amplitude transmission @ {np.round(selected_freq, 2)} THz"
-        elif quantity.lower() == "pulse_cnt":
-            cbar_label = ""
-        else:
-            cbar_label = ""
-
-        info = self.image_info
-        if img_extent is None:
-            w0, w1, h0, h1 = [0, info["w"], 0, info["h"]]
-        else:
-            dx, dy = info["dx"], info["dy"]
-            w0, w1 = int((img_extent[0] - info["extent"][0]) / dx), int((img_extent[1] - info["extent"][0]) / dx)
-            h0, h1 = int((img_extent[2] - info["extent"][2]) / dy), int((img_extent[3] - info["extent"][2]) / dy)
-
-        grid_vals = self._calc_grid_vals(quantity=quantity, selected_freq=selected_freq)
-
-        grid_vals = grid_vals[w0:w1, h0:h1]
-
-        grid_vals = self._exclude_pixels(grid_vals)
-
-        if self.options["log_scale"]:
-            grid_vals = np.log10(grid_vals)
-
-        fig = plt.figure(f"{self.name} {quantity}")
-        ax = fig.add_subplot(111)
-        ax.set_title(f"{self.name}")
-        fig.subplots_adjust(left=0.2)
-
-        if img_extent is None:
-            img_extent = self.image_info["extent"]
-
-        if self.options["cbar_min"] is None:
-            cbar_min_val = np.min(grid_vals)
-        else:
-            cbar_min_val = self.options["cbar_min"]
-
-        if self.options["cbar_max"] is None:
-            cbar_max_val = np.max(grid_vals)
-        else:
-            cbar_max_val = self.options["cbar_max"]
-
-        if self.options["log_scale"]:
-            self.options["cbar_min"] = np.log10(cbar_min_val)
-            self.options["cbar_max"] = np.log10(cbar_max_val)
-
-        axes_extent = [img_extent[0] - self.image_info["dx"] / 2, img_extent[1] + self.image_info["dx"] / 2,
-                       img_extent[2] - self.image_info["dy"] / 2, img_extent[3] + self.image_info["dy"] / 2]
-        img = ax.imshow(grid_vals.transpose((1, 0)),
-                        vmin=cbar_min_val, vmax=cbar_max_val,
-                        origin="lower",
-                        cmap=plt.get_cmap(self.options["color_map"]),
-                        extent=axes_extent,
-                        interpolation="hanning"
-                        )
-        if self.options["invert_x"]:
-            ax.invert_xaxis()
-        if self.options["invert_y"]:
-            ax.invert_yaxis()
-
-        ax.set_xlabel("x (mm)")
-        ax.set_ylabel("y (mm)")
-        """
-        if np.max(grid_vals) > 1000:
-            cbar = fig.colorbar(img, format=ticker.FuncFormatter(fmt))
-        else:
-        """
-        cbar = fig.colorbar(img)
-        cbar.set_label(cbar_label, rotation=270, labelpad=30)
-
-    def plot_slice(self):
-        """ # TODO separate method
-        x_center, y_center = 0, 0
-        if self.sample_idx == 3:
-            y_center = -1.0
-            x_center = 35.0
-        if self.sample_idx == 4:
-            y_center = -1.0
-            x_center = 35.0
-
-        x_coords, y_coords = self.image_info["x_coords"], self.image_info["y_coords"]
-        x_idx, y_idx = self._coords_to_idx(x_center, y_center)
-
-        plt.figure("x-slice")
-        plt.plot(x_coords, grid_vals[:, x_idx], label=f"Sample {self.sample_idx} ({np.round(selected_freq, 3)} THz)")
-        plt.xlabel("x (mm)")
-        plt.ylabel(cbar_label)
-
-        plt.figure("y-slice")
-        plt.plot(y_coords, grid_vals[y_idx, :], label=f"Sample {self.sample_idx} ({np.round(selected_freq, 3)} THz)")
-        plt.xlabel("y (mm)")
-        plt.ylabel(cbar_label)
-        """
-        return
-
-    def get_measurement(self, x, y, meas_type=MeasurementType.SAM.value):
+    def get_measurement(self, x, y, meas_type=MeasurementType.SAM.value) -> Measurement:
         if meas_type == MeasurementType.REF.value:
             meas_list = self.refs
         elif meas_type == MeasurementType.SAM.value:
@@ -503,28 +391,17 @@ class Image:
 
         return closest_meas
 
-    def get_point(self, x, y, normalize=False, sub_offset=False, both=False, add_plot=False):
-        dx, dy, dt = self.image_info["dx"], self.image_info["dy"], self.image_info["dt"]
+    def get_line(self, x=None, y=None):
+        if x is None and y is None:
+            return
 
-        x_idx, y_idx = self._coords_to_idx(x, y)
-        y_ = self.image_data_td[x_idx, y_idx]
+        x_coords, y_coords = self.image_info["y_coords"], self.image_info["x_coords"]
 
-        if sub_offset:
-            y_ -= (np.mean(y_[:10]) + np.mean(y_[-10:])) * 0.5
-
-        if normalize:
-            y_ *= 1 / np.max(y_)
-
-        t = np.arange(0, len(y_)) * dt
-        y_td = np.array([t, y_]).T
-
-        if add_plot:
-            self.plot_point(x, y, y_td)
-
-        if not both:
-            return y_td
-        else:
-            return y_td, do_fft(y_td)
+        # vertical direction / slice
+        if x is not None:
+            return [self.get_measurement(x, y_) for y_ in y_coords], y_coords
+        else:  # horizontal direction / slice
+            return [self.get_measurement(x_, y) for x_ in x_coords], x_coords
 
     def find_nearest_ref(self, meas_):
         closest_ref, best_fit_val = None, np.inf
@@ -538,7 +415,7 @@ class Image:
 
         return closest_ref
 
-    def get_ref(self, both=False, normalize=False, sub_offset=False, point=None, ret_meas=False):
+    def get_ref_data(self, both=False, normalize=False, sub_offset=False, point=None, ret_meas=False):
         if point is not None:
             closest_sam = self.get_measurement(*point, meas_type=MeasurementType.SAM.value)
 
@@ -565,22 +442,88 @@ class Image:
         else:
             return ref_td
 
-    def plot_point(self, x, y, sam_td=None, ref_td=None, sub_noise_floor=False, label="", td_scale=1):
-        if (sam_td is None) and (ref_td is None):
-            sam_td = self.get_point(x, y, sub_offset=True)
-            ref_td = self.get_ref(sub_offset=True, point=(x, y))
+    def evaluate_point(self, point, d, label=None, en_plot=False):
+        """
+        evaluate and plot n, alpha and absorbance
 
-            if self.options["en_window"]:
-                sam_td = window(sam_td, win_len=25, shift=0, en_plot=False, slope=0.05)
-                ref_td = window(ref_td, win_len=25, shift=0, en_plot=False, slope=0.05)
+        """
+        sam_meas = self.get_measurement(*point)
+        sam_td, sam_fd = sam_meas.get_data_both_domains()
+        ref_td, ref_fd = self.get_ref_data(point=point, both=True)
 
-            ref_fd, sam_fd = do_fft(ref_td), do_fft(sam_td)
+        omega = 2 * np.pi * ref_fd[:, 0].real
 
-            # sam_td, sam_fd = phase_correction(sam_fd, fit_range=(0.8, 1.6), extrapolate=True, both=True)
-            # ref_td, ref_fd = phase_correction(ref_fd, fit_range=(0.8, 1.6), extrapolate=True, both=True)
+        phi_sam = phase_correction(sam_fd, en_plot=True)
+        phi_ref = phase_correction(ref_fd, en_plot=True)
 
+        phi = phi_sam[:, 1] - phi_ref[:, 1]
+
+        n = 1 + phi * c_thz / (omega * d)
+
+        alpha = (1 / 1e-4) * (-2 / d) * np.log(np.abs(sam_fd[:, 1] / ref_fd[:, 1]) * (n + 1) ** 2 / (4 * n))
+
+        if en_plot:
+            freq = ref_fd[:, 0].real
+            plt.figure("Refractive index")
+            plt.plot(freq[plot_range2], n[plot_range2], label=label)
+            plt.xlabel("Frequency (THz)")
+            plt.ylabel("Refractive index")
+
+            plt.figure("Absorption coefficient")
+            plt.plot(freq[plot_range2], alpha[plot_range2], label=label)
+            plt.xlabel("Frequency (THz)")
+            plt.ylabel("Absorption coefficient (1/cm)")
+
+        return array([ref_fd[:, 0].real, n]).T, array([ref_fd[:, 0].real, alpha]).T
+
+    def _ref_interpolation(self, sam_meas, selected_freq_, ret_cart=False):
+        sam_meas_time = sam_meas.meas_time
+
+        nearest_ref_idx, smallest_time_diff, time_diff = None, np.inf, 0
+        for ref_idx in range(len(self.refs)):
+            time_diff = (self.refs[ref_idx].meas_time - sam_meas_time).total_seconds()
+            if abs(time_diff) < abs(smallest_time_diff):
+                nearest_ref_idx = ref_idx
+                smallest_time_diff = time_diff
+
+        t0 = self.refs[0].meas_time
+        if smallest_time_diff <= 0:
+            # sample was measured after reference
+            ref_before = self.refs[nearest_ref_idx]
+            ref_after = self.refs[nearest_ref_idx + 1]
         else:
-            ref_fd, sam_fd = do_fft(ref_td), do_fft(sam_td)
+            ref_before = self.refs[nearest_ref_idx - 1]
+            ref_after = self.refs[nearest_ref_idx]
+
+        t = [(ref_before.meas_time - t0).total_seconds(), (ref_after.meas_time - t0).total_seconds()]
+        ref_before_td, ref_after_td = ref_before.get_data_td(), ref_after.get_data_td()
+
+        ref_before_fd, ref_after_fd = do_fft(ref_before_td), do_fft(ref_after_td)
+
+        f_idx = np.argmin(np.abs(self.freq_axis - selected_freq_))
+        y_amp = [np.sum(np.abs(ref_before_fd[f_idx, 1])) / 1,
+                 np.sum(np.abs(ref_after_fd[f_idx, 1])) / 1]
+        y_phi = [np.angle(ref_before_fd[f_idx, 1]), np.angle(ref_after_fd[f_idx, 1])]
+
+        amp_interpol = np.interp((sam_meas_time - t0).total_seconds(), t, y_amp)
+        phi_interpol = np.interp((sam_meas_time - t0).total_seconds(), t, y_phi)
+
+        if ret_cart:
+            return amp_interpol * np.exp(1j * phi_interpol)
+        else:
+            return amp_interpol, phi_interpol
+
+    def plot_point(self, x, y, sub_noise_floor=False, label="", td_scale=1):
+        sam_meas = self.get_measurement(x, y)
+        sam_td = sam_meas.get_data_td()
+
+        ref_td = self.get_ref_data(sub_offset=True, point=(x, y))
+
+        if self.options["en_window"]:
+            sam_td = window(sam_td, win_len=25, shift=0, en_plot=False, slope=0.05)
+            ref_td = window(ref_td, win_len=25, shift=0, en_plot=False, slope=0.05)
+
+        ref_fd, sam_fd = do_fft(ref_td), do_fft(sam_td)
 
         phi_ref, phi_sam = unwrap(ref_fd), unwrap(sam_fd)
 
@@ -635,40 +578,8 @@ class Image:
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Absorbance (dB)")
 
-    def evaluate_point(self, point, d, label=None, en_plot=False):
-        """
-        evaluate and plot n, alpha and absorbance
-
-        """
-        sam_td, sam_fd = self.get_point(*point, both=True)
-        ref_td, ref_fd = self.get_ref(point=point, both=True)
-
-        omega = 2 * np.pi * ref_fd[:, 0].real
-
-        phi_sam = phase_correction(sam_fd, en_plot=True)
-        phi_ref = phase_correction(ref_fd, en_plot=True)
-
-        phi = phi_sam[:, 1] - phi_ref[:, 1]
-
-        n = 1 + phi * c_thz / (omega * d)
-
-        alpha = (1 / 1e-4) * (-2 / d) * np.log(np.abs(sam_fd[:, 1] / ref_fd[:, 1]) * (n + 1) ** 2 / (4 * n))
-
-        if en_plot:
-            freq = ref_fd[:, 0].real
-            plt.figure("Refractive index")
-            plt.plot(freq[plot_range2], n[plot_range2], label=label)
-            plt.xlabel("Frequency (THz)")
-            plt.ylabel("Refractive index")
-
-            plt.figure("Absorption coefficient")
-            plt.plot(freq[plot_range2], alpha[plot_range2], label=label)
-            plt.xlabel("Frequency (THz)")
-            plt.ylabel("Absorption coefficient (1/cm)")
-
-        return array([ref_fd[:, 0].real, n]).T, array([ref_fd[:, 0].real, alpha]).T
-
-    def system_stability(self, selected_freq_=0.800):
+    def plot_system_stability(self):
+        selected_freq_ = self.selected_freq
         f_idx = np.argmin(np.abs(self.freq_axis - selected_freq_))
 
         ref_ampl_arr, ref_angle_arr, ref_pos = [], [], []
@@ -729,62 +640,100 @@ class Image:
         plt.xlabel("Measurement time (hour)")
         plt.ylabel("Phase (rad)")
 
-    def _ref_interpolation(self, sam_meas, selected_freq_, ret_cart=False):
-        sam_meas_time = sam_meas.meas_time
+    def plot_image(self, img_extent=None):
+        cbar_label = str(self.selected_quantity)
 
-        nearest_ref_idx, smallest_time_diff, time_diff = None, np.inf, 0
-        for ref_idx in range(len(self.refs)):
-            time_diff = (self.refs[ref_idx].meas_time - sam_meas_time).total_seconds()
-            if abs(time_diff) < abs(smallest_time_diff):
-                nearest_ref_idx = ref_idx
-                smallest_time_diff = time_diff
-
-        t0 = self.refs[0].meas_time
-        if smallest_time_diff <= 0:
-            # sample was measured after reference
-            ref_before = self.refs[nearest_ref_idx]
-            ref_after = self.refs[nearest_ref_idx + 1]
+        info = self.image_info
+        if img_extent is None:
+            w0, w1, h0, h1 = [0, info["w"], 0, info["h"]]
         else:
-            ref_before = self.refs[nearest_ref_idx - 1]
-            ref_after = self.refs[nearest_ref_idx]
+            dx, dy = info["dx"], info["dy"]
+            w0, w1 = int((img_extent[0] - info["extent"][0]) / dx), int((img_extent[1] - info["extent"][0]) / dx)
+            h0, h1 = int((img_extent[2] - info["extent"][2]) / dy), int((img_extent[3] - info["extent"][2]) / dy)
 
-        t = [(ref_before.meas_time - t0).total_seconds(), (ref_after.meas_time - t0).total_seconds()]
-        ref_before_td, ref_after_td = ref_before.get_data_td(), ref_after.get_data_td()
+        grid_vals = self._calc_grid_vals()
 
-        ref_before_fd, ref_after_fd = do_fft(ref_before_td), do_fft(ref_after_td)
+        grid_vals = grid_vals[w0:w1, h0:h1]
 
-        f_idx = np.argmin(np.abs(self.freq_axis - selected_freq_))
-        y_amp = [np.sum(np.abs(ref_before_fd[f_idx, 1])) / 1,
-                 np.sum(np.abs(ref_after_fd[f_idx, 1])) / 1]
-        y_phi = [np.angle(ref_before_fd[f_idx, 1]), np.angle(ref_after_fd[f_idx, 1])]
+        grid_vals = self._exclude_pixels(grid_vals)
 
-        amp_interpol = np.interp((sam_meas_time - t0).total_seconds(), t, y_amp)
-        phi_interpol = np.interp((sam_meas_time - t0).total_seconds(), t, y_phi)
+        if self.options["log_scale"]:
+            grid_vals = np.log10(grid_vals)
 
-        if ret_cart:
-            return amp_interpol * np.exp(1j * phi_interpol)
+        fig = plt.figure(f"{self.name} {self.selected_quantity}")
+        ax = fig.add_subplot(111)
+        ax.set_title(f"{self.name}")
+        fig.subplots_adjust(left=0.2)
+
+        if img_extent is None:
+            img_extent = self.image_info["extent"]
+
+        cbar_min, cbar_max = self.options["cbar_lim"]
+        if cbar_min is None:
+            cbar_min = np.min(grid_vals)
+        if cbar_max is None:
+            cbar_max = np.max(grid_vals)
+
+        if self.options["log_scale"]:
+            self.options["cbar_min"] = np.log10(cbar_min)
+            self.options["cbar_max"] = np.log10(cbar_max)
+
+        axes_extent = (float(img_extent[0] - self.image_info["dx"] / 2),
+                       float(img_extent[1] + self.image_info["dx"] / 2),
+                       float(img_extent[2] - self.image_info["dy"] / 2),
+                       float(img_extent[3] + self.image_info["dy"] / 2))
+        img = ax.imshow(grid_vals.transpose((1, 0)),
+                        vmin=cbar_min, vmax=cbar_max,
+                        origin="lower",
+                        cmap=plt.get_cmap(self.options["color_map"]),
+                        extent=axes_extent,
+                        interpolation="hanning"
+                        )
+        if self.options["invert_x"]:
+            ax.invert_xaxis()
+        if self.options["invert_y"]:
+            ax.invert_yaxis()
+
+        ax.set_xlabel("x (mm)")
+        ax.set_ylabel("y (mm)")
+        """
+        if np.max(grid_vals) > 1000:
+            cbar = fig.colorbar(img, format=ticker.FuncFormatter(fmt))
         else:
-            return amp_interpol, phi_interpol
+        """
+        cbar = fig.colorbar(img)
+        cbar.set_label(cbar_label, rotation=270, labelpad=30)
+
+    def plot_line(self, x=None, y=None):
+        measurements, coords = self.get_line(x, y)
+
+        vals = []
+        for i, measurement in enumerate(measurements):
+            print(f"{round(100 * i / len(measurements), 2)} % done. "
+                  f"(Measurement: {i}/{len(measurements)}, {measurement.position} mm)")
+
+            vals.append(np.real(self.selected_quantity.func(measurement)))
+
+        label_ = f"Sample {self.sample_idx} ({np.round(self.selected_freq, 3)} THz)"
+
+        plt.figure("x-slice")
+        plt.plot(coords, vals, label=label_)
+        plt.xlabel("x (mm)")
+        plt.ylabel(str(self.selected_quantity))
+
+        plt.figure("y-slice")
+        plt.plot(coords, vals, label=label_)
+        plt.xlabel("y (mm)")
+        plt.ylabel(str(self.selected_quantity))
 
     def knife_edge(self, x=None, y=None, coord_slice=None):
-        if x is None and y is None:
-            return
+        if not isinstance(self.selected_freq, tuple):
+            raise ValueError("selected_freq must be a tuple")
 
-        x_coords, y_coords = self.image_info["y_coords"], self.image_info["x_coords"]
-        freq_range = self.options["selected_freq"]
+        measurements, coords = self.get_line(x, y)
+        vals = np.array([self._power(meas_) for meas_ in measurements])
 
-        # vertical direction / slice
-        if x is not None:
-            vertical_measurements = [self.get_measurement(x, y_) for y_ in y_coords]
-            pos_axis, vals = y_coords, [self._power(meas_, freq_range) for meas_ in vertical_measurements]
-            plot_x_label = "y (mm)"
-        else:  # horizontal direction / slice
-            horizontal_measurements = [self.get_measurement(x_, y) for x_ in x_coords]
-            pos_axis, vals = x_coords, [self._power(meas_, freq_range) for meas_ in horizontal_measurements]
-            plot_x_label = "x (mm)"
-
-        vals = np.array(vals)
-        pos_axis = pos_axis[np.nonzero(vals)]
+        pos_axis = coords[np.nonzero(vals)]
         vals = vals[np.nonzero(vals)]
 
         if coord_slice is not None:
@@ -801,9 +750,15 @@ class Image:
         def _cost(p):
             return np.sum((vals - _model(p)) ** 2)
 
+        # vertical direction / slice
+        if x is not None:
+            plot_x_label = "y (mm)"
+        else:  # horizontal direction / slice
+            plot_x_label = "x (mm)"
+
         plt.figure("Knife edge")
         plt.xlabel(plot_x_label)
-        plt.ylabel(f"Power (arb. u.) summed over {freq_range[0]}-{freq_range[1]} THz")
+        plt.ylabel(f"Power (arb. u.) summed over {self.selected_freq[0]}-{self.selected_freq[1]} THz")
 
         p0 = np.array([vals[0], 0.0, 0.5, 34.0])
         opt_res = minimize(_cost, p0,
@@ -827,3 +782,11 @@ class Image:
         plt.text(pos_axis[0], 0.04, s)
 
         return opt_res
+
+
+if __name__ == '__main__':
+    img = Image(r"/home/ftpuser/ftp/Data/HHI_Aachen/remeasure_02_09_2024/sample3/img3")
+    img.select_quantity(QuantityEnum.MeasTimeDeltaRef2Sam)
+    img.plot_image()
+
+    plt_show()

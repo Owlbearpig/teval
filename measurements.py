@@ -1,9 +1,9 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime
-from .consts import data_dir
+from teval.consts import data_dir
 from numpy.fft import fft, fftfreq
-from .functions import window
+from teval.functions import window
 from enum import Enum
 
 
@@ -112,6 +112,9 @@ class Measurement:
             self._data_fd = np.array([freqs, data_fd]).T
 
         return self._data_fd
+
+    def get_data_both_domains(self):
+        return self.get_data_td(), self.get_data_fd()
 
 
 def get_all_measurements(post_process=None, data_dir_=None):
