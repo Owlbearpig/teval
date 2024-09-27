@@ -63,8 +63,13 @@ class Image:
     selected_freq = None
     selected_quantity = None
     grid_func = None
+    refs = None
+    sams = None
 
-    def __init__(self, data_path, options=None):
+    def __init__(self, data_path=None, options=None):
+        if data_path is None:
+            return
+
         self.data_path = data_path
 
         self.refs, self.sams, self.other = self._set_measurements()
@@ -674,7 +679,11 @@ class Image:
 
         meas_time, temp, humidity = read_log_file(log_file)
 
-        t0 = self.refs[0].meas_time
+        if self.refs is not None:
+            t0 = self.refs[0].meas_time
+        else:
+            t0 = meas_time[0]
+
         meas_time_diff = [(t - t0).total_seconds() / 3600 for t in meas_time]
 
         stability_figs = ["Stability ref pulse pos", "Stability amplitude", "Stability phase"]
