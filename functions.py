@@ -343,7 +343,10 @@ def save_fig(fig_num_, mpl=None, save_dir=None, filename=None, **kwargs):
     fig = plt.figure(fig_num_)
 
     if filename is None:
-        filename_s = str(fig.canvas.get_window_title())
+        try:
+            filename_s = str(fig.canvas.get_window_title())
+        except AttributeError:
+            filename_s = str(fig.canvas.manager.get_window_title())
     else:
         filename_s = str(filename)
 

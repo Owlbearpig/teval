@@ -17,17 +17,20 @@ from scipy.special import erfc
 from enum import Enum
 from measurements import Measurement
 import logging
+from datetime import datetime
 
 
-d_sub = 1000
-angle_in = 0.0
+class Domain(Enum):
+    TimeDomain = 0
+    FrequencyDomain = 1
 
 
 class Quantity:
     func = None
 
-    def __init__(self, label="label", func=None):
+    def __init__(self, label="label", func=None, domain=Domain.TimeDomain):
         self.label = label
+        self.domain = domain
         if func is not None:
             self.func = func
 
@@ -40,13 +43,13 @@ class Quantity:
 
 class QuantityEnum(Enum):
     P2P = Quantity("P2p")
-    Power = Quantity("Power")
+    Power = Quantity("Power", domain=Domain.FrequencyDomain)
     MeasTimeDeltaRef2Sam = Quantity("MeasTimeDeltaRef2Sam")
-    RefAmp = Quantity("RefAmp")
+    RefAmp = Quantity("RefAmp", domain=Domain.FrequencyDomain)
     RefArgmax = Quantity("RefArgmax")
-    RefPhase = Quantity("RefPhase")
+    RefPhase = Quantity("RefPhase", domain=Domain.FrequencyDomain)
     PeakCnt = Quantity("PeakCnt")
-    TransmissionAmp = Quantity("TransmissionAmp")
+    TransmissionAmp = Quantity("TransmissionAmp", domain=Domain.FrequencyDomain)
 
 
 class Image:
@@ -54,22 +57,19 @@ class Image:
     noise_floor = None
     time_axis = None
     cache_path = None
-    sample_idx = None
+    sample_name = None
     all_points = None
     options = {}
     selected_freq = None
     selected_quantity = None
     grid_func = None
-    name = ""
 
-    def __init__(self, data_path, sample_idx=None, options=None):
+    def __init__(self, data_path, options=None):
         self.data_path = data_path
 
         self.refs, self.sams, self.other = self._set_measurements()
-        if sample_idx is not None:
-            self.sample_idx = sample_idx
 
-        self.image_info = self._set_info()
+        self.image_info = self._set_grid_properties()
         self._set_options(options)
         self._set_defaults()
 
@@ -95,14 +95,16 @@ class Image:
                            "invert_x": False, "invert_y": False,
                            "en_window": False,
                            "rcParams": mpl_style_params(),
+                           "sample_name": "",
                            }
-        self.options.update(default_options)
+        default_options.update(options_)
         # some color_map options: ['viridis', 'plasma', 'inferno', 'magma', 'cividis']
 
-        self.options.update(options_)
+        self.options.update(default_options)
         self._apply_options()
 
     def _apply_options(self):
+        self.sample_name = self.options["sample_name"]
         mpl.rcParams.update(self.options["rcParams"])
 
     def _set_measurements(self):
@@ -117,24 +119,31 @@ class Image:
 
         first_measurement = min(refs[0], sams[0], key=lambda meas: meas.meas_time)
         last_measurement = max(refs[-1], sams[-1], key=lambda meas: meas.meas_time)
-        print(f"First measurement at: {first_measurement.meas_time}, last measurement: {last_measurement.meas_time}")
+        logging.info(f"First measurement at: {first_measurement.meas_time}, "
+                     f"last measurement: {last_measurement.meas_time}")
         time_del = last_measurement.meas_time - first_measurement.meas_time
-        tot_hours, tot_mins = time_del.seconds // 3600, (time_del.seconds // 60) % 60
-        print(f"Total measurement time: {tot_hours} hours and {tot_mins} minutes\n")
+        td_secs = time_del.seconds
+        tot_hours, min_part = time_del.seconds // 3600, (td_secs // 60) % 60
+        sec_part = time_del.seconds % 60
+
+        logging.info(f"Total measurement time: {tot_hours} hours, "
+                     f"{min_part} minutes and {sec_part} seconds ({td_secs} seconds)\n")
 
         return refs, sams, other
 
     def _find_refs(self, sample_measurements, ret_one=True):
         max_amp_meas = (None, -np.inf)
         for meas in sample_measurements:
-            max_amp = np.max(meas.get_data_td())
+            max_amp = np.max(np.abs(meas.get_data_td()))
             if max_amp > max_amp_meas[1]:
                 max_amp_meas = (meas, max_amp)
         refs_ = [max_amp_meas[0]]
-        print(f"Using reference measurement: {max_amp_meas[0].filepath.stem}")
+
+        logging.debug(f"Using reference measurement: {max_amp_meas[0].filepath.stem}")
+
         if not ret_one:
             for meas in sample_measurements:
-                max_amp = np.max(meas.get_data_td())
+                max_amp = np.max(np.abs(meas.get_data_td()))
                 if max_amp > max_amp_meas[1] * 0.97:
                     refs_.append(meas)
 
@@ -154,16 +163,12 @@ class Image:
             raise Exception("No measurements found. Check path or filenames")
 
         if not refs and sams:
-            print("No references found. Using max amp. sample measurement")
+            logging.warning("No references found. Using max amp. sample measurement")
             refs = self._find_refs(sams)
 
         return refs, sams, other
 
-    def _set_info(self):
-        if self.sample_idx is None:
-            self.sample_idx = 0
-        self.name = f"Sample {self.sample_idx}"
-
+    def _set_grid_properties(self):
         sample_data_td = self.sams[0].get_data_td()
         samples = int(sample_data_td.shape[0])
         self.time_axis = sample_data_td[:, 0].real
@@ -179,7 +184,6 @@ class Image:
             y_coords.append(sam_measurement.position[1])
 
         x_coords, y_coords = array(sorted(set(x_coords))), array(sorted(set(y_coords)))
-        w, h = max(len(x_coords), 1), max(len(y_coords), 1)
 
         self.all_points = list(itertools.product(x_coords, y_coords))
 
@@ -202,6 +206,12 @@ class Image:
             dy = 1
 
         dx, dy = round(dx, 3), round(dy, 3)
+
+        w = int(1 + np.ceil((max(x_coords) - min(x_coords)) / dx))
+        h = int(1 + np.ceil((max(y_coords) - min(y_coords)) / dy))
+
+        y_coords = np.round(np.arange(min(y_coords), max(y_coords) + dy, dy), 1)
+        x_coords = np.round(np.arange(min(x_coords), max(x_coords) + dx, dx), 1)
 
         extent = [x_coords[0], x_coords[-1], y_coords[0], y_coords[-1]]
 
@@ -236,20 +246,17 @@ class Image:
             img_data_fd = np.load(str(self.cache_path / "_raw_img_fd_cache.npy"))
         except FileNotFoundError:
             w, h, samples = self.image_info["w"], self.image_info["h"], self.image_info["samples"]
-            dx, dy = self.image_info["dx"], self.image_info["dy"]
             img_data_td = np.zeros((w, h, samples))
             fd_samples = (samples + 1) // 2 if (samples % 2) else 1 + samples // 2
             img_data_fd = np.zeros((w, h, fd_samples))
-            min_x, max_x, min_y, max_y = self.image_info["extent"]
 
-            for i, sam_measurement in enumerate(self.sams):
+            for i, sam_meas in enumerate(self.sams):
                 if i % 100 == 0:
-                    print(f"Reading files. {round(100 * i / len(self.sams), 2)} % processed")
+                    logging.info(f"Reading files. {round(100 * i / len(self.sams), 2)} % processed")
 
-                x_pos, y_pos = sam_measurement.position
-                x_idx, y_idx = int((x_pos - min_x) / dx), int((y_pos - min_y) / dy)
-                img_data_td[x_idx, y_idx] = sam_measurement.get_data_td(get_raw=True)[:, 1]
-                img_data_fd[x_idx, y_idx] = sam_measurement.get_data_fd()[:, 1]
+                x_idx, y_idx = self._coords_to_idx(*sam_meas.position)
+                img_data_td[x_idx, y_idx] = sam_meas.get_data_td(get_raw=True)[:, 1]
+                img_data_fd[x_idx, y_idx] = sam_meas.get_data_fd()[:, 1]
 
             np.save(str(self.cache_path / "_raw_img_td_cache.npy"), img_data_td)
             np.save(str(self.cache_path / "_raw_img_fd_cache.npy"), img_data_fd)
@@ -277,13 +284,17 @@ class Image:
 
         return t[np.argmax(y)]
 
-    def _p2p(self):
+    def _p2p(self, meas_=None):
+        if meas_ is not None:
+            y_td = meas_.get_data_td()
+            return np.max(y_td[:, 1]) - np.min(y_td[:, 1])
+
         return np.max(self.image_data_td, axis=2) - np.min(self.image_data_td, axis=2)
 
     def _power(self, meas_):
         if not isinstance(self.selected_freq, tuple):
-            logging.warning("Selected_freq must be a tuple. Using default range")
             self.selected_freq = (1.0, 1.2)
+            logging.warning(f"Selected_freq must be a tuple. Using default range ({self.selected_freq})")
 
         freq_range_ = self.selected_freq
         freq_slice = (freq_range_[0] < self.freq_axis) * (self.freq_axis < freq_range_[1])
@@ -336,14 +347,16 @@ class Image:
 
     def select_quantity(self, quantity, label=""):
         if isinstance(quantity, Quantity):
+            if not callable(Quantity.func):
+                logging.warning("Func of Quantity must be callable")
             self.grid_func = quantity.func
             self.selected_quantity = quantity
 
         if callable(quantity):
             self.grid_func = quantity
-            self.selected_quantity = Quantity(label)
+            self.selected_quantity = Quantity(label, func=quantity)
 
-        func_map = {QuantityEnum.P2P: lambda x: x,
+        func_map = {QuantityEnum.P2P: self._p2p,
                     QuantityEnum.Power: self._power,
                     QuantityEnum.MeasTimeDeltaRef2Sam: self._meas_time_delta,
                     QuantityEnum.RefAmp: self._ref_max,
@@ -354,7 +367,7 @@ class Image:
                     }
 
         if quantity in func_map:
-            self.grid_func = func_map[quantity]
+            self.grid_func = lambda x: np.real(func_map[quantity](x))
             self.selected_quantity = quantity.value
 
     def _calc_grid_vals(self):
@@ -363,12 +376,13 @@ class Image:
 
         grid_vals = self._empty_grid.copy()
         for i, measurement in enumerate(self.sams):
-            print(f"{round(100 * i / len(self.sams), 2)} % done. "
-                  f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
+            if not i % (len(self.sams) // 100) or i == len(self.sams)-1:
+                logging.info(f"{round(100 * i / len(self.sams), 2)} % done. "
+                             f"(Measurement: {i}/{len(self.sams)}, {measurement.position} mm)")
 
             x_idx, y_idx = self._coords_to_idx(*measurement.position)
 
-            grid_vals[x_idx, y_idx] = np.real(self.grid_func(measurement))
+            grid_vals[x_idx, y_idx] = self.grid_func(measurement)
 
         return grid_vals.real
 
@@ -404,7 +418,7 @@ class Image:
         if x is None and y is None:
             return
 
-        x_coords, y_coords = self.image_info["y_coords"], self.image_info["x_coords"]
+        x_coords, y_coords = self.image_info["x_coords"], self.image_info["y_coords"]
 
         # vertical direction / slice
         if x is not None:
@@ -420,7 +434,7 @@ class Image:
                 best_fit_val = dt
                 closest_ref = ref_meas
 
-        print(f"Time between ref and sample: {best_fit_val} seconds")
+        logging.debug(f"Time between ref and sample: {best_fit_val} seconds")
 
         return closest_ref
 
@@ -439,8 +453,6 @@ class Image:
 
         if normalize:
             ref_td[:, 1] *= 1 / np.max(ref_td[:, 1])
-
-        ref_td[:, 0] -= ref_td[0, 0]
 
         if ret_meas:
             return chosen_ref
@@ -522,11 +534,11 @@ class Image:
         else:
             return amp_interpol, phi_interpol
 
-    def plot_point(self, x, y, sub_noise_floor=False, label="", td_scale=1):
-        sam_meas = self.get_measurement(x, y)
+    def plot_point(self, point, sub_noise_floor=False, label="", td_scale=1):
+        sam_meas = self.get_measurement(*point)
         sam_td = sam_meas.get_data_td()
 
-        ref_td = self.get_ref_data(sub_offset=True, point=(x, y))
+        ref_td = self.get_ref_data(sub_offset=False, point=point)
 
         if self.options["en_window"]:
             sam_td = window(sam_td, win_len=25, shift=0, en_plot=False, slope=0.05)
@@ -558,7 +570,7 @@ class Image:
             self.plotted_ref = True
 
         if not label:
-            label += f" (x={x} (mm), y={y} (mm))"
+            label += f" (x={point[0]} (mm), y={point[1]} (mm))"
         noise_floor = np.mean(20 * np.log10(np.abs(sam_fd[sam_fd[:, 0] > 6.0, 1]))) * sub_noise_floor
 
         plt.figure("Spectrum")
@@ -598,21 +610,14 @@ class Image:
         for i, ref in enumerate(self.refs):
             ref_td = ref.get_data_td()
             t, y = ref_td[:, 0], ref_td[:, 1]
-            # ref_td = window(ref_td, win_len=12, shift=0, en_plot=False, slope=0.05)
             ref_fd = do_fft(ref_td)
-            # ref_fd = phase_correction(ref_fd, fit_range=(0.8, 1.6), extrapolate=True, ret_fd=True, en_plot=False)
 
             ref_pos.append(t[np.argmax(y)])
             ref_ampl_arr.append(np.sum(np.abs(ref_fd[f_idx, 1])) / 1)
             phi = np.angle(ref_fd[f_idx, 1])
-            """ ???
-            if i and (abs(ref_angle_arr[-1] - phi) > pi):
-                phi -= 2 * pi
-            """
+
             ref_angle_arr.append(phi)
         ref_angle_arr = np.unwrap(ref_angle_arr)
-        #ref_angle_arr -= np.mean(ref_angle_arr)
-        #ref_ampl_arr -= np.mean(ref_ampl_arr)
 
         random.seed(10)
         rnd_sam = random.choice(self.sams)
@@ -627,31 +632,74 @@ class Image:
         sam_t2 = (sam2.meas_time - t0).total_seconds() / 3600
         amp_interpol2, phi_interpol2 = self._ref_interpolation(sam2, ret_cart=False)
 
-        plt.figure("System stability reference pulse position")
+        plt.figure("Stability ref pulse pos")
         plt.title(f"Reference pulse position")
         plt.plot(meas_times, ref_pos, label=t0)
         plt.xlabel("Measurement time (hour)")
         plt.ylabel("Time (ps)")
 
-        plt.figure("System stability amplitude")
-        plt.title(f"Reference amplitude at {selected_freq_} THz")
+        plt.figure("Stability amplitude")
+        plt.title(f"Amplitude of reference measurement at {selected_freq_} THz")
         plt.plot(meas_times, ref_ampl_arr, label=t0)
-        # plt.plot(sam_t1, amp_interpol1, marker="o", markersize=5, label=f"Interpol (x={position1[0]}, y={position1[1]}) mm")
-        # plt.plot(sam_t2, amp_interpol2, marker="o", markersize=5, label=f"Interpol (x={position2[0]}, y={position2[1]}) mm")
         plt.xlabel("Measurement time (hour)")
         plt.ylabel("Amplitude (Arb. u.)")
 
-        plt.figure("System stability angle")
-        plt.title(f"Reference phase at {selected_freq_} THz")
+        plt.figure("Stability phase")
+        plt.title(f"Phase of reference measurement at {selected_freq_} THz")
         plt.plot(meas_times, ref_angle_arr, label=t0)
-        # plt.plot(sam_t1, phi_interpol1, marker="o", markersize=5, label=f"Interpol (x={position1[0]}, y={position1[1]}) mm")
-        # plt.plot(sam_t2, phi_interpol2, marker="o", markersize=5, label=f"Interpol (x={position2[0]}, y={position2[1]}) mm")
         plt.xlabel("Measurement time (hour)")
         plt.ylabel("Phase (rad)")
 
-    def plot_image(self, img_extent=None):
-        cbar_label = str(self.selected_quantity)
+    def plot_temperature(self, log_file):
+        def read_log_file(log_file_):
+            def read_line(line_):
+                parts = line_.split(" ")
+                t = datetime.strptime(f"{parts[0]} {parts[1]}", '%Y-%m-%d %H:%M:%S')
+                return t, float(parts[4]), float(parts[-3])
 
+            with open(log_file_) as file:
+                meas_time_, temp_, humidity_ = [], [], []
+                for i, line in enumerate(file):
+                    if i % 250:
+                        continue
+                    try:
+                        res = read_line(line)
+                        meas_time_.append(res[0])
+                        temp_.append(res[1])
+                        humidity_.append(res[2])
+                    except IndexError:
+                        continue
+
+            return meas_time_, temp_, humidity_
+
+        meas_time, temp, humidity = read_log_file(log_file)
+
+        t0 = self.refs[0].meas_time
+        meas_time_diff = [(t - t0).total_seconds() / 3600 for t in meas_time]
+
+        stability_figs = ["Stability ref pulse pos", "Stability amplitude", "Stability phase"]
+        for fig_label in stability_figs:
+            if plt.fignum_exists(fig_label):
+                fig = plt.figure(fig_label)
+                ax_list = fig.get_axes()
+                ax1 = ax_list[0]
+                ax1.tick_params(axis="y", colors="blue")
+                ax1.set_ylabel(ax1.get_ylabel(), c="blue")
+                ax1.grid(c="blue")
+
+                ax2 = ax1.twinx()
+                ax2.plot(meas_time_diff, temp, c="red")
+                ax2.set_ylabel("Temperature (°C)", c="red")
+                ax2.tick_params(axis="y", colors="red")
+                ax2.grid(c="red")
+
+        if not plt.fignum_exists(stability_figs[0]):
+            fig, ax1 = plt.subplots(num="Temperature plot")
+            ax1.plot(meas_time_diff, temp, label=f"Start: {t0}")
+            ax1.set_xlabel("Measurement time (hour)")
+            ax1.set_ylabel("Temperature (°C)")
+
+    def plot_image(self, img_extent=None):
         info = self.image_info
         if img_extent is None:
             w0, w1, h0, h1 = [0, info["w"], 0, info["h"]]
@@ -669,9 +717,10 @@ class Image:
         if self.options["log_scale"]:
             grid_vals = np.log10(grid_vals)
 
-        fig = plt.figure(f"{self.name} {self.selected_quantity}")
+        fig_num = " ".join([str(self.sample_name), str(self.selected_quantity)])
+        fig = plt.figure(fig_num)
         ax = fig.add_subplot(111)
-        ax.set_title(f"{self.name}")
+        ax.set_title(f"{self.sample_name}")
         fig.subplots_adjust(left=0.2)
 
         if img_extent is None:
@@ -691,13 +740,13 @@ class Image:
                        float(img_extent[1] + self.image_info["dx"] / 2),
                        float(img_extent[2] - self.image_info["dy"] / 2),
                        float(img_extent[3] + self.image_info["dy"] / 2))
-        img = ax.imshow(grid_vals.transpose((1, 0)),
-                        vmin=cbar_min, vmax=cbar_max,
-                        origin="lower",
-                        cmap=plt.get_cmap(self.options["color_map"]),
-                        extent=axes_extent,
-                        interpolation="hanning"
-                        )
+        img_ = ax.imshow(grid_vals.transpose((1, 0)),
+                         vmin=cbar_min, vmax=cbar_max,
+                         origin="lower",
+                         cmap=plt.get_cmap(self.options["color_map"]),
+                         extent=axes_extent,
+                         interpolation="hanning"
+                         )
         if self.options["invert_x"]:
             ax.invert_xaxis()
         if self.options["invert_y"]:
@@ -705,12 +754,16 @@ class Image:
 
         ax.set_xlabel("x (mm)")
         ax.set_ylabel("y (mm)")
-        """
-        if np.max(grid_vals) > 1000:
-            cbar = fig.colorbar(img, format=ticker.FuncFormatter(fmt))
+
+        en_freq_label = Domain.FrequencyDomain == self.selected_quantity.domain
+        if isinstance(self.selected_freq, tuple):
+            freq_label = f"({self.selected_freq[0]}-{self.selected_freq[1]} THz)"
         else:
-        """
-        cbar = fig.colorbar(img)
+            freq_label = f"({self.selected_freq} THz)"
+
+        cbar_label = " ".join([str(self.selected_quantity), freq_label * en_freq_label])
+
+        cbar = fig.colorbar(img_)
         cbar.set_label(cbar_label, rotation=270, labelpad=30)
 
     def plot_line(self, x=None, y=None):
@@ -718,22 +771,26 @@ class Image:
 
         vals = []
         for i, measurement in enumerate(measurements):
-            print(f"{round(100 * i / len(measurements), 2)} % done. "
-                  f"(Measurement: {i}/{len(measurements)}, {measurement.position} mm)")
+            logging.info(f"{round(100 * i / len(measurements), 2)} % done. "
+                         f"(Measurement: {i}/{len(measurements)}, {measurement.position} mm)")
 
-            vals.append(np.real(self.grid_func(measurement)))
+            vals.append(self.grid_func(measurement))
 
-        label_ = f"Sample {self.sample_idx} ({np.round(self.selected_freq, 3)} THz)"
+        label_ = self.sample_name
 
-        plt.figure("x-slice")
-        plt.plot(coords, vals, label=label_)
-        plt.xlabel("x (mm)")
-        plt.ylabel(str(self.selected_quantity))
+        if y is not None:
+            plt.figure("x-slice")
+            plt.title(f"y={y} mm")
+            plt.plot(coords, vals, label=label_)
+            plt.xlabel("x (mm)")
+            plt.ylabel(str(self.selected_quantity))
 
-        plt.figure("y-slice")
-        plt.plot(coords, vals, label=label_)
-        plt.xlabel("y (mm)")
-        plt.ylabel(str(self.selected_quantity))
+        else:
+            plt.figure("y-slice")
+            plt.title(f"x={x} mm")
+            plt.plot(coords, vals, label=label_)
+            plt.xlabel("y (mm)")
+            plt.ylabel(str(self.selected_quantity))
 
     def knife_edge(self, x=None, y=None, coord_slice=None):
         if not isinstance(self.selected_freq, tuple):
@@ -759,10 +816,10 @@ class Image:
         def _cost(p):
             return np.sum((vals - _model(p)) ** 2)
 
-        # vertical direction / slice
+        # vertical direction
         if x is not None:
             plot_x_label = "y (mm)"
-        else:  # horizontal direction / slice
+        else:  # horizontal direction
             plot_x_label = "x (mm)"
 
         plt.figure("Knife edge")
@@ -770,11 +827,6 @@ class Image:
         plt.ylabel(f"Power (arb. u.) summed over {self.selected_freq[0]}-{self.selected_freq[1]} THz")
 
         p0 = np.array([vals[0], 0.0, 0.5, 34.0])
-        opt_res = minimize(_cost, p0,
-                           options={"iters": 100, "maxiter": np.inf, "maxev": np.inf, "maxfev": 1e3, "disp": False, },
-                           tol=-1)
-        # opt_res = minimize(_cost, p0,)
-
         opt_res = shgo(_cost, bounds=([p0[0] - 1, p0[0] + 1],
                                       [p0[1], p0[1] + 0.01],
                                       [p0[2] - 0.4, p0[2] + 2.0],
@@ -794,9 +846,11 @@ class Image:
 
 
 if __name__ == '__main__':
-    # img = Image(r"/home/ftpuser/ftp/Data/HHI_Aachen/remeasure_02_09_2024/sample3/img3")
-    img = Image(r"E:\measurementdata\HHI_Aachen\remeasure_02_09_2024\sample4\img1")
-    img.select_quantity(QuantityEnum.Power)
-    img.plot_image()
+    logging.basicConfig(level=logging.INFO)
+    options = {}
+    img = Image(r"/home/ftpuser/ftp/Data/HHI_Aachen/remeasure_02_09_2024/sample3/img3", options)
+    # img = Image(r"E:\measurementdata\HHI_Aachen\remeasure_02_09_2024\sample4\img1")
+    # img.select_quantity()
+    # img.plot_image()
 
-    plt_show()
+    plt_show(en_save=False)
