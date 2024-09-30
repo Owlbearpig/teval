@@ -14,14 +14,9 @@ from teval.consts import c_thz, plot_range1, plot_range2
 from scipy.optimize import shgo
 from scipy.special import erfc
 from enum import Enum
-from measurements import Measurement
+from measurements import Measurement, Domain
 import logging
 from datetime import datetime
-
-
-class Domain(Enum):
-    TimeDomain = 0
-    FrequencyDomain = 1
 
 
 class Quantity:
@@ -303,7 +298,7 @@ class Image:
         freq_range_ = self.selected_freq
         freq_slice = (freq_range_[0] < self.freq_axis) * (self.freq_axis < freq_range_[1])
 
-        _, ref_fd = self.get_ref_data(point=meas_.position, both=True)
+        ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.FrequencyDomain)
         sam_fd = meas_.get_data_fd()
 
         power_val_sam = np.sum(np.abs(sam_fd[freq_slice, 1])) / np.sum(freq_slice)
@@ -340,7 +335,7 @@ class Image:
         return len(peaks_idx)
 
     def _amplitude_transmission(self, measurement_):
-        ref_td, ref_fd = self.get_ref_data(point=measurement_.position, both=True)
+        ref_td, ref_fd = self.get_ref_data(point=measurement_.position, domain=Domain.Both)
         freq_idx = f_axis_idx_map(ref_fd[:, 0].real, self.selected_freq)
 
         sam_fd = measurement_.get_data_fd()
@@ -442,36 +437,43 @@ class Image:
 
         return closest_ref
 
-    def get_ref_data(self, both=False, normalize=False, sub_offset=False, point=None):
+    def get_ref_data(self, domain=Domain.TimeDomain, point=None):
         if point is not None:
-            closest_sam = self.get_measurement(*point, meas_type=MeasurementType.SAM.value)
-
+            closest_sam = self.get_measurement(*point)
             chosen_ref = self.find_nearest_ref(closest_sam)
         else:
             chosen_ref = self.refs[-1]
 
         ref_td = chosen_ref.get_data_td()
+        ref_fd = do_fft(ref_td)
 
-        if sub_offset:
-            ref_td[:, 1] -= (np.mean(ref_td[:10, 1]) + np.mean(ref_td[-10:, 1])) * 0.5
-
-        if normalize:
-            ref_td[:, 1] *= 1 / np.max(ref_td[:, 1])
-
-        if both:
-            ref_fd = do_fft(ref_td)
-            return ref_td, ref_fd
-        else:
+        if domain == Domain.TimeDomain:
             return ref_td
+        elif domain == Domain.FrequencyDomain:
+            return ref_fd
+        else:
+            return ref_td, ref_fd
+
+    def get_measurement_pair(self, point, domain=Domain.TimeDomain):
+        sam_meas = self.get_measurement(*point)
+        ref_meas = self.find_nearest_ref(sam_meas)
+
+        sam_td, sam_fd = sam_meas.get_data_both_domains()
+        ref_td, ref_fd = ref_meas.get_data_both_domains()
+
+        if domain == Domain.TimeDomain:
+            return ref_td, sam_td
+        elif domain == Domain.FrequencyDomain:
+            return ref_fd, sam_fd
+        else:
+            return ref_td, sam_td, ref_fd, sam_fd
 
     def evaluate_point(self, point, d, plot_label=None, en_plot=False):
         """
         evaluate and plot n, alpha and absorbance
 
         """
-        sam_meas = self.get_measurement(*point)
-        sam_td, sam_fd = sam_meas.get_data_both_domains()
-        ref_td, ref_fd = self.get_ref_data(point=point, both=True)
+        ref_fd, sam_fd = self.get_measurement_pair(point, domain=Domain.FrequencyDomain)
 
         omega = 2 * np.pi * ref_fd[:, 0].real
 
@@ -548,7 +550,7 @@ class Image:
             sam_meas = self.get_measurement(*point)
         sam_td = sam_meas.get_data_td()
 
-        ref_td = self.get_ref_data(sub_offset=False, point=point)
+        ref_td = self.get_ref_data(point=point)
 
         if self.options["en_window"]:
             sam_td = window(sam_td, win_len=25, shift=0, en_plot=False, slope=0.05)

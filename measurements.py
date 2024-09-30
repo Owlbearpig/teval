@@ -9,6 +9,12 @@ from teval.functions import window
 from enum import Enum
 
 
+class Domain(Enum):
+    TimeDomain = 0
+    FrequencyDomain = 1
+    Both = 2
+
+
 class MeasurementType(Enum):
     REF = 1
     SAM = 2
