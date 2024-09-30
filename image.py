@@ -3,7 +3,6 @@ import random
 from functools import partial
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-from teval.consts import plot_range1, plot_range, c_thz, plot_range2, c0
 from numpy import array
 from pathlib import Path
 import numpy as np
@@ -11,8 +10,8 @@ from teval.functions import unwrap, plt_show
 from teval.measurements import get_all_measurements, MeasurementType
 from teval.mpl_settings import mpl_style_params
 from teval.functions import phase_correction, window, do_fft, f_axis_idx_map
-from teval.consts import c_thz, THz, plot_range1
-from scipy.optimize import shgo, minimize
+from teval.consts import c_thz, plot_range1, plot_range2
+from scipy.optimize import shgo
 from scipy.special import erfc
 from enum import Enum
 from measurements import Measurement
@@ -443,7 +442,7 @@ class Image:
 
         return closest_ref
 
-    def get_ref_data(self, both=False, normalize=False, sub_offset=False, point=None, ret_meas=False):
+    def get_ref_data(self, both=False, normalize=False, sub_offset=False, point=None):
         if point is not None:
             closest_sam = self.get_measurement(*point, meas_type=MeasurementType.SAM.value)
 
@@ -459,16 +458,13 @@ class Image:
         if normalize:
             ref_td[:, 1] *= 1 / np.max(ref_td[:, 1])
 
-        if ret_meas:
-            return chosen_ref
-
         if both:
             ref_fd = do_fft(ref_td)
             return ref_td, ref_fd
         else:
             return ref_td
 
-    def evaluate_point(self, point, d, label=None, en_plot=False):
+    def evaluate_point(self, point, d, plot_label=None, en_plot=False):
         """
         evaluate and plot n, alpha and absorbance
 
@@ -485,22 +481,27 @@ class Image:
         phi = phi_sam[:, 1] - phi_ref[:, 1]
 
         n = 1 + phi * c_thz / (omega * d)
+        kap = -c_thz * np.log(np.abs(sam_fd[:, 1] / ref_fd[:, 1]) * (1 + n) ** 2 / (4 * n)) / (omega * d)
 
-        alpha = (1 / 1e-4) * (-2 / d) * np.log(np.abs(sam_fd[:, 1] / ref_fd[:, 1]) * (n + 1) ** 2 / (4 * n))
+        # 1/cm
+        alph = (1 / 1e-4) * (-2 / d) * np.log(np.abs(sam_fd[:, 1] / ref_fd[:, 1]) * (n + 1) ** 2 / (4 * n))
 
         if en_plot:
             freq = ref_fd[:, 0].real
             plt.figure("Refractive index")
-            plt.plot(freq[plot_range2], n[plot_range2], label=label)
+            plt.plot(freq[plot_range2], n[plot_range2], label=plot_label + " (Real)")
+            plt.plot(freq[plot_range2], kap[plot_range2], label=plot_label + " (Imag)")
             plt.xlabel("Frequency (THz)")
             plt.ylabel("Refractive index")
 
             plt.figure("Absorption coefficient")
-            plt.plot(freq[plot_range2], alpha[plot_range2], label=label)
+            plt.plot(freq[plot_range2], alph[plot_range2], label=plot_label)
             plt.xlabel("Frequency (THz)")
             plt.ylabel("Absorption coefficient (1/cm)")
 
-        return array([ref_fd[:, 0].real, n]).T, array([ref_fd[:, 0].real, alpha]).T
+        res = {"n": array([ref_fd[:, 0].real, n + 1j*kap]).T, "a": array([ref_fd[:, 0].real, alph]).T}
+
+        return res
 
     def _ref_interpolation(self, sam_meas, ret_cart=False):
         sam_meas_time = sam_meas.meas_time
@@ -539,8 +540,12 @@ class Image:
         else:
             return amp_interpol, phi_interpol
 
-    def plot_point(self, point, sub_noise_floor=False, label="", td_scale=1):
-        sam_meas = self.get_measurement(*point)
+    def plot_point(self, point=None, sub_noise_floor=False, label="", td_scale=1):
+        if point is None:
+            sam_meas = self.sams[0]
+            point = sam_meas.position
+        else:
+            sam_meas = self.get_measurement(*point)
         sam_td = sam_meas.get_data_td()
 
         ref_td = self.get_ref_data(sub_offset=False, point=point)
@@ -857,9 +862,13 @@ class Image:
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     options = {}
-    img = Image(r"/home/ftpuser/ftp/Data/HHI_Aachen/remeasure_02_09_2024/sample3/img3", options)
+    # img = Image(r"/home/ftpuser/ftp/Data/HHI_Aachen/remeasure_02_09_2024/sample3/img3", options)
+    img = Image(r"/home/ftpuser/ftp/Data/SemiconductorSamples/Wafer_25_and_wafer_19073", options)
     # img = Image(r"E:\measurementdata\HHI_Aachen\remeasure_02_09_2024\sample4\img1")
     # img.select_quantity()
     # img.plot_image()
+    img.plot_point()
+    img.selected_freq = 0.5
+    img.plot_system_stability()
 
     plt_show(en_save=False)

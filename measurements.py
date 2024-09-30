@@ -1,8 +1,10 @@
+import logging
+import re
 import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime
 from teval.consts import data_dir
-from numpy.fft import fft, fftfreq
+from numpy.fft import fft, fftfreq, rfft, rfftfreq
 from teval.functions import window
 from enum import Enum
 
@@ -35,6 +37,18 @@ class Measurement:
     def __repr__(self):
         return str(self.filepath)
 
+    def _extract_position(self):
+        fp_stem = str(self.filepath.stem)
+
+        matches = re.findall(r"(-?\d+\.\d+|-?\d+) mm", fp_stem)
+        positions = [0.0 if np.isclose(float(val), 0) else float(val) for val in matches]
+
+        l_diff = 2 - len(positions)
+        if l_diff > 0:
+            positions.extend(l_diff * [0.0])
+
+        return positions
+
     def _set_metadata(self, meas_type=None):
         if meas_type is not None:
             self.meas_type = meas_type
@@ -60,15 +74,7 @@ class Measurement:
             self.meas_type = MeasurementType(3)
 
         # set position
-        str_splits = str(self.filepath).split("_")
-        x = float(str_splits[-2].split(" mm")[0])
-        y = float(str_splits[-1].split(" mm")[0])
-        if np.isclose(x, 0):
-            x = 0.0
-        if np.isclose(y, 0):
-            y = 0.0
-
-        self.position = [x, y]
+        self.position = self._extract_position()
 
     def do_preprocess(self, force=False):
         if self.pre_process_done and not force:
@@ -92,7 +98,7 @@ class Measurement:
 
         return self._data_td
 
-    def get_data_fd(self, pos_freqs_only=True, reversed_time=True):
+    def get_data_fd(self, reversed_time=True):
         if self._data_fd is not None:
             return self._data_fd
 
@@ -103,13 +109,9 @@ class Measurement:
             y = np.flip(y)
 
         dt = float(np.mean(np.diff(t)))
-        freqs, data_fd = fftfreq(n=len(t), d=dt), fft(y)
+        freqs, data_fd = rfftfreq(n=len(t), d=dt), rfft(y)
 
-        if pos_freqs_only:
-            pos_slice = freqs >= 0
-            self._data_fd = np.array([freqs[pos_slice], data_fd[pos_slice]]).T
-        else:
-            self._data_fd = np.array([freqs, data_fd]).T
+        self._data_fd = np.array([freqs, data_fd]).T
 
         return self._data_fd
 
@@ -125,12 +127,16 @@ def get_all_measurements(post_process=None, data_dir_=None):
     else:
         glob = data_dir.glob("**/*.txt")
 
-    for file_path in glob:
+    file_list = list(glob)
+
+    for i, file_path in enumerate(file_list):
         if file_path.is_file():
             try:
                 measurements.append(Measurement(filepath=file_path, post_process_config=post_process))
-            except ValueError:
-                print(f"Skipping, not a measurement: {file_path}")
+            except Exception as err:
+                if i == len(file_list) - 1:
+                    raise err
+                logging.info(f"Skipping {file_path}. {err}")
 
     return measurements
 
