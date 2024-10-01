@@ -79,35 +79,6 @@ class Measurement:
         # set identifier
         self.identifier = int((self.meas_time-datetime.min).total_seconds() * 1e6)
 
-    def apply_window(self, window_config=None, in_place=True):
-        if self._data_td is None:
-            self.get_data_td()
-
-        if window_config is None:
-            window_config = {}
-
-        if in_place:
-            self._data_td = window(self._data_td, **window_config)
-            self.window_applied = True
-        else:
-            self_copy = deepcopy(self)
-            self_copy.apply_window(window_config)
-            self_copy.window_applied = True
-            return self_copy
-
-    def remove_offset(self, in_place=True):
-        if self._data_td is None:
-            self.get_data_td()
-
-        if in_place:
-            self._data_td[:, 1] -= np.mean(self._data_td[:, 1])
-            self.offset_corrected = True
-        else:
-            self_copy = deepcopy(self)
-            self_copy.remove_offset()
-            self_copy.offset_corrected = True
-            return self_copy
-
     def get_data_td(self):
         if self._data_td is None:
             self._data_td = np.loadtxt(self.filepath)
@@ -130,9 +101,6 @@ class Measurement:
         self._data_fd = np.array([freqs, data_fd]).T
 
         return self._data_fd
-
-    def get_data_both_domains(self):
-        return self.get_data_td(), self.get_data_fd()
 
 
 def select_measurements(measurements, keywords, case_sensitive=True, match_exact=False):

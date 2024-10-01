@@ -6,7 +6,7 @@ import matplotlib as mpl
 from numpy import array
 from pathlib import Path
 import numpy as np
-from teval.functions import unwrap, plt_show
+from teval.functions import unwrap, plt_show, remove_offset, window
 from teval.measurements import MeasurementType, Measurement, Domain
 from teval.mpl_settings import mpl_style_params
 from teval.functions import phase_correction, do_fft, f_axis_idx_map
@@ -275,15 +275,15 @@ class Image:
             data_td = np.load(str(self.cache_path / "_td_cache.npy"))
             data_fd = np.load(str(self.cache_path / "_fd_cache.npy"))
         except FileNotFoundError:
-            all_meas = self.all_measurements()
+            measurements = self.all_measurements()
 
-            y_td, y_fd = all_meas[0].get_data_td(), all_meas[0].get_data_fd()
-            data_td = np.zeros((len(all_meas), *y_td.shape), dtype=y_td.dtype)
-            data_fd = np.zeros((len(all_meas), *y_fd.shape), dtype=y_fd.dtype)
+            y_td, y_fd = measurements[0].get_data_td(), measurements[0].get_data_fd()
+            data_td = np.zeros((len(measurements), *y_td.shape), dtype=y_td.dtype)
+            data_fd = np.zeros((len(measurements), *y_fd.shape), dtype=y_fd.dtype)
 
-            for i, meas in enumerate(all_meas):
+            for i, meas in enumerate(measurements):
                 if i % 100 == 0:
-                    logging.info(f"Reading files. {round(100 * i / len(all_meas), 2)} %")
+                    logging.info(f"Reading files. {round(100 * i / len(measurements), 2)} %")
                 idx = self.dataset_info["id_map"][meas.identifier]
                 data_td[idx], data_fd[idx] = meas.get_data_td(), meas.get_data_fd()
 
@@ -390,14 +390,6 @@ class Image:
             return measurements
         else:
             return sorted(measurements, key=sort_key)
-
-    def window_all(self):
-        for meas in self.all_measurements():
-            meas.apply_window(self.options["window_config"])
-
-    def remove_offset_all(self):
-        for meas in self.all_measurements():
-            meas.remove_offset()
 
     def select_quantity(self, quantity, label=""):
         if isinstance(quantity, Quantity):
@@ -509,13 +501,15 @@ class Image:
 
         ref_meas, sam_meas = self.get_ref_sam_meas(point)
 
-        ref_meas = ref_meas.remove_offset(in_place=False)
-        sam_meas = sam_meas.remove_offset(in_place=False)
+        ref_td, sam_td = ref_meas.get_data_td(), sam_meas.get_data_td()
 
-        ref_meas = ref_meas.apply_window(self.options["window_config"], in_place=False)
-        sam_meas = sam_meas.apply_window(self.options["window_config"], in_place=False)
+        ref_td = remove_offset(ref_td)
+        sam_td = remove_offset(sam_td)
 
-        ref_fd, sam_fd = ref_meas.get_data_fd(), sam_meas.get_data_fd()
+        ref_td = window(ref_td, **self.options["window_config"])
+        sam_td = window(sam_td, **self.options["window_config"])
+
+        ref_fd, sam_fd = do_fft(ref_td), do_fft(sam_td)
 
         freq_axis = ref_fd[:, 0].real
         omega = 2 * np.pi * freq_axis
@@ -599,7 +593,7 @@ class Image:
         sub_noise_floor = kwargs["sub_noise_floor"]
         td_scale = kwargs["td_scale"]
         apply_window = kwargs["apply_window"]
-        remove_offset = kwargs["remove_offset"]
+        remove_offset_ = kwargs["remove_offset"]
 
         if point is None:
             sam_meas = self.sams[0]
@@ -608,16 +602,16 @@ class Image:
             sam_meas = self.get_measurement(*point)
         ref_meas = self.find_nearest_ref(sam_meas)
 
-        if remove_offset:
-            ref_meas = ref_meas.remove_offset()
-            sam_meas = sam_meas.remove_offset()
+        ref_td = self.get_meas_data(ref_meas)
+        sam_td = self.get_meas_data(sam_meas)
+
+        if remove_offset_:
+            ref_td = remove_offset(ref_td)
+            sam_td = remove_offset(sam_td)
 
         if apply_window:
-            ref_meas = ref_meas.apply_window(self.options["window_config"])
-            sam_meas = sam_meas.apply_window(self.options["window_config"])
-
-        ref_td = ref_meas.get_data_td()
-        sam_td = sam_meas.get_data_td()
+            ref_td = window(ref_td, **self.options["window_config"])
+            sam_td = window(sam_td, **self.options["window_config"])
 
         ref_fd, sam_fd = do_fft(ref_td), do_fft(sam_td)
         freq_axis = ref_fd[:, 0].real

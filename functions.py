@@ -80,7 +80,10 @@ def phase_correction(data_fd, disable=False, fit_range=None, en_plot=False, extr
     else:
         return array([freqs, phase_corrected]).T
 
+def remove_offset(data_td):
+    data_td[:, 1] -= np.mean(data_td[:10, 1])
 
+    return data_td
 
 def zero_pad(data_td, length=100):
     t, y = data_td[:, 0], data_td[:, 1]
