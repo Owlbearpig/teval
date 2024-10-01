@@ -1,9 +1,9 @@
 import logging
 import re
 import matplotlib.pyplot as plt
+from copy import deepcopy
 import numpy as np
 from datetime import datetime
-from teval.consts import data_dir
 from numpy.fft import fft, fftfreq, rfft, rfftfreq
 from teval.functions import window
 from enum import Enum
@@ -23,22 +23,20 @@ class MeasurementType(Enum):
 
 class Measurement:
     filepath = None
+    meas_time = None
+    meas_type = None
+    sample_name = None
+    position = (None, None)
+    window_applied = False
+    offset_corrected = False
+    identifier = None
 
-    def __init__(self, data_td=None, meas_type=None, filepath=None, post_process_config=None):
+    def __init__(self, filepath=None):
         self.filepath = filepath
-        self.meas_time = None
-        self.meas_type = None
-        self.sample_name = None
-        self.position = [None, None]
 
-        if post_process_config is None:
-            from .consts import post_process_config
+        self._data_fd, self._data_td = None, None
 
-        self.post_process_config = post_process_config
-        self._data_fd, self._data_td = None, data_td
-        self.pre_process_done = False
-
-        self._set_metadata(meas_type)
+        self._set_metadata()
 
     def __repr__(self):
         return str(self.filepath)
@@ -55,11 +53,7 @@ class Measurement:
 
         return positions
 
-    def _set_metadata(self, meas_type=None):
-        if meas_type is not None:
-            self.meas_type = meas_type
-            return
-
+    def _set_metadata(self):
         # set time
         date_string = str(self.filepath.stem)[:25]
         self.meas_time = datetime.strptime(date_string, "%Y-%m-%dT%H-%M-%S.%f")
@@ -82,25 +76,41 @@ class Measurement:
         # set position
         self.position = self._extract_position()
 
-    def do_preprocess(self, force=False):
-        if self.pre_process_done and not force:
-            return
+        # set identifier
+        self.identifier = int((self.meas_time-datetime.min).total_seconds() * 1e6)
 
-        if self.post_process_config["sub_offset"]:
-            self._data_td[:, 1] -= np.mean(self._data_td[:10, 1])
-        if self.post_process_config["en_windowing"]:
-            self._data_td = window(self._data_td)
+    def apply_window(self, window_config=None, in_place=True):
+        if self._data_td is None:
+            self.get_data_td()
 
-        self.pre_process_done = True
+        if window_config is None:
+            window_config = {}
 
-    def get_data_td(self, get_raw=False):
-        if get_raw:
-            return np.loadtxt(self.filepath)
+        if in_place:
+            self._data_td = window(self._data_td, **window_config)
+            self.window_applied = True
+        else:
+            self_copy = deepcopy(self)
+            self_copy.apply_window(window_config)
+            self_copy.window_applied = True
+            return self_copy
 
+    def remove_offset(self, in_place=True):
+        if self._data_td is None:
+            self.get_data_td()
+
+        if in_place:
+            self._data_td[:, 1] -= np.mean(self._data_td[:, 1])
+            self.offset_corrected = True
+        else:
+            self_copy = deepcopy(self)
+            self_copy.remove_offset()
+            self_copy.offset_corrected = True
+            return self_copy
+
+    def get_data_td(self):
         if self._data_td is None:
             self._data_td = np.loadtxt(self.filepath)
-
-        self.do_preprocess()
 
         return self._data_td
 
@@ -125,43 +135,7 @@ class Measurement:
         return self.get_data_td(), self.get_data_fd()
 
 
-def get_all_measurements(post_process=None, data_dir_=None):
-    measurements = []
-
-    if data_dir_ is not None:
-        glob = data_dir_.glob("**/*.txt")
-    else:
-        glob = data_dir.glob("**/*.txt")
-
-    file_list = list(glob)
-
-    for i, file_path in enumerate(file_list):
-        if file_path.is_file():
-            try:
-                measurements.append(Measurement(filepath=file_path, post_process_config=post_process))
-            except Exception as err:
-                if i == len(file_list) - 1:
-                    raise err
-                logging.info(f"Skipping {file_path}. {err}")
-
-    return measurements
-
-
-def avg_data(measurements):
-    data_0 = measurements[0].get_data_td()
-    t = data_0[:, 0]
-
-    y_arrays = []
-    for measurement in measurements:
-        data_td = measurement.get_data_td()
-        y_arrays.append(data_td[:, 1])
-
-    return np.array([t, np.mean(y_arrays, axis=0)]).T
-
-
-def select_measurements(keywords, case_sensitive=True, post_process=None, match_exact=False):
-    measurements = get_all_measurements(post_process=post_process)
-
+def select_measurements(measurements, keywords, case_sensitive=True, match_exact=False):
     if not case_sensitive:
         keywords = [keyword.lower() for keyword in keywords]
 
@@ -195,15 +169,3 @@ def select_measurements(keywords, case_sensitive=True, post_process=None, match_
     refs = [x for x in selected if x.meas_type == "ref"]
 
     return refs, sams
-
-
-def get_avg_measurement(keywords=("GaAs", "Wafer", "25", "2021_08_24"), pp_config=None):
-    if pp_config is None:
-        pp_config = {"sub_offset": True, "en_windowing": True}
-
-    refs, sams = select_measurements(keywords)
-
-    avg_ref = Measurement(data_td=avg_data(refs), meas_type="ref", post_process_config=pp_config)
-    avg_sam = Measurement(data_td=avg_data(sams), meas_type="sam", post_process_config=pp_config)
-
-    return avg_ref, avg_sam
