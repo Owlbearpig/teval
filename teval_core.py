@@ -1,3 +1,3 @@
-from .image import *
+from .dataset import *
 from .measurements import *
 
