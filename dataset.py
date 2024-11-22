@@ -1,4 +1,5 @@
 import itertools
+import os
 import random
 from functools import partial
 import matplotlib.pyplot as plt
@@ -17,6 +18,9 @@ from enum import Enum
 import logging
 from datetime import datetime
 
+class ClimateQuantity(Enum):
+    Temperature = 0
+    Humidity = 1
 
 class Quantity:
     func = None
@@ -161,8 +165,9 @@ class DataSet:
         logging.info(f"First measurement at: {first_measurement.meas_time}, "
                      f"last measurement: {last_measurement.meas_time}")
         time_del = last_measurement.meas_time - first_measurement.meas_time
-        td_secs = time_del.seconds
-        tot_hours, min_part = time_del.seconds // 3600, (td_secs // 60) % 60
+        td_secs = time_del.seconds + 24 * 3600 * time_del.days
+        tot_hours = td_secs // 3600
+        min_part = (td_secs // 60) % 60
         sec_part = time_del.seconds % 60
 
         logging.info(f"Total measurement time: {tot_hours} hours, "
@@ -279,15 +284,21 @@ class DataSet:
         self.cache_path = Path(self.data_path / "_cache")
         self.cache_path.mkdir(parents=True, exist_ok=True)
 
+        measurements = self.measurements["all"]
+        y_td, y_fd = measurements[0].get_data_td(), measurements[0].get_data_fd()
+        td_cache_shape = (len(measurements), *y_td.shape)
+        fd_cache_shape = (len(measurements), *y_fd.shape)
+
         try:
             data_td = np.load(str(self.cache_path / "_td_cache.npy"))
             data_fd = np.load(str(self.cache_path / "_fd_cache.npy"))
+            shape_match = (data_td.shape == td_cache_shape) * (data_fd.shape == fd_cache_shape)
+            if not shape_match:
+                logging.error("Data <-> cache shape mismatch. Rebuilding cache.")
+                raise FileNotFoundError
         except FileNotFoundError:
-            measurements = self.measurements["all"]
-
-            y_td, y_fd = measurements[0].get_data_td(), measurements[0].get_data_fd()
-            data_td = np.zeros((len(measurements), *y_td.shape), dtype=y_td.dtype)
-            data_fd = np.zeros((len(measurements), *y_fd.shape), dtype=y_fd.dtype)
+            data_td = np.zeros(td_cache_shape, dtype=y_td.dtype)
+            data_fd = np.zeros(fd_cache_shape, dtype=y_fd.dtype)
 
             for i, meas in enumerate(measurements):
                 if i % 100 == 0:
@@ -711,9 +722,21 @@ class DataSet:
 
         ref_angle_arr = np.unwrap(ref_angle_arr)
 
-        ref_zero_crossing = (ref_zero_crossing - np.mean(ref_zero_crossing)) * 1000
+        ref_zero_crossing = (ref_zero_crossing - ref_zero_crossing[0]) * 1000
+
+        # correction
+        # ref_angle_arr -= 2*np.pi*self.freq_axis[f_idx]*(ref_zero_crossing/1000)
+
         max_diff = np.max(np.diff(ref_zero_crossing))
-        logging.info(f"Largest jump: {max_diff} fs")
+        logging.info(f"Largest jump: {np.round(max_diff, 2)} fs")
+        plt.figure("fft")
+        phi_fft = np.fft.rfft(ref_angle_arr)
+        dt = np.mean(np.diff(meas_times))
+        phi_fft_f = np.fft.rfftfreq(len(ref_angle_arr), d=dt*3600)
+
+        plt.plot(phi_fft_f[1:], np.abs(phi_fft)[1:])
+        plt.xlabel("Frequency (1/hour)")
+        plt.ylabel("Magnitude")
 
         if meas_times.max() < 5/60:
             meas_times *= 3600
@@ -742,7 +765,7 @@ class DataSet:
         plt.xlabel(f"Measurement time ({mt_unit})")
         plt.ylabel("Phase (rad)")
 
-    def plot_temperature(self, log_file):
+    def plot_climate(self, log_file, quantity=ClimateQuantity.Temperature):
         def read_log_file(log_file_):
             def read_line(line_):
                 parts = line_.split(" ")
@@ -753,7 +776,7 @@ class DataSet:
                 meas_time_, temp_, humidity_ = [], [], []
                 for i, line in enumerate(file):
                     if i % 250:
-                        continue
+                        pass
                     try:
                         res = read_line(line)
                         meas_time_.append(res[0])
@@ -773,6 +796,13 @@ class DataSet:
 
         meas_time_diff = [(t - t0).total_seconds() / 3600 for t in meas_time]
 
+        if quantity == ClimateQuantity.Temperature:
+            quant = temp
+            y_label = "Temperature (°C)"
+        else:
+            quant = humidity
+            y_label = "Humidity (\%)"
+
         stability_figs = ["Stability ref pulse pos", "Stability amplitude", "Stability phase"]
         for fig_label in stability_figs:
             if plt.fignum_exists(fig_label):
@@ -784,16 +814,16 @@ class DataSet:
                 ax1.grid(c="blue")
 
                 ax2 = ax1.twinx()
-                ax2.plot(meas_time_diff, temp, c="red")
-                ax2.set_ylabel("Temperature (°C)", c="red")
+                ax2.scatter(meas_time_diff, quant, c="red")
+                ax2.set_ylabel(y_label, c="red")
                 ax2.tick_params(axis="y", colors="red")
-                ax2.grid(c="red")
+                # ax2.grid(c="red")
 
         if not plt.fignum_exists(stability_figs[0]):
-            fig, ax1 = plt.subplots(num="Temperature plot")
-            ax1.plot(meas_time_diff, temp, label=f"Start: {t0}")
+            fig, ax1 = plt.subplots(num="Climate plot")
+            ax1.scatter(meas_time_diff, quant, label=f"Start: {t0}")
             ax1.set_xlabel("Measurement time (hour)")
-            ax1.set_ylabel("Temperature (°C)")
+            ax1.set_ylabel(y_label)
 
     def plot_image(self, img_extent=None):
         info = self.grid_info
@@ -946,7 +976,7 @@ if __name__ == '__main__':
 
     logging.basicConfig(level=logging.INFO)
     # dataset = DataSet(r"/home/ftpuser/ftp/Data/Stability/30102024/air/100 ps reduced")
-    dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT/s1_new_area/Image1_25_07_2023_")
+    dataset = DataSet(r"/home/ftpuser/ftp/Data/Stability/30102024/test") # 100 ps 4 strong fluctuations,
     # img = DataSet(r"/home/ftpuser/ftp/Data/SemiconductorSamples/Wafer_25_and_wafer_19073", options)
     # img = DataSet(r"E:\measurementdata\HHI_Aachen\remeasure_02_09_2024\sample4\img1")
 
@@ -958,7 +988,8 @@ if __name__ == '__main__':
     # img.window_all()
     # img.plot_point()
     # img.evaluate_point(point, 1000, en_plot=True)
-    dataset.selected_freq = 1.0
+    dataset.selected_freq = 2.0
     dataset.plot_system_stability()
+    dataset.plot_climate(r"/home/ftpuser/ftp/Data/Stability/2024-11-20 17-27-58_log.txt", quantity=ClimateQuantity.Humidity)
 
     plt_show(en_save=False)
