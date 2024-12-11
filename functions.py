@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import pearsonr
 from numpy import array, nan_to_num, zeros, pi
-from .consts import c0, THz
+from consts import c0, THz
 from numpy.fft import irfft, rfft, rfftfreq
 from scipy import signal
 
@@ -330,6 +330,91 @@ def remove_spikes(arr):
             arr[i + 1] = (arr[i] + arr[i + 2]) / 2
 
     return arr
+
+
+def smooth(x, window_len=11, window='hanning'):
+    """smooth the data using a window with requested size.
+
+    This method is based on the convolution of a scaled window with the signal.
+    The signal is prepared by introducing reflected copies of the signal
+    (with the window size) in both ends so that transient parts are minimized
+    in the begining and end part of the output signal.
+
+    input:
+        x: the input signal
+        window_len: the dimension of the smoothing window; should be an odd integer
+        window: the type of window from 'flat', 'hanning', 'hamming', 'bartlett', 'blackman'
+            flat window will produce a moving average smoothing.
+
+    output:
+        the smoothed signal
+
+    example:
+
+    t=linspace(-2,2,0.1)
+    x=sin(t)+randn(len(t))*0.1
+    y=smooth(x)
+
+    see also:
+
+    numpy.hanning, numpy.hamming, numpy.bartlett, numpy.blackman, numpy.convolve
+    scipy.signal.lfilter
+
+    TODO: the window parameter could be the window itself if an array instead of a string
+    NOTE: length(output) != length(input), to correct this: return y[(window_len/2-1):-(window_len/2)] instead of just y.
+    Output array is shifted by window_len
+    """
+
+    if x.ndim != 1:
+        raise ValueError("smooth only accepts 1 dimension arrays.")
+
+    if x.size < window_len:
+        raise ValueError("Input vector needs to be bigger than window size.")
+
+    if window_len < 3:
+        return x
+
+    if not window in ['flat', 'hanning', 'hamming', 'bartlett', 'blackman']:
+        raise ValueError("Window is on of 'flat', 'hanning', 'hamming', 'bartlett', 'blackman'")
+
+    s = np.r_[x[window_len - 1:0:-1], x, x[-2:-window_len - 1:-1]]
+    # print(len(s))
+    if window == 'flat':  # moving average
+        w = np.ones(window_len, 'd')
+    else:
+        w = eval('np.' + window + '(window_len)')
+
+    y = np.convolve(w / w.sum(), s, mode='valid')
+
+    return y
+
+def local_minima_1d(arr, en_plot=True):
+    win_len = 25
+    smooth_arr = smooth(arr, win_len)
+
+    minima_idx_smooth = []
+    for i in range(10, len(smooth_arr) - 10):
+        prev_is_down_slope = all(np.diff(smooth_arr[i - 10:i]) < 0)
+        next_is_up_slope = all(np.diff(smooth_arr[i:i+10]) > 0)
+        if smooth_arr[i - 1] > smooth_arr[i] < smooth_arr[i + 1]:
+            if prev_is_down_slope and next_is_up_slope:
+                minima_idx_smooth.append(i)
+
+    minima_idx = np.array(minima_idx_smooth, dtype=int) - win_len // 2
+    mean_period, std_period = np.mean(np.diff(minima_idx)), np.std(np.diff(minima_idx))
+
+    if en_plot:
+        plt.figure("local minima - smoothed")
+        plt.plot(smooth_arr)
+        x = np.arange(len(smooth_arr))
+        plt.scatter(x[minima_idx_smooth], smooth_arr[minima_idx_smooth], c="red", s=15)
+
+        plt.figure("local minima - original")
+        plt.plot(arr)
+        x = np.arange(len(arr))
+        plt.scatter(x[minima_idx], arr[np.array(minima_idx)], c="red", s=15)
+
+    return minima_idx, mean_period, std_period
 
 
 def save_fig(fig_num_, mpl=None, save_dir=None, filename=None, **kwargs):

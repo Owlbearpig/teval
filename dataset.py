@@ -7,7 +7,7 @@ import matplotlib as mpl
 from numpy import array
 from pathlib import Path
 import numpy as np
-from teval.functions import unwrap, plt_show, remove_offset, window
+from teval.functions import unwrap, plt_show, remove_offset, window, local_minima_1d
 from teval.measurements import MeasurementType, Measurement, Domain
 from teval.mpl_settings import mpl_style_params
 from teval.functions import phase_correction, do_fft, f_axis_idx_map
@@ -720,7 +720,11 @@ class DataSet:
             ref_ampl_arr[i] = np.sum(np.abs(ref_fd[f_idx, 1]))
             ref_angle_arr[i] = np.angle(ref_fd[f_idx, 1])
 
+        meas_interval = np.mean(np.diff(meas_times))
         ref_angle_arr = np.unwrap(ref_angle_arr)
+
+        minima = local_minima_1d(ref_angle_arr, en_plot=False)
+        period, period_std = minima[1] * meas_interval * 60, minima[2] * meas_interval * 60
 
         ref_zero_crossing = (ref_zero_crossing - ref_zero_crossing[0]) * 1000
 
@@ -729,10 +733,15 @@ class DataSet:
 
         max_diff = np.max(np.diff(ref_zero_crossing))
         logging.info(f"Largest jump: {np.round(max_diff, 2)} fs")
+        max_diff = np.max(np.diff(ref_angle_arr))
+        logging.info(f"Largest phase jump: {np.round(max_diff, 2)} rad")
+        logging.info(f"Measurement interval: {np.round(meas_interval*60, 2)} min.")
+        logging.info(f"Period: {np.round(period, 2)}±{np.round(period_std, 2)} min.")
+
         plt.figure("fft")
         phi_fft = np.fft.rfft(ref_angle_arr)
-        dt = np.mean(np.diff(meas_times))
-        phi_fft_f = np.fft.rfftfreq(len(ref_angle_arr), d=dt*3600)
+
+        phi_fft_f = np.fft.rfftfreq(len(ref_angle_arr), d=meas_interval*3600)
 
         plt.plot(phi_fft_f[1:], np.abs(phi_fft)[1:])
         plt.xlabel("Frequency (1/hour)")
@@ -803,7 +812,7 @@ class DataSet:
             quant = humidity
             y_label = "Humidity (\%)"
 
-        stability_figs = ["Stability ref pulse pos", "Stability amplitude", "Stability phase"]
+        stability_figs = ["Reference zero crossing", "Stability amplitude", "Stability phase"]
         for fig_label in stability_figs:
             if plt.fignum_exists(fig_label):
                 fig = plt.figure(fig_label)
@@ -814,10 +823,10 @@ class DataSet:
                 ax1.grid(c="blue")
 
                 ax2 = ax1.twinx()
-                ax2.scatter(meas_time_diff, quant, c="red")
+                ax2.plot(meas_time_diff, quant, c="red")
                 ax2.set_ylabel(y_label, c="red")
                 ax2.tick_params(axis="y", colors="red")
-                # ax2.grid(c="red")
+                ax2.grid(False)
 
         if not plt.fignum_exists(stability_figs[0]):
             fig, ax1 = plt.subplots(num="Climate plot")
@@ -977,7 +986,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     # dataset = DataSet(r"/home/ftpuser/ftp/Data/Stability/30102024/air/100 ps reduced")
     # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT/s1_new_area/Image3_28_07_2023") # 100 ps 4 strong fluctuations,
-    dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT/s1_new_area/Image3_28_07_2023") # 100 ps 4 strong fluctuations,
+    dataset = DataSet(r"/home/ftpuser/ftp/Data/Stability/100 ps 20 avg") # 100 ps 4 strong fluctuations,
     # img = DataSet(r"/home/ftpuser/ftp/Data/SemiconductorSamples/Wafer_25_and_wafer_19073", options)
     # img = DataSet(r"E:\measurementdata\HHI_Aachen\remeasure_02_09_2024\sample4\img1")
 
@@ -991,6 +1000,6 @@ if __name__ == '__main__':
     # img.evaluate_point(point, 1000, en_plot=True)
     dataset.selected_freq = 2.0
     dataset.plot_system_stability()
-    #dataset.plot_climate(r"/home/ftpuser/ftp/Data/Stability/2024-12-02 17-08-29_log.txt", quantity=ClimateQuantity.Temperature)
+    dataset.plot_climate(r"/home/ftpuser/ftp/Data/Stability/T_RH_sensor_logs/2024-11-16 11-27-45_log.txt", quantity=ClimateQuantity.Temperature)
 
     plt_show(en_save=False)
