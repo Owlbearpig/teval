@@ -56,8 +56,7 @@ class Image:
     selected_freq = None
     selected_quantity = None
     grid_func = None
-    refs = None
-    sams = None
+    measurements = None
 
     def __init__(self, data_path=None, options=None):
         if data_path is None:
@@ -65,7 +64,7 @@ class Image:
 
         self.data_path = data_path
 
-        self.refs, self.sams, self.other, self.dataset_info = self._parse_measurements()
+        self.measurements, self.dataset_info = self._parse_measurements()
 
         self.grid_info = self._set_grid_properties()
         self._set_options(options)
@@ -153,8 +152,8 @@ class Image:
         refs = tuple(sorted(refs, key=lambda meas: meas.meas_time))
         sams = tuple(sorted(sams, key=lambda meas: meas.meas_time))
 
-        first_measurement = min(refs[0], sams[0], key=lambda meas: meas.meas_time)
-        last_measurement = max(refs[-1], sams[-1], key=lambda meas: meas.meas_time)
+        first_measurement = sorted(all_measurements, key=lambda meas: meas.meas_time)[0]
+        last_measurement = sorted(all_measurements, key=lambda meas: meas.meas_time)[-1]
         logging.info(f"First measurement at: {first_measurement.meas_time}, "
                      f"last measurement: {last_measurement.meas_time}")
         time_del = last_measurement.meas_time - first_measurement.meas_time
@@ -168,7 +167,7 @@ class Image:
         info = {"id_map": dict(zip([id_.identifier for id_ in sorted(all_measurements, key=lambda x: x.identifier)],
                                    range(len(all_measurements))))}
 
-        return refs, sams, other, info
+        return {"refs": refs, "sams": sams, "other": other, "all": all_measurements}, info
 
     def _find_refs(self, sample_measurements, ret_one=True):
         max_amp_meas = (None, -np.inf)
@@ -191,17 +190,17 @@ class Image:
         return refs_
 
     def _set_grid_properties(self):
-        sample_data_td = self.sams[0].get_data_td()
+        sample_data_td = self.measurements["all"][0].get_data_td()
         samples = int(sample_data_td.shape[0])
         self.time_axis = sample_data_td[:, 0].real
 
-        sample_data_fd = self.sams[0].get_data_fd()
+        sample_data_fd = self.measurements["all"][0].get_data_fd()
         self.freq_axis = sample_data_fd[:, 0].real
 
         dt = np.mean(np.diff(self.time_axis))
 
         x_coords, y_coords = [], []
-        for sam_measurement in self.sams:
+        for sam_measurement in self.measurements["sams"]:
             x_coords.append(sam_measurement.position[0])
             y_coords.append(sam_measurement.position[1])
 
@@ -228,6 +227,11 @@ class Image:
             dy = 1
 
         dx, dy = round(dx, 3), round(dy, 3)
+
+        if not x_coords:
+            x_coords = [0]
+        if not y_coords:
+            y_coords = [0]
 
         w = int(1 + np.ceil((max(x_coords) - min(x_coords)) / dx))
         h = int(1 + np.ceil((max(y_coords) - min(y_coords)) / dy))
@@ -268,14 +272,14 @@ class Image:
             return meas_td, meas_fd
 
     def _cache(self):
-        self.cache_path = Path(self.sams[0].filepath.parent / "cache")
+        self.cache_path = Path(self.measurements["all"][0].filepath.parent / "cache")
         self.cache_path.mkdir(parents=True, exist_ok=True)
 
         try:
             data_td = np.load(str(self.cache_path / "_td_cache.npy"))
             data_fd = np.load(str(self.cache_path / "_fd_cache.npy"))
         except FileNotFoundError:
-            measurements = self.all_measurements()
+            measurements = self.measurements["all"]
 
             y_td, y_fd = measurements[0].get_data_td(), measurements[0].get_data_fd()
             data_td = np.zeros((len(measurements), *y_td.shape), dtype=y_td.dtype)
@@ -384,13 +388,6 @@ class Image:
 
         return grid_vals.real
 
-    def all_measurements(self, sort_key=None):
-        measurements = [*self.sams, *self.refs, *self.other]
-        if sort_key is None:
-            return measurements
-        else:
-            return sorted(measurements, key=sort_key)
-
     def select_quantity(self, quantity, label=""):
         if isinstance(quantity, Quantity):
             if not callable(Quantity.func):
@@ -418,11 +415,11 @@ class Image:
 
     def get_measurement(self, x, y, meas_type=MeasurementType.SAM.value) -> Measurement:
         if meas_type == MeasurementType.REF.value:
-            meas_list = self.refs
+            meas_list = self.measurements["refs"]
         elif meas_type == MeasurementType.SAM.value:
-            meas_list = self.sams
+            meas_list = self.measurements["sams"]
         else:
-            meas_list = self.other
+            meas_list = self.measurements["other"]
 
         closest_meas, best_fit_val = None, np.inf
         for meas in meas_list:
@@ -678,9 +675,14 @@ class Image:
 
         ref_ampl_arr, ref_angle_arr, ref_pos = [], [], []
 
-        t0 = self.refs[0].meas_time
-        meas_times = [(ref.meas_time - t0).total_seconds() / 3600 for ref in self.refs]
-        for i, ref in enumerate(self.refs):
+        if not self.measurements["refs"]:
+            meas_set = self.measurements["all"]
+        else:
+            meas_set = self.measurements["refs"]
+
+        t0 = meas_set[0].meas_time
+        meas_times = [(meas.meas_time - t0).total_seconds() / 3600 for meas in meas_set]
+        for i, ref in enumerate(meas_set):
             ref_td = ref.get_data_td()
             t, y = ref_td[:, 0], ref_td[:, 1]
             ref_fd = do_fft(ref_td)
@@ -691,19 +693,6 @@ class Image:
 
             ref_angle_arr.append(phi)
         ref_angle_arr = np.unwrap(ref_angle_arr)
-
-        random.seed(10)
-        rnd_sam = random.choice(self.sams)
-        position1 = (19, 4)
-        position2 = (20, 4)
-        sam1 = self.get_measurement(*position1)  # rnd_sam
-        sam2 = self.get_measurement(*position2)  # rnd_sam
-
-        sam_t1 = (sam1.meas_time - t0).total_seconds() / 3600
-        amp_interpol1, phi_interpol1 = self._ref_interpolation(sam1, ret_cart=False)
-
-        sam_t2 = (sam2.meas_time - t0).total_seconds() / 3600
-        amp_interpol2, phi_interpol2 = self._ref_interpolation(sam2, ret_cart=False)
 
         plt.figure("Stability ref pulse pos")
         plt.title(f"Reference pulse position")
@@ -927,20 +916,20 @@ if __name__ == '__main__':
 
     logging.basicConfig(level=logging.INFO)
     options = {}
-    img = Image(r"/home/ftpuser/ftp/Data/HHI_Aachen/remeasure_02_09_2024/sample3/img3", options)
+    # img = Image(r"/home/ftpuser/ftp/Data/HHI_Aachen/remeasure_02_09_2024/sample3/img3", options)
     # img = Image(r"/home/ftpuser/ftp/Data/SemiconductorSamples/Wafer_25_and_wafer_19073", options)
-    # img = Image(r"E:\measurementdata\HHI_Aachen\remeasure_02_09_2024\sample4\img1")
+    img = Image(r"E:\measurementdata\Stability\31-10-2024_L1\air")
 
     # img.select_quantity()
-    img.plot_image()
+    # img.plot_image()
     # img.window_all()
-    all_meas = img.all_measurements(sort_key=lambda x: x.identifier)
+    # all_meas = img.all_measurements(sort_key=lambda x: x.identifier)
 
-    point = choice(img.all_points)
+    # point = choice(img.all_points)
     # img.window_all()
-    img.plot_point()
+    # img.plot_point()
     # img.evaluate_point(point, 1000, en_plot=True)
-    img.selected_freq = 0.5
-    # img.plot_system_stability()
+    # img.selected_freq = 0.5
+    img.plot_system_stability()
 
     plt_show(en_save=False)
