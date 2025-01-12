@@ -18,7 +18,6 @@ class Domain(Enum):
 class MeasurementType(Enum):
     REF = 1
     SAM = 2
-    OTHER = 3
 
 
 class Measurement:
@@ -66,12 +65,10 @@ class Measurement:
             self.sample_name = dir_1above.stem
 
         # set measurement type
-        if "ref" in str(self.filepath.stem).lower():
-            self.meas_type = MeasurementType(1)
-        elif "sam" in str(self.filepath.stem).lower():
+        if "sam" in str(self.filepath.stem).lower():
             self.meas_type = MeasurementType(2)
         else:
-            self.meas_type = MeasurementType(3)
+            self.meas_type = MeasurementType(1)
 
         # set position
         self.position = self._extract_position()
@@ -101,39 +98,3 @@ class Measurement:
         self._data_fd = np.array([freqs, data_fd]).T
 
         return self._data_fd
-
-
-def select_measurements(measurements, keywords, case_sensitive=True, match_exact=False):
-    if not case_sensitive:
-        keywords = [keyword.lower() for keyword in keywords]
-
-    selected = []
-    for measurement in measurements:
-        dirs = measurement.filepath.parents[0].parts
-        if match_exact:
-            for dir_ in dirs:
-                if any([keyword == dir_ for keyword in keywords]):
-                    selected.append(measurement)
-                    break
-        elif all([keyword in str(measurement) for keyword in keywords]):
-            selected.append(measurement)
-
-    if len(selected) == 0:
-        exit("No files found; exiting")
-
-    ref_cnt, sam_cnt = 0, 0
-    for selected_measurement in selected:
-        if selected_measurement.meas_type == "sam":
-            sam_cnt += 1
-        elif selected_measurement.meas_type == "ref":
-            ref_cnt += 1
-    print(f"Number of reference and sample measurements in selection: {ref_cnt}, {sam_cnt}")
-
-    selected.sort(key=lambda x: x.meas_time)
-
-    print("Time between first and last measurement: ", selected[-1].meas_time - selected[0].meas_time)
-
-    sams = [x for x in selected if x.meas_type == "sam"]
-    refs = [x for x in selected if x.meas_type == "ref"]
-
-    return refs, sams

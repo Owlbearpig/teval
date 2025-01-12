@@ -6,25 +6,16 @@ from os import name as os_name
 
 ROOT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 
-if 'posix' in os_name:
-    base_dir = Path(r"/home/ftpuser/ftp/Data/")
-    data_dir = base_dir / "PolymerSamples_Exipnos" / "Meas0"
-    result_dir = Path(r"/home/alex/MEGA/AG/Projects/HHI_Aachen/Results")
-else:
-    data_dir = Path(r"")
-    result_dir = Path(r"E:\Mega\AG\Projects\HHI_Aachen\Results")
+project_ = "SystemStability"
 
-post_process_config = {"sub_offset": True, "en_windowing": False}
+if 'posix' in os_name:
+    result_dir = Path(r"/home/alex/MEGA/AG/Projects") / project_ / "Results"
+else:
+    result_dir = Path(r"E:\Mega\AG\Projects") / project_ / "Results"
 
 # physical constants
 THz = 1e12
-d_msla = 1008  # um
-angle_in = 0 * pi / 180
 c_thz = c0 * 1e-6  # um / ps -> 1e6 / 1e-12 = 1e-6
-
-# optimization constants
-initial_shgo_iters = 3
-shgo_bounds = [(1.5, 1.7), (0.01, 0.10)]
 
 # plotting
 plot_range = slice(25, 250)
