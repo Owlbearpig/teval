@@ -18,9 +18,11 @@ from enum import Enum
 import logging
 from datetime import datetime
 
+
 class ClimateQuantity(Enum):
     Temperature = 0
     Humidity = 1
+
 
 class Quantity:
     func = None
@@ -173,9 +175,19 @@ class DataSet:
         logging.info(f"Total measurement time: {tot_hours} hours, "
                      f"{min_part} minutes and {sec_part} seconds ({td_secs} seconds)\n")
 
+        time_diffs = [(meas_set["all"][i+1].meas_time - meas_set["all"][i].meas_time).total_seconds()
+                      for i in range(0, len(meas_set["all"]) - 1)]
+        mean_time_diff = np.mean(time_diffs)
+        plt.figure("12")
+        plt.plot(time_diffs)
+
+        logging.info(f"Mean time between measurements: {np.round(mean_time_diff,2)} seconds")
+        logging.info(f"Min and max time between measurements: "
+                     f"({np.min(time_diffs)}, {np.max(time_diffs)}) seconds\n")
+
         meas_set["id_map"] = dict(zip([id_.identifier for id_ in
-                           sorted(all_measurements, key=lambda x: x.identifier)],
-                          range(len(all_measurements))))
+                                       sorted(all_measurements, key=lambda x: x.identifier)],
+                                      range(len(all_measurements))))
 
         return meas_set
 
@@ -398,7 +410,7 @@ class DataSet:
         grid_vals = self._empty_grid.copy()
         sam_meas = self.measurements["sams"]
         for i, measurement in enumerate(sam_meas):
-            if not i % (len(sam_meas) // 100) or i == len(sam_meas)-1:
+            if not i % (len(sam_meas) // 100) or i == len(sam_meas) - 1:
                 logging.info(f"{round(100 * i / len(sam_meas), 2)} % done. "
                              f"(Measurement: {i}/{len(sam_meas)}, {measurement.position} mm)")
 
@@ -569,7 +581,7 @@ class DataSet:
             plt.xlabel("Frequency (THz)")
             plt.ylabel("Absorption coefficient (1/cm)")
 
-        res = {"n": array([freq_axis, n + 1j*kap]).T, "a": array([freq_axis, alph]).T,
+        res = {"n": array([freq_axis, n + 1j * kap]).T, "a": array([freq_axis, alph]).T,
                "absorb": array([freq_axis, absorb]).T}
 
         return res
@@ -702,8 +714,6 @@ class DataSet:
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Absorbance (dB)")
 
-
-
     def plot_system_stability(self):
         selected_freq_ = self.selected_freq
         f_idx = np.argmin(np.abs(self.freq_axis - selected_freq_))
@@ -735,22 +745,22 @@ class DataSet:
         logging.info(f"Largest jump: {np.round(max_diff, 2)} fs")
         max_diff = np.max(np.diff(ref_angle_arr))
         logging.info(f"Largest phase jump: {np.round(max_diff, 2)} rad")
-        logging.info(f"Measurement interval: {np.round(meas_interval*60, 2)} min.")
+        logging.info(f"Measurement interval: {np.round(meas_interval * 60, 2)} min.")
         logging.info(f"Period: {np.round(period, 2)}±{np.round(period_std, 2)} min.")
 
         plt.figure("fft")
         phi_fft = np.fft.rfft(ref_angle_arr)
 
-        phi_fft_f = np.fft.rfftfreq(len(ref_angle_arr), d=meas_interval*3600)
+        phi_fft_f = np.fft.rfftfreq(len(ref_angle_arr), d=meas_interval * 3600)
 
         plt.plot(phi_fft_f[1:], np.abs(phi_fft)[1:])
         plt.xlabel("Frequency (1/hour)")
         plt.ylabel("Magnitude")
 
-        if meas_times.max() < 5/60:
+        if meas_times.max() < 5 / 60:
             meas_times *= 3600
             mt_unit = "seconds"
-        elif 5/60 <= meas_times.max() < 0.5:
+        elif 5 / 60 <= meas_times.max() < 0.5:
             meas_times *= 60
             mt_unit = "minutes"
         else:
@@ -979,6 +989,15 @@ class DataSet:
 
         return opt_res
 
+    def plot_jitter(self):
+        x = [25, 50, 100, 200]
+        y = [113.8, 39.8, 12.47, 6.17]
+
+        plt.figure("Jitter")
+        plt.plot(x, y)
+        plt.xlabel("Measurement window (ps)")
+        plt.ylabel("Largest jump (fs)")
+
 
 if __name__ == '__main__':
     from random import choice
@@ -986,7 +1005,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     # dataset = DataSet(r"/home/ftpuser/ftp/Data/Stability/30102024/air/100 ps reduced")
     # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT/s1_new_area/Image3_28_07_2023") # 100 ps 4 strong fluctuations,
-    dataset = DataSet(r"/home/ftpuser/ftp/Data/Stability/100 ps 20 avg") # 100 ps 4 strong fluctuations,
+    dataset = DataSet(r"E:\measurementdata\Stability\25 ps reduced")  # 100 ps 4 strong fluctuations,
     # img = DataSet(r"/home/ftpuser/ftp/Data/SemiconductorSamples/Wafer_25_and_wafer_19073", options)
     # img = DataSet(r"E:\measurementdata\HHI_Aachen\remeasure_02_09_2024\sample4\img1")
 
@@ -999,7 +1018,8 @@ if __name__ == '__main__':
     # img.plot_point()
     # img.evaluate_point(point, 1000, en_plot=True)
     dataset.selected_freq = 2.0
-    dataset.plot_system_stability()
-    dataset.plot_climate(r"/home/ftpuser/ftp/Data/Stability/T_RH_sensor_logs/2024-11-16 11-27-45_log.txt", quantity=ClimateQuantity.Temperature)
+    # dataset.plot_system_stability()
+    dataset.plot_jitter()
+    # dataset.plot_climate(r"/home/ftpuser/ftp/Data/Stability/T_RH_sensor_logs/2024-11-16 11-27-45_log.txt", quantity=ClimateQuantity.Temperature)
 
     plt_show(en_save=False)
