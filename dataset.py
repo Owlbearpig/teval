@@ -178,8 +178,6 @@ class DataSet:
         time_diffs = [(meas_set["all"][i+1].meas_time - meas_set["all"][i].meas_time).total_seconds()
                       for i in range(0, len(meas_set["all"]) - 1)]
         mean_time_diff = np.mean(time_diffs)
-        plt.figure("12")
-        plt.plot(time_diffs)
 
         logging.info(f"Mean time between measurements: {np.round(mean_time_diff,2)} seconds")
         logging.info(f"Min and max time between measurements: "
@@ -1005,7 +1003,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     # dataset = DataSet(r"/home/ftpuser/ftp/Data/Stability/30102024/air/100 ps reduced")
     # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT/s1_new_area/Image3_28_07_2023") # 100 ps 4 strong fluctuations,
-    dataset = DataSet(r"E:\measurementdata\Stability\25 ps reduced")  # 100 ps 4 strong fluctuations,
+    dataset = DataSet(r"E:\measurementdata\Stability\30102024\200 ps 5 reduced")  # 100 ps 4 strong fluctuations,
     # img = DataSet(r"/home/ftpuser/ftp/Data/SemiconductorSamples/Wafer_25_and_wafer_19073", options)
     # img = DataSet(r"E:\measurementdata\HHI_Aachen\remeasure_02_09_2024\sample4\img1")
 
@@ -1018,8 +1016,8 @@ if __name__ == '__main__':
     # img.plot_point()
     # img.evaluate_point(point, 1000, en_plot=True)
     dataset.selected_freq = 2.0
-    # dataset.plot_system_stability()
-    dataset.plot_jitter()
-    # dataset.plot_climate(r"/home/ftpuser/ftp/Data/Stability/T_RH_sensor_logs/2024-11-16 11-27-45_log.txt", quantity=ClimateQuantity.Temperature)
+    dataset.plot_system_stability()
+    # dataset.plot_jitter()
+    # dataset.plot_climate(r"E:\measurementdata\Stability\T_RH_sensor_logs\2024-12-02 17-08-29_log.txt", quantity=ClimateQuantity.Temperature)
 
     plt_show(en_save=False)
