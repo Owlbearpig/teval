@@ -704,11 +704,11 @@ class DataSet:
             plt.ylabel(r"Amplitude transmission ($\%$)")
         else:
             plt.figure("Amplitude transmission")
-        absorb = np.abs(sam_fd[plot_range1, 1] / ref_fd[plot_range1, 1])
+        absorb = np.abs(ref_fd[plot_range1, 1] / sam_fd[plot_range1, 1])
         plt.plot(freq_axis[plot_range1], 100 * absorb, label=label)
 
         plt.figure("Absorbance")
-        plt.plot(freq_axis[plot_range1], -20 * np.log10(absorb), label=label)
+        plt.plot(freq_axis[plot_range1], 20 * np.log10(absorb), label=label)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Absorbance (dB)")
 
@@ -831,7 +831,7 @@ class DataSet:
                 ax1.grid(c="blue")
 
                 ax2 = ax1.twinx()
-                ax2.plot(meas_time_diff, quant, c="red")
+                ax2.scatter(meas_time_diff, quant, c="red")
                 ax2.set_ylabel(y_label, c="red")
                 ax2.tick_params(axis="y", colors="red")
                 ax2.grid(False)
@@ -909,7 +909,10 @@ class DataSet:
         cbar = fig.colorbar(img_)
         cbar.set_label(cbar_label, rotation=270, labelpad=30)
 
-    def plot_line(self, x=None, y=None):
+    def plot_line(self, x=None, y=None, **kwargs_):
+        kwargs = {"label": str(self.sample_name), }
+        kwargs.update(kwargs_)
+
         measurements, coords = self.get_line(x, y)
 
         vals = []
@@ -919,19 +922,17 @@ class DataSet:
 
             vals.append(self.grid_func(measurement))
 
-        label_ = self.sample_name
-
         if y is not None:
             plt.figure("x-slice")
-            plt.title(f"y={y} mm")
-            plt.plot(coords, vals, label=label_)
+            plt.title(f"y={measurements[0].position[1]} mm")
+            plt.plot(coords, vals, label=kwargs["label"])
             plt.xlabel("x (mm)")
             plt.ylabel(str(self.selected_quantity))
 
         else:
             plt.figure("y-slice")
-            plt.title(f"x={x} mm")
-            plt.plot(coords, vals, label=label_)
+            plt.title(f"x={measurements[0].position[0]} mm")
+            plt.plot(coords, vals, label=kwargs["label"])
             plt.xlabel("y (mm)")
             plt.ylabel(str(self.selected_quantity))
 
@@ -998,26 +999,54 @@ class DataSet:
 
 
 if __name__ == '__main__':
-    from random import choice
-
     logging.basicConfig(level=logging.INFO)
-    # dataset = DataSet(r"/home/ftpuser/ftp/Data/Stability/30102024/air/100 ps reduced")
-    # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT/s1_new_area/Image3_28_07_2023") # 100 ps 4 strong fluctuations,
-    dataset = DataSet(r"E:\measurementdata\Stability\30102024\200 ps 5 reduced")  # 100 ps 4 strong fluctuations,
-    # img = DataSet(r"/home/ftpuser/ftp/Data/SemiconductorSamples/Wafer_25_and_wafer_19073", options)
-    # img = DataSet(r"E:\measurementdata\HHI_Aachen\remeasure_02_09_2024\sample4\img1")
+    dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Thinfilm_solarcell")
+    # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Laser_crystallized_Si")
+    # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Wood/S1")
 
-    # img.select_quantity()
+    #dataset.selected_freq = 0.7
+    dataset.select_quantity(QuantityEnum.P2P)
+    # dataset.select_quantity(QuantityEnum.TransmissionAmp)
     # img.plot_image()
-    # img.window_all()
+
+    #dataset.plot_point((10, 14), label="SC 1")
+    #dataset.plot_point((40, 14), label="SC 2")
+    #dataset.plot_point((10, -14), label="SC 3")
+    #dataset.plot_point((40, -14), label="SC 4")
+
+    dataset2 = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Laser_crystallized_Si")
 
     # point = choice(dataset.all_points)
     # img.window_all()
-    # img.plot_point()
-    # img.evaluate_point(point, 1000, en_plot=True)
-    dataset.selected_freq = 2.0
-    dataset.plot_system_stability()
+    #dataset.plot_point((45, 14), label="Wood substrate (x=45 mm)")
+    #dataset.plot_point((50, 14), label="Wood substrate (x=50 mm)")
+    # dataset.plot_point((5, 14), label="Reference (air)")
+    dataset2.plot_point((60, -14), label="Borofloat sub.")
+    dataset2.plot_point((30, -14), label="Sub. + SiN sub.")
+    dataset2.plot_point((5, -14), label="Si B-doped")
+    dataset2.plot_point((60, 14), label="Si + SiN interlayer + Borofloat")
+    dataset2.plot_point((30, 14), label="Si n-doped + SiN interlayer + Borofloat")
+
+    dataset.plot_line(y=-14.00, label="y=-14 mm")
+    dataset.plot_line(y=14.00, label="y=14 mm")
+
+    # dataset2 = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Wood/S5")
+    #dataset2.plot_line(y=-12.00, label="y=-12")
+    #dataset2.plot_line(y=12.00, label="y=12")
+
+    #dataset2.plot_point((60, 12), label="Wood + Lacquer (Pure)")
+    #dataset2.plot_point((60, -12), label="Wood + Lac. (1:1)")
+    #dataset2.plot_point((40, 12), label="Wood + Lac. (1:2)")
+    #dataset2.plot_point((40, -12), label="Wood + Lac. (1:5)")
+
+    # dataset.plot_point((50, 14), label="Wood substrate (x=50 mm)")
+    # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Wood/S2")
+    # dataset2.plot_point((50, 14), label="Wood substrate")
+    # dataset.evaluate_point(point, 1000, en_plot=True)
+    # dataset.selected_freq = 2.0
+    # dataset.plot_line(y=14.00)
+    # dataset.plot_system_stability()
     # dataset.plot_jitter()
-    # dataset.plot_climate(r"E:\measurementdata\Stability\T_RH_sensor_logs\2024-12-02 17-08-29_log.txt", quantity=ClimateQuantity.Temperature)
+    # dataset.plot_climate(r"/home/ftpuser/ftp/Data/Stability/T_RH_sensor_logs/2024-11-20 17-27-58_log.txt", quantity=ClimateQuantity.Temperature)
 
     plt_show(en_save=False)
