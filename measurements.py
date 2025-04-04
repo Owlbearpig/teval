@@ -65,10 +65,10 @@ class Measurement:
             self.sample_name = dir_1above.stem
 
         # set measurement type
-        if "sam" in str(self.filepath.stem).lower():
-            self.meas_type = MeasurementType(2)
-        else:
+        if "ref" in str(self.filepath.stem).lower():
             self.meas_type = MeasurementType(1)
+        else:
+            self.meas_type = MeasurementType(2)
 
         # set position
         self.position = self._extract_position()
