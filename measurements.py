@@ -44,7 +44,8 @@ class Measurement:
         fp_stem = str(self.filepath.stem)
 
         matches = re.findall(r"(-?\d+\.\d+|-?\d+) mm", fp_stem)
-        positions = [0.0 if np.isclose(float(val), 0) else float(val) for val in matches]
+        positions = [0.000 if np.isclose(float(val), 0) else float(val) for val in matches]
+        positions = tuple(positions)
 
         l_diff = 2 - len(positions)
         if l_diff > 0:
@@ -78,7 +79,8 @@ class Measurement:
 
     def get_data_td(self):
         if self._data_td is None:
-            self._data_td = np.loadtxt(self.filepath)
+            data = np.loadtxt(self.filepath)
+            self._data_td = data
 
         return self._data_td
 

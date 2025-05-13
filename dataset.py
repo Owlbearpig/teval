@@ -1,6 +1,7 @@
 import itertools
 import os
 import random
+from copy import deepcopy
 from functools import partial
 
 import consts
@@ -23,6 +24,32 @@ import logging
 from datetime import datetime
 from tqdm import tqdm
 
+"""
+ideas: add teralyzer evaluation (time consuming)
+
+"""
+
+class PixelInterpolation(Enum):
+    # imshow(interpolation=pixel_interpolation)
+    none = None
+    antialiased = 'antialiased'
+    nearest = 'nearest'
+    bilinear = 'bilinear'
+    bicubic = 'bicubic'
+    spline16 = 'spline16'
+    spline36 = 'spline36'
+    hanning = 'hanning'
+    hamming = 'hamming'
+    hermite = 'hermite'
+    kaiser = 'kaiser'
+    quadric = 'quadric'
+    catrom = 'catrom'
+    gaussian = 'gaussian'
+    bessel = 'bessel'
+    mitchell = 'mitchell'
+    sinc = 'sinc'
+    lanczos = 'lanczos'
+    blackman = 'blackman'
 
 class ClimateQuantity(Enum):
     Temperature = 0
@@ -43,14 +70,14 @@ class Direction(Enum):
 class Quantity:
     func = None
 
-    def __init__(self, name="name", func=None, domain=Domain.TimeDomain):
-        self.name = name
+    def __init__(self, label="label", func=None, domain=Domain.TimeDomain):
+        self.label = label
         self.domain = domain
         if func is not None:
             self.func = func
 
     def __repr__(self):
-        return self.name
+        return self.label
 
     def __call__(self, *args, **kwargs):
         return self.func(*args, **kwargs)
@@ -73,7 +100,7 @@ class DataSet:
     time_axis = None
     cache = {}
     options = {}
-    properties = {}
+    img_properties = {}
     selected_freq = None
     selected_quantity = None
     grid_func = None
@@ -103,6 +130,7 @@ class DataSet:
         if not list(self.data_path.glob("*")):
             raise ValueError(f"Path {self.data_path} is empty")
 
+
     def _set_defaults(self):
         if self.selected_freq is None:
             self.selected_freq = 1.000
@@ -121,15 +149,16 @@ class DataSet:
                            "log_scale": False,
                            "color_map": "autumn",
                            "invert_x": False, "invert_y": False,
-                           "pixel_interpolation": None,
+                           "pixel_interpolation": PixelInterpolation.none,
                            "rcParams": mpl_style_params(),
                            "fig_label": "",
                            "img_title": "",
                            "en_cbar_label": False,
-                           "window_config": {},
+                           "window_options": {},
                            "plot_range": slice(15, 900),
-                           "ref_pos": None,
-                           "dist_func": Dist.Time,
+                           "ref_pos": (None, None),
+                           "ref_threshold": 0.95,
+                           "dist_func": Dist.Position,
                            }
 
         default_options.update(options_)
@@ -146,7 +175,7 @@ class DataSet:
         mpl.rcParams.update(self.options["rcParams"])
 
         # TODO add loglevel as an option
-        logging.basicConfig(level=logging.INFO)
+        logging.basicConfig(level=logging.WARNING)
 
     def _read_data_dir(self):
         glob = self.data_path.glob("**/*.txt")
@@ -189,6 +218,13 @@ class DataSet:
         self.measurements["sams"] = sams_sorted
         self.measurements["all"] = all_sorted
 
+    def _generate_coord_map(self, all_measurements_):
+        # keys are of the format "xy" where x, y are the positions cut/0 filled to 3 dec. places
+        self.cache["coord_map"] = {}
+        for meas in all_measurements_:
+            key = "".join([f"{val:.3f}" for val in meas.position])
+            self.cache["coord_map"][key] = meas
+
     def _parse_measurements(self):
         if not isinstance(self.data_path, Path):
             self.data_path = Path(self.data_path)
@@ -203,9 +239,12 @@ class DataSet:
 
         self._sort_measurements(all_measurements)
 
+        self._generate_coord_map(all_measurements)
+
         first_measurement = self.measurements["all"][0]
         last_measurement = self.measurements["all"][-1]
 
+        logging.info(f"Dataset contains {len(all_measurements)} measurements.")
         logging.info(f"First measurement at: {first_measurement.meas_time}, "
                      f"last measurement: {last_measurement.meas_time}")
         time_del = last_measurement.meas_time - first_measurement.meas_time
@@ -237,11 +276,12 @@ class DataSet:
         logging.info(f"Maximum amplitude measurement: {max_amp_meas[0].filepath.name}\n")
         self.measurements["max_amp_meas"] = max_amp_meas[0]
 
-    def _check_refs_exist(self, threshold=0.80):
-        # TODO consider identifying suitable refs using a more robust method (without threshold)
+    def _check_refs_exist(self):
         if self.measurements["refs"] or not self.measurements["sams"]:
             return
         logging.info(f"No explicit references in the dataset. Using ref_pos option")
+
+        threshold = self.options["ref_threshold"]
 
         max_amp_meas = self.measurements["max_amp_meas"]
         max_amp = np.max(np.abs(self.get_data(max_amp_meas)[:, 1]))
@@ -249,14 +289,10 @@ class DataSet:
         manual_pos = self.options["ref_pos"]
 
         refs_ = []
-        if manual_pos is None:
-            refs_ = [max_amp_meas[0]]
-            logging.info(f"Using max amplitude measurement as ref: {refs_[0].filepath.stem}")
-        elif (manual_pos[0] is not None) and (manual_pos[1] is not None):
+        if (manual_pos[0] is not None) and (manual_pos[1] is not None):
             refs_ = [self.get_measurement(*manual_pos)]
             logging.warning(f"Using measurement at {manual_pos} as ref.")
-
-        if (manual_pos[0] is None) or (manual_pos[1] is None):
+        elif not all([pos is None for pos in manual_pos]):
             if manual_pos[0] is None:
                 y = manual_pos[1]
                 logging.info(f"Selecting measurements along horizontal line at y={y} mm")
@@ -268,14 +304,21 @@ class DataSet:
 
             for meas in ref_line:
                 data_td = self.get_data(meas)
-                if np.max(np.abs(data_td[:, 1])) > max_amp * threshold:
+                if np.max(np.abs(data_td[:, 1])) > threshold * max_amp:
                     refs_.append(meas)
+
+        if len(refs_) > 1:
             logging.info(f"Using reference measurements: {refs_[0].filepath.stem} to {refs_[-1].filepath.stem}")
 
         if not refs_:
-            logging.warning(f"No suitable refs found. Check ref_pos option.")
-            logging.warning(f"Using measurement at {manual_pos} as ref.")
-            refs_ = [self.get_measurement(*manual_pos)]
+            for meas in self.measurements["all"]:
+                data_td = self.get_data(meas)
+                amp = np.max(np.abs(data_td[:, 1]))
+                if amp > threshold * max_amp:
+                    refs_.append(meas)
+
+            logging.warning(f"No suitable refs found. Check ref_pos option or ref_threshold.")
+            logging.info(f"Using max amplitude measurements as ref. (Threshold: {threshold})")
 
         self.measurements["refs"] = tuple(refs_)
 
@@ -332,25 +375,25 @@ class DataSet:
 
         self._empty_grid = np.zeros((w, h), dtype=complex)
 
-        self.properties = {"w": w, "h": h, "dx": dx, "dy": dy, "dt": dt, "samples": samples, "extent": extent,
-                           "x_coords": x_coords, "y_coords": y_coords, "all_points": all_points}
-        self._update_properties()
+        self.img_properties = {"w": w, "h": h, "dx": dx, "dy": dy, "dt": dt, "samples": samples, "extent": extent,
+                               "x_coords": x_coords, "y_coords": y_coords, "all_points": all_points, "img_ax": None}
+        self._update_fig_num()
 
     def _coords_to_idx(self, x_, y_):
-        x, y = self.properties["x_coords"], self.properties["y_coords"]
+        x, y = self.img_properties["x_coords"], self.img_properties["y_coords"]
         x_idx, y_idx = np.argmin(np.abs(x_ - x)), np.argmin(np.abs(y_ - y))
 
         return x_idx, y_idx
 
     def _idx_to_coords(self, x_idx, y_idx):
-        dx, dy = self.properties["dx"], self.properties["dy"]
+        dx, dy = self.img_properties["dx"], self.img_properties["dy"]
 
-        y = self.properties["y_coords"][0] + y_idx * dy
-        x = self.properties["x_coords"][0] + x_idx * dx
+        y = self.img_properties["y_coords"][0] + y_idx * dy
+        x = self.img_properties["x_coords"][0] + x_idx * dx
 
         return x, y
 
-    def _update_properties(self):
+    def _update_fig_num(self):
         en_freq_label = Domain.FrequencyDomain == self.selected_quantity.domain
         fig_num = ""
         if self.options["fig_label"]:
@@ -359,18 +402,11 @@ class DataSet:
         fig_num += en_freq_label * f" {int(self.selected_freq * 1e3)}GHz"
         fig_num = fig_num.replace(" ", "_")
 
-        self.properties["fig_num"] = fig_num
-
-        if self.selected_quantity.domain == Domain.FrequencyDomain:
-            label = self.selected_quantity.name + f" at {self.selected_freq} THz"
-        else:
-            label = self.selected_quantity.name
-
-        self.properties["quantity_label"] = label
+        self.img_properties["fig_num"] = fig_num
 
     def select_freq(self, freq):
         self.selected_freq = freq
-        self._update_properties()
+        self._update_fig_num()
 
     def get_data(self, meas, domain=Domain.TimeDomain):
         idx = self.cache["id_map"][meas.identifier]
@@ -537,21 +573,21 @@ class DataSet:
             self.grid_func = lambda x: np.real(func_map[quantity](x))
             self.selected_quantity = quantity.value
 
-        self._update_properties()
+        self._update_fig_num()
 
-    def get_measurement(self, x, y, meas_type=MeasurementType.SAM.value) -> Measurement:
-        if meas_type == MeasurementType.REF.value:
-            meas_list = self.measurements["refs"]
-        else:
-            meas_list = self.measurements["sams"]
-
-        closest_meas, best_fit_val = None, np.inf
-        for meas in meas_list:
-            val = abs(meas.position[0] - x) + \
-                  abs(meas.position[1] - y)
-            if val < best_fit_val:
-                best_fit_val = val
-                closest_meas = meas
+    def get_measurement(self, x, y) -> Measurement:
+        meas_list = self.measurements["all"]
+        pnt = (x, y)
+        try:
+            key = "".join([f"{val:.3f}" for val in pnt])
+            closest_meas = self.cache["coord_map"][key]
+        except KeyError:
+            closest_meas, best_fit_val = None, np.inf
+            for meas in meas_list:
+                val = abs(meas.position[0] - pnt[0]) + abs(meas.position[1] - pnt[1])
+                if val < best_fit_val:
+                    best_fit_val = val
+                    closest_meas = meas
 
         return closest_meas
 
@@ -584,7 +620,7 @@ class DataSet:
         if x is None and y is None:
             return
 
-        x_coords, y_coords = self.properties["x_coords"], self.properties["y_coords"]
+        x_coords, y_coords = self.img_properties["x_coords"], self.img_properties["y_coords"]
 
         # vertical direction / slice
         if x is not None:
@@ -725,19 +761,36 @@ class DataSet:
             return amp_interpol, phi_interpol
 
     def average_area(self, pnt_bot_left, pnt_top_right, label="A1"):
-        if not plt.fignum_exists(num=self.properties["fig_num"]):
+        if not plt.fignum_exists(num=self.img_properties["fig_num"]):
             return
+        assert (pnt_bot_left[0] <= pnt_top_right[0]) and (pnt_bot_left[1] <= pnt_top_right[1])
+
+        x_coords, y_coords = self.img_properties["x_coords"], self.img_properties["y_coords"]
+        pnt_bot_left = (x_coords[np.argmin(np.abs(pnt_bot_left[0] - x_coords))],
+                        y_coords[np.argmin(np.abs(pnt_bot_left[1] - y_coords))])
+        pnt_top_right = (x_coords[np.argmin(np.abs(pnt_top_right[0] - x_coords))],
+                         y_coords[np.argmin(np.abs(pnt_top_right[1] - y_coords))])
 
         x0_idx, y0_idx = self._coords_to_idx(*pnt_bot_left)
         x1_idx, y1_idx = self._coords_to_idx(*pnt_top_right)
 
-        mean_val = np.mean(self.grid_vals[x0_idx:x1_idx, y0_idx:y1_idx])
-        std_val = np.std(self.grid_vals[x0_idx:x1_idx, y0_idx:y1_idx])
+        grid_vals = self.grid_vals[x0_idx:x1_idx+1, y0_idx:y1_idx+1]
+        mean_val, std_val = np.mean(grid_vals), np.std(grid_vals)
 
-        logging.info(f"Average value of area {label}: {np.round(mean_val, 3)}±{np.round(std_val, 3)}")
+        mean_s, std_s = str(np.round(mean_val, 4)), str(np.round(std_val, 4))
+        min_s, max_s = str(np.round(np.min(grid_vals), 4)), str(np.round(np.max(grid_vals), 4))
 
-        plt.figure(self.properties["fig_num"])
-        ax = self.properties["img_ax"]
+        meas_cnt = grid_vals.shape[0] * grid_vals.shape[1]
+        logging.info(f"Average value of area {label} ({meas_cnt} measurements): {mean_s}±{std_s}")
+        logging.info(f"Min: {min_s}, max: {max_s}\n")
+
+        plt.figure(self.img_properties["fig_num"])
+        ax = self.img_properties["img_ax"]
+
+        dx, dy = self.img_properties["dx"], self.img_properties["dy"]
+        # pixels are centered around each coordinate, unlike patches.Rectangle
+        pnt_bot_left = (pnt_bot_left[0] - dx / 2, pnt_bot_left[1] - dy / 2)
+        pnt_top_right = (pnt_top_right[0] + dx / 2, pnt_top_right[1] + dy / 2)
 
         # draw rectangle
         rect_width = pnt_top_right[0] - pnt_bot_left[0]
@@ -749,8 +802,9 @@ class DataSet:
             linewidth=2, edgecolor="black", facecolor="none"
         )
         ax.add_patch(rect)
+
         # decide where to put rect label
-        img_extent = self.properties["extent"]
+        img_extent = self.img_properties["extent"]
         t_x, t_y = pnt_bot_left[0] + rect_width / 2, pnt_bot_left[1] + rect_height / 2
         if t_x < img_extent[0] + 1:
             t_x = pnt_bot_left[0] + rect_width + 1.5
@@ -776,12 +830,14 @@ class DataSet:
         ax.text(t_x, t_y, label,
                 color="black", fontsize=18, ha="center", va="center", fontweight="bold")
 
-    def plot_point(self, point=None, **kwargs_):
+
+    def plot_point(self, point=None, en_td_plot=True, **kwargs_):
         kwargs = {"label": "",
                   "sub_noise_floor": False,
                   "td_scale": 1,
                   "apply_window": False,
-                  "remove_offset": False, }
+                  "remove_offset": False,
+                  "remove_t_offset": False, }
         kwargs.update(kwargs_)
 
         label = kwargs["label"]
@@ -789,6 +845,7 @@ class DataSet:
         td_scale = kwargs["td_scale"]
         apply_window = kwargs["apply_window"]
         remove_offset_ = kwargs["remove_offset"]
+        remove_t_offset = kwargs["remove_t_offset"]
 
         plot_range = self.options["plot_range"]
 
@@ -807,13 +864,24 @@ class DataSet:
             sam_td = remove_offset(sam_td)
 
         if apply_window:
-            ref_td = window(ref_td, **self.options["window_config"])
-            sam_td = window(sam_td, **self.options["window_config"])
+            sam_td = window(sam_td, **self.options["window_options"])
+
+            ref_win_options = deepcopy(self.options["window_options"])
+            # ref_win_options["win_width"] = None
+            ref_td = window(ref_td, **ref_win_options)
+
+        if remove_t_offset:
+            ref_td[:, 0] -= ref_td[0, 0]
+            sam_td[:, 0] -= sam_td[0, 0]
 
         ref_fd, sam_fd = do_fft(ref_td), do_fft(sam_td)
         freq_axis = ref_fd[:, 0].real
 
         phi_ref, phi_sam = unwrap(ref_fd), unwrap(sam_fd)
+        t = sam_fd[:, 1] / ref_fd[:, 1]
+        absorb = np.abs(1/t)
+
+        ret = {"freq_axis": freq_axis, "absorb": absorb, "t": t, "ref_fd": ref_fd, "sam_fd": sam_fd}
 
         noise_floor = np.mean(20 * np.log10(np.abs(ref_fd[ref_fd[:, 0] > 6.0, 1]))) * sub_noise_floor
 
@@ -853,31 +921,41 @@ class DataSet:
         td_label = label
         if not np.isclose(td_scale, 1):
             td_label += f"\n(Amplitude x {td_scale})"
-        plt.plot(sam_td[:, 0], td_scale * sam_td[:, 1], label=td_label)
+        if en_td_plot:
+            plt.plot(sam_td[:, 0], td_scale * sam_td[:, 1], label=td_label)
 
         if not plt.fignum_exists("Amplitude transmission"):
             plt.figure("Amplitude transmission")
             plt.xlabel("Frequency (THz)")
             plt.ylabel(r"Amplitude transmission ($\%$)")
+            plt.ylim((-5, 110))
         else:
             plt.figure("Amplitude transmission")
-        absorb = np.abs(ref_fd[plot_range, 1] / sam_fd[plot_range, 1])
-        plt.plot(freq_axis[plot_range], 100 * absorb, label=label)
+
+        plt.plot(freq_axis[plot_range], 100 * (1/absorb[plot_range]), label=label)
 
         plt.figure("Absorbance")
-        plt.plot(freq_axis[plot_range], 20 * np.log10(absorb), label=label)
+        plt.plot(freq_axis[plot_range], 20 * np.log10(absorb[plot_range]), label=label)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Absorbance (dB)")
 
+        return ret
+
     def plot_system_stability(self):
+        first_meas = self.measurements["all"][0]
+        if all([first_meas.position == meas.position for meas in self.measurements["all"]]):
+            meas_set = self.measurements["all"]
+        else:
+            meas_set = self.measurements["refs"]
+
         selected_freq_ = self.selected_freq
         f_idx = np.argmin(np.abs(self.freq_axis - selected_freq_))
 
-        ref_ampl_arr, ref_angle_arr, ref_zero_crossing = np.zeros((3, len(self.measurements["refs"])))
+        ref_ampl_arr, ref_angle_arr, ref_zero_crossing = np.zeros((3, len(meas_set)))
+        t0 = meas_set[0].meas_time
+        meas_times = np.array([(ref.meas_time - t0).total_seconds() / 3600 for ref in meas_set])
 
-        t0 = self.measurements["refs"][0].meas_time
-        meas_times = np.array([(ref.meas_time - t0).total_seconds() / 3600 for ref in self.measurements["refs"]])
-        for i, ref in enumerate(self.measurements["refs"]):
+        for i, ref in enumerate(meas_set):
             ref_td = self.get_data(ref)
             ref_fd = do_fft(ref_td)
 
@@ -905,7 +983,6 @@ class DataSet:
 
         plt.figure("fft")
         phi_fft = np.fft.rfft(ref_angle_arr)
-
         phi_fft_f = np.fft.rfftfreq(len(ref_angle_arr), d=meas_interval * 3600)
 
         plt.plot(phi_fft_f[1:], np.abs(phi_fft)[1:])
@@ -938,6 +1015,9 @@ class DataSet:
         plt.plot(meas_times, ref_angle_arr, label=t0)
         plt.xlabel(f"Measurement time ({mt_unit})")
         plt.ylabel("Phase (rad)")
+
+        if plt.fignum_exists(self.img_properties["fig_num"]):
+            self.plot_refs()
 
     def plot_climate(self, log_file, quantity=ClimateQuantity.Temperature):
         def read_log_file(log_file_):
@@ -1000,7 +1080,7 @@ class DataSet:
             ax1.set_ylabel(y_label)
 
     def plot_image(self, img_extent=None):
-        info = self.properties
+        info = self.img_properties
         if img_extent is None:
             w0, w1, h0, h1 = [0, info["w"], 0, info["h"]]
         else:
@@ -1019,12 +1099,12 @@ class DataSet:
 
         self.grid_vals = grid_vals
 
-        fig = plt.figure(self.properties["fig_num"])
+        fig = plt.figure(self.img_properties["fig_num"])
         ax = fig.add_subplot(111)
         fig.subplots_adjust(left=0.2)
 
         if img_extent is None:
-            img_extent = self.properties["extent"]
+            img_extent = self.img_properties["extent"]
 
         cbar_min, cbar_max = self.options["cbar_lim"]
         if cbar_min is None:
@@ -1036,16 +1116,16 @@ class DataSet:
             self.options["cbar_min"] = np.log10(cbar_min)
             self.options["cbar_max"] = np.log10(cbar_max)
 
-        axes_extent = (float(img_extent[0] - self.properties["dx"] / 2),
-                       float(img_extent[1] + self.properties["dx"] / 2),
-                       float(img_extent[2] - self.properties["dy"] / 2),
-                       float(img_extent[3] + self.properties["dy"] / 2))
+        axes_extent = (float(img_extent[0] - self.img_properties["dx"] / 2),
+                       float(img_extent[1] + self.img_properties["dx"] / 2),
+                       float(img_extent[2] - self.img_properties["dy"] / 2),
+                       float(img_extent[3] + self.img_properties["dy"] / 2))
         img_ = ax.imshow(grid_vals.transpose((1, 0)),
                          vmin=cbar_min, vmax=cbar_max,
                          origin="lower",
                          cmap=plt.get_cmap(self.options["color_map"]),
                          extent=axes_extent,
-                         interpolation=self.options["pixel_interpolation"]
+                         interpolation=self.options["pixel_interpolation"].value
                          )
         if self.options["invert_x"]:
             ax.invert_xaxis()
@@ -1074,28 +1154,23 @@ class DataSet:
         if self.options["en_cbar_label"]:
             cbar.set_label(quantity_label, rotation=270, labelpad=30)
 
-        self.properties["img_ax"] = ax
+        self.img_properties["img_ax"] = ax
 
     def plot_refs(self):
-        if not plt.fignum_exists(self.properties["fig_num"]):
+        if not plt.fignum_exists(self.img_properties["fig_num"]):
             return
 
-        plt.figure(num=self.properties["fig_num"])
-        img_ax = self.properties["img_ax"]
+        plt.figure(num=self.img_properties["fig_num"])
+        img_ax = self.img_properties["img_ax"]
 
-        ref_y_coords = []
-        for ref_meas in self.measurements["refs"]:
-            ref_y_coords.append(ref_meas.position[1])
-        ref_x_coords = [ref.position[0] for ref in self.measurements["refs"]]
+        ref_x_coords, ref_y_coords = [], []
+        for ref in self.measurements["refs"]:
+            ref_x_coords.append(ref.position[0])
+            ref_y_coords.append(ref.position[1])
 
-        if len(self.measurements["refs"]) == 1:
-            plt_fun = img_ax.scatter
-        else:
-            plt_fun = img_ax.plot
+        plt_fun = img_ax.scatter
 
-        plt_fun([min(ref_x_coords), max(ref_x_coords)],
-                [min(ref_y_coords), max(ref_y_coords)],
-                color="black", linewidth=1)
+        plt_fun(ref_x_coords, ref_y_coords, color="black", linewidth=0.4)
 
     def plot_line(self, line_coords=None, direction=Direction.Horizontal, **kwargs):
         if line_coords is None:
@@ -1112,7 +1187,7 @@ class DataSet:
             fig_num = "y-slice"
             plt.xlabel("y (mm)")
 
-        fig_num += "_" + self.properties["quantity_label"].replace(" ", "_")
+        fig_num += "_" + self.img_properties["quantity_label"].replace(" ", "_")
         plt.figure(fig_num)
         plt.title(f"Line scan ({direction.name})")
         plt.ylabel(self.properties["quantity_label"])
@@ -1203,7 +1278,7 @@ if __name__ == '__main__':
     options = {
         # "cbar_lim": (0.52, 0.60), # 2.5 THz
         # "cbar_lim": (0.64, 0.66), # img4
-        "cbar_lim": (0.60, 0.66),  # img5 1.5 THz
+        "cbar_lim": (0.60, 0.66), # img5 1.5 THz
         # "cbar_lim": (0.55, 0.62), # img5 2.0 THz
         "plot_range": slice(30, 650),
         "ref_pos": (10.0, 0.0),
@@ -1246,7 +1321,7 @@ if __name__ == '__main__':
     # dataset.average_area((25, -10), (48, 3), label="7") # img4
     # dataset.average_area((62, -10), (83, 3), label="8") # img4
     dataset.average_area((30, -10), (40, -3.5), label="12.1")  # img5
-    dataset.average_area((23, 2), (28, 4), label="12.2")  # img5
+    dataset.average_area((23, 2), (28, 4), label="12.2") # img5
 
     # img 1
     #dataset.average_area((4, 8), (20, 13), label="8")

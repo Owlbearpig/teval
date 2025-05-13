@@ -18,15 +18,17 @@ def do_fft(data_td):
     return array([freqs, data_fd]).T
 
 
-def do_ifft(data_fd):
+def do_ifft(data_fd, out_len=None):
     f_axis, y_fd = data_fd[:, 0].real, data_fd[:, 1]
 
-    y_td = irfft(np.conj(y_fd))
+    y_td = irfft(np.conj(y_fd), n=out_len)
     df = np.mean(np.diff(f_axis))
     n = len(y_td)
     t = np.arange(0, n) / (n * df)
 
-    return array([t, y_td]).T
+    data_td = array([t, y_td]).T
+
+    return data_td
 
 
 def unwrap(data_fd):
@@ -96,44 +98,43 @@ def zero_pad(data_td, length=100):
     return array([new_t, new_y]).T
 
 
-def window(data_td, win_len=None, win_start=None, shift=None, en_plot=False, slope=0.15):
+def window(data_td, win_width=None, win_start=None, shift=None, en_plot=False, slope=0.15):
     t, y = data_td[:, 0], data_td[:, 1]
     t -= t[0]
-    pulse_width = 10  # ps
+    default_width = 10  # ps
     dt = np.mean(np.diff(t))
 
-    if win_len is None:
-        win_len = int(pulse_width / dt)
+    if win_width is None:
+        win_width = int(default_width / dt)
     else:
-        win_len = int(win_len / dt)
+        win_width = int(win_width / dt)
 
-    if win_len > len(y):
-        win_len = len(y)
+    if win_width > len(y):
+        win_width = len(y)
 
     if win_start is None:
         win_center = np.argmax(np.abs(y))
-        win_start = win_center - int(win_len / 2)
+        win_start = win_center - int(win_width / 2)
     else:
         win_start = int(win_start / dt)
 
+    window_arr = signal.windows.tukey(win_width, slope)
+    window_mask = np.zeros(len(y))
+    window_mask[:win_width] = window_arr
+
+    window_mask = np.roll(window_mask, win_start)
     if win_start < 0:
-        win_start = 0
-
-    pre_pad = np.zeros(win_start)
-    window_arr = signal.windows.tukey(win_len, slope)
-    post_pad = np.zeros(len(y) - win_len - win_start)
-
-    window_arr = np.concatenate((pre_pad, window_arr, post_pad))
+        window_mask[len(y)+win_start:] = 0
 
     if shift is not None:
-        window_arr = np.roll(window_arr, int(shift / dt))
+        window_mask = np.roll(window_mask, int(shift / dt))
 
-    y_win = y * window_arr
+    y_win = y * window_mask
 
     if en_plot:
         plt.figure("Windowing")
         plt.plot(t, y, label="Sam. before windowing")
-        plt.plot(t, np.max(np.abs(y)) * window_arr, label="Window")
+        plt.plot(t, np.max(np.abs(y)) * window_mask, label="Window")
         plt.plot(t, y_win, label="Sam. after windowing")
         plt.xlabel("Time (ps)")
         plt.ylabel("Amplitude (nA)")
