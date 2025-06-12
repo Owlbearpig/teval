@@ -25,7 +25,11 @@ from datetime import datetime
 from tqdm import tqdm
 
 """
+TODO: 
+How are measurements mapped when multiple measurements are performed at the same x-y coordinates? 
+
 ideas: add teralyzer evaluation (time consuming)
+- Add plt_show here
 
 """
 
@@ -93,6 +97,12 @@ class QuantityEnum(Enum):
     PeakCnt = Quantity("Peak Cnt")
     TransmissionAmp = Quantity("Amplitude Transmission", domain=Domain.FrequencyDomain)
 
+class LogLevel(Enum):
+    info = logging.INFO
+    debug = logging.DEBUG
+    warning = logging.WARNING
+    error = logging.ERROR
+    critical = logging.CRITICAL
 
 class DataSet:
     plotted_ref = False
@@ -142,7 +152,8 @@ class DataSet:
         if options_ is None:
             options_ = {}
 
-        default_options = {"result_dir": consts.result_dir,
+        default_options = {"log_level": LogLevel.info,
+                           "result_dir": consts.result_dir,
                            "excluded_areas": None,
                            "one2onesub": False,
                            "cbar_lim": (None, None),
@@ -174,8 +185,7 @@ class DataSet:
         self.options["rcParams"]["savefig.directory"] = self.options["result_dir"]
         mpl.rcParams.update(self.options["rcParams"])
 
-        # TODO add loglevel as an option
-        logging.basicConfig(level=logging.WARNING)
+        logging.basicConfig(level=self.options["log_level"].value)
 
     def _read_data_dir(self):
         glob = self.data_path.glob("**/*.txt")
@@ -235,7 +245,7 @@ class DataSet:
                                          sorted(all_measurements, key=lambda x: x.identifier)],
                                         range(len(all_measurements))))
 
-        self._build_cache(all_measurements)
+        self._fill_cache(all_measurements)
 
         self._sort_measurements(all_measurements)
 
@@ -317,8 +327,12 @@ class DataSet:
                 if amp > threshold * max_amp:
                     refs_.append(meas)
 
-            logging.warning(f"No suitable refs found. Check ref_pos option or ref_threshold.")
             logging.info(f"Using max amplitude measurements as ref. (Threshold: {threshold})")
+
+        if not refs_:
+            logging.warning(f"No suitable refs found. Check ref_pos option or ref_threshold.")
+
+        logging.info("###\n")
 
         self.measurements["refs"] = tuple(refs_)
 
@@ -419,7 +433,7 @@ class DataSet:
         else:
             return meas_td, meas_fd
 
-    def _build_cache(self, all_measurements):
+    def _fill_cache(self, all_measurements):
         cache_path = Path(self.data_path / "_cache")
         cache_path.mkdir(parents=True, exist_ok=True)
 
@@ -438,7 +452,7 @@ class DataSet:
             data_td = np.zeros(td_cache_shape, dtype=y_td.dtype)
             data_fd = np.zeros(fd_cache_shape, dtype=y_fd.dtype)
 
-            for i, meas in enumerate(all_measurements):
+            for i, meas in enumerate(all_measurements): # TODO add progress bar
                 if i % 100 == 0:
                     logging.info(f"Reading files. {round(100 * i / len(all_measurements), 2)} %")
                 idx = self.cache["id_map"][meas.identifier]
@@ -974,10 +988,16 @@ class DataSet:
         # correction
         # ref_angle_arr -= 2*np.pi*self.freq_axis[f_idx]*(ref_zero_crossing/1000)
 
-        max_diff = np.max(np.diff(ref_zero_crossing))
-        logging.info(f"Largest jump: {np.round(max_diff, 2)} fs")
+        max_diff_0x = np.max(np.diff(ref_zero_crossing))
+        logging.info(f"Largest jump: {np.round(max_diff_0x, 2)} fs")
         max_diff = np.max(np.diff(ref_angle_arr))
         logging.info(f"Largest phase jump: {np.round(max_diff, 2)} rad")
+
+        avg_amp_change = np.mean(np.abs(np.diff(ref_ampl_arr)))
+        max_amp_change = np.max(np.diff(ref_ampl_arr))
+
+        logging.info(f"Largest amplitude change: {np.round(max_amp_change, 2)} (Arb. u.)")
+        logging.info(f"Mean absolute amplitude change: {np.round(avg_amp_change, 2)} (Arb. u.)")
         logging.info(f"Measurement interval: {np.round(meas_interval * 60, 2)} min.")
         logging.info(f"Period: {np.round(period, 2)}±{np.round(period_std, 2)} min.")
 
@@ -1018,6 +1038,24 @@ class DataSet:
 
         if plt.fignum_exists(self.img_properties["fig_num"]):
             self.plot_refs()
+
+    def plot_frequency_noise(self):
+        ref_meas_set = self.measurements["refs"]
+        freq_axis = self.freq_axis
+
+        ampl_arr_db = np.zeros((len(ref_meas_set), len(freq_axis)))
+        for i, ref in enumerate(ref_meas_set):
+            ref_td = self.get_data(ref)
+            ref_fd = do_fft(ref_td)
+            ampl_arr_db[i] = 20*np.log10(np.abs(ref_fd[:, 1]))
+
+
+        plt.figure("Amplitude noise")
+        #plt.title(f"Amplitude of reference measurement at {selected_freq_} THz")
+        plt.plot(freq_axis, np.std(ampl_arr_db, axis=0))
+
+        plt.xlabel(f"Frequency (THz)")
+        plt.ylabel("Amplitude (dB)")
 
     def plot_climate(self, log_file, quantity=ClimateQuantity.Temperature):
         def read_log_file(log_file_):

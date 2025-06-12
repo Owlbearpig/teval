@@ -391,12 +391,17 @@ def smooth(x, window_len=11, window='hanning'):
 
 def local_minima_1d(arr, en_plot=True):
     win_len = 25
-    smooth_arr = smooth(arr, win_len)
+    if len(arr) > 100:
+        step = 10
+        smooth_arr = smooth(arr, win_len)
+    else:
+        step = 1
+        smooth_arr = arr
 
     minima_idx_smooth = []
-    for i in range(10, len(smooth_arr) - 10):
-        prev_is_down_slope = all(np.diff(smooth_arr[i - 10:i]) < 0)
-        next_is_up_slope = all(np.diff(smooth_arr[i:i+10]) > 0)
+    for i in range(step, len(smooth_arr) - step):
+        prev_is_down_slope = all(np.diff(smooth_arr[i - step:i]) < 0)
+        next_is_up_slope = all(np.diff(smooth_arr[i:i+step]) > 0)
         if smooth_arr[i - 1] > smooth_arr[i] < smooth_arr[i + 1]:
             if prev_is_down_slope and next_is_up_slope:
                 minima_idx_smooth.append(i)
