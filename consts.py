@@ -12,7 +12,7 @@ if 'posix' in os_name:
     # result_dir = Path(r"/home/alex/MEGA/AG/Projects") / project_ / "IPHT_2" / "Results" / "Initial_characterization"
     result_dir = Path(r"/home/alex/MEGA/AG/Projects") / project_ / "Furtwangen" / "Results" / "Vanadium"
 else:
-    result_dir = Path(r"E:\Mega\AG\Projects") / project_
+    result_dir = Path(r"C:\Users\alexj\Mega\AG\Projects") / project_
 
 # physical constants
 THz = 1e12

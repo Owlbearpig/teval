@@ -1,6 +1,6 @@
 import matplotlib as mpl
 import numpy as np
-from teval.consts import os_name, Path, result_dir
+from consts import os_name, Path, result_dir
 import matplotlib.pyplot as plt
 import matplotlib.font_manager
 
@@ -28,7 +28,7 @@ def mpl_style_params(new_rcparams=None):
     # Then, "ALWAYS use sans-serif fonts"
     # rcParams['font.family'] = "sans-serif"
     rcParams.update({
-        "text.usetex": True,  # Use LaTeX to write all text
+        "text.usetex": False,  # Use LaTeX to write all text
         # "pgf.texsystem": "pdflatex",
         "font.family": "serif",  # Use serif fonts
         # "font.serif": ["Computer Modern"],  # Ensure it matches LaTeX default font

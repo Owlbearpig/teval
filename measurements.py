@@ -5,7 +5,7 @@ from copy import deepcopy
 import numpy as np
 from datetime import datetime
 from numpy.fft import fft, fftfreq, rfft, rfftfreq
-from teval.functions import window
+from functions import window
 from enum import Enum
 
 

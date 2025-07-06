@@ -12,17 +12,18 @@ import matplotlib as mpl
 from numpy import array
 from pathlib import Path
 import numpy as np
-from teval.functions import unwrap, plt_show, remove_offset, window, local_minima_1d
-from teval.measurements import MeasurementType, Measurement, Domain
-from teval.mpl_settings import mpl_style_params
-from teval.functions import phase_correction, do_fft, f_axis_idx_map
-from teval.consts import c_thz, plot_range2
+from functions import unwrap, plt_show, remove_offset, window, local_minima_1d
+from measurements import MeasurementType, Measurement, Domain
+from mpl_settings import mpl_style_params
+from functions import phase_correction, do_fft, f_axis_idx_map
+from consts import c_thz, plot_range2
 from scipy.optimize import shgo
 from scipy.special import erfc
 from enum import Enum
 import logging
 from datetime import datetime
 from tqdm import tqdm
+
 
 """
 TODO: 
@@ -413,7 +414,12 @@ class DataSet:
         if self.options["fig_label"]:
             fig_num += self.options["fig_label"] + " "
         fig_num += str(self.selected_quantity)
-        fig_num += en_freq_label * f" {int(self.selected_freq * 1e3)}GHz"
+
+        if isinstance(self.selected_freq, tuple):
+            f1, f2 = int(self.selected_freq[0] * 1e3), int(self.selected_freq[1] * 1e3)
+            fig_num += en_freq_label * f" {f1}-{f2} GHz"
+        else:
+            fig_num += en_freq_label * f" {int(self.selected_freq * 1e3)}GHz"
         fig_num = fig_num.replace(" ", "_")
 
         self.img_properties["fig_num"] = fig_num
