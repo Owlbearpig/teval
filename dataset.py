@@ -500,7 +500,7 @@ class DataSet:
 
     def _power(self, meas_):
         if not isinstance(self.selected_freq, tuple):
-            self.selected_freq = (1.0, 1.2)
+            self.select_freq((1.0, 1.2))
             logging.warning(f"Selected_freq must be a tuple. Using default range ({self.selected_freq})")
 
         freq_range_ = self.selected_freq
@@ -509,10 +509,10 @@ class DataSet:
         ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.FrequencyDomain)
         sam_fd = meas_.get_data_fd()
 
-        power_val_sam = np.sum(np.abs(sam_fd[freq_slice, 1])) / np.sum(freq_slice)
-        power_val_ref = np.sum(np.abs(ref_fd[freq_slice, 1])) / np.sum(freq_slice)
+        power_val_sam = np.sum(np.abs(sam_fd[freq_slice, 1])**2)
+        power_val_ref = np.sum(np.abs(ref_fd[freq_slice, 1])**2)
 
-        return (power_val_sam / power_val_ref) ** 2
+        return power_val_sam / power_val_ref
 
     def _meas_time_delta(self, meas_):
         ref_meas = self.find_nearest_ref(meas_)
@@ -947,12 +947,12 @@ class DataSet:
         if not plt.fignum_exists("Amplitude transmission"):
             plt.figure("Amplitude transmission")
             plt.xlabel("Frequency (THz)")
-            plt.ylabel(r"Amplitude transmission ($\%$)")
-            plt.ylim((-5, 110))
+            plt.ylabel(r"Amplitude transmission")
+            plt.ylim((-0.05, 1.10))
         else:
             plt.figure("Amplitude transmission")
 
-        plt.plot(freq_axis[plot_range], 100 * (1/absorb[plot_range]), label=label)
+        plt.plot(freq_axis[plot_range], (1/absorb[plot_range]), label=label)
 
         plt.figure("Absorbance")
         plt.plot(freq_axis[plot_range], 20 * np.log10(absorb[plot_range]), label=label)
