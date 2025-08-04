@@ -12,15 +12,6 @@ options = {
 # leaf coated
 # "cbar_lim": (0.5, 0.9), # leaf img0 1.7 THz
 
-# filter paper
-# "cbar_lim": (6.5, 7.6), # filter paper uncoated p2p
-# "cbar_lim": (0.8, 1.9), # filter paper coated p2p
-# "cbar_lim": (0.75, 0.90), # 1.5 THz
-# "cbar_lim": (0.86, 0.96), # 1.0 THz
-# "cbar_lim": (0.80, 0.88), # 1.5 THz
-# "cbar_lim": (0.69, 0.79), # 1.45-1.55 THz
-# "cbar_lim": (0.79, 0.86), # 1.0-1.2 THz
-
 # filter paper coated
 # "cbar_lim": (1.00, 1.7), # p2p
 #"cbar_lim": (0.05, 0.13), # 1.5 THz
@@ -36,13 +27,8 @@ options = {
 }
 
 # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Leaf/img2", options) # uncoated
-# dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Leaf_coated/img0", options) # coated
+dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Leaf_coated/img0", options) # coated
 
-# dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0", options)
-# dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img0", options)
-
-# dataset = DataSet(r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0", options)
-dataset = DataSet(r"C:\Users\alexj\Data\IPHT2\Filter_coated\img2", options)
 
 dataset.select_freq((1.45, 1.55))
 # dataset.select_quantity(QuantityEnum.P2P)

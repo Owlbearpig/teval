@@ -3,7 +3,6 @@ import os
 import random
 from copy import deepcopy
 from functools import partial
-
 import consts
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
