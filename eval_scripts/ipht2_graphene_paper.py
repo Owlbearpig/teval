@@ -1,7 +1,6 @@
 from dataset import DataSet, Dist, QuantityEnum, plt_show, PixelInterpolation
 
 options = {
-
 # filter paper
 "cbar_lim": (6.5, 7.6), # filter paper uncoated p2p img0
 # "cbar_lim": (4.9, 5.9), # filter paper uncoated p2p img1
@@ -24,28 +23,25 @@ options = {
 "ref_pos": (4.0, None),
 "dist_func": Dist.Position,
 "img_title": "",
+    "sample_properties": {"d": 150, "layers": 1},
 }
 
 # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0", options)
 # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img0", options)
 
-dataset = DataSet(r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0", options)
+# dataset = DataSet(r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0", options)
+dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0", options)
+
 #dataset = DataSet(r"C:\Users\alexj\Data\IPHT2\Filter_coated\img2", options)
 
 # dataset.select_freq((1.45, 1.55))
-dataset.select_quantity(QuantityEnum.P2P)
-# dataset.select_quantity(QuantityEnum.Power)
-# dataset.plot_point((60, 10), apply_window=False)
+# dataset.select_quantity(QuantityEnum.P2P)
+dataset.plot_point((60, 10))
 # dataset.plot_point((64, 12), apply_window=False)
 
-#dataset.plot_point((69, 32), apply_window=False)
-#dataset.plot_point((68, 17), apply_window=False)
-#dataset.plot_point((57, 38), apply_window=False)
-#dataset.plot_point((57, 13), apply_window=False)
-
-dataset.plot_image()
+# dataset.plot_image()
 # dataset.plot_refs()
 
-# dataset.average_area((19, -2), (32, 5), label="2") # img3
+# dataset.average_area((19, -2), (32, 5), label="2")
 
 plt_show(en_save=False)

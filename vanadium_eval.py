@@ -18,7 +18,7 @@ options = {
 # "cbar_lim": (0.64, 0.67), # img6 1.5 THz
 # "cbar_lim": (0.66, 0.67), # img7 1.5 THz
 # "cbar_lim": (0.65, 0.70), # img8 1.5 THz
-"cbar_lim": (0.60, 0.68), # img9 1.5 THz
+# "cbar_lim": (0.60, 0.68), # img9 1.5 THz
 
 
 "plot_range": slice(30, 1000),
@@ -40,18 +40,18 @@ options = {
 # dataset = DataSet(r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img5", options)
 # dataset = DataSet(r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img6", options)
 # dataset = DataSet(r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img7", options)
-# dataset = DataSet(r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img8", options)
-dataset = DataSet(r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img9", options)
+dataset = DataSet(r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img8", options)
+# dataset = DataSet(r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img9", options)
 
 dataset.select_freq(1.5)
-# dataset.select_quantity(QuantityEnum.P2P)
-dataset.select_quantity(QuantityEnum.TransmissionAmp)
+dataset.select_quantity(QuantityEnum.P2P)
+# dataset.select_quantity(QuantityEnum.TransmissionAmp)
 
 # test
 #dataset.plot_frequency_noise()
 #plt_show()
 #exit()
-dataset.plot_system_stability()
+# dataset.plot_system_stability()
 #plt_show()
 #exit()
 dataset.plot_image()

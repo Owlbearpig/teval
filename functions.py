@@ -41,8 +41,8 @@ def unwrap(data_fd):
     return array([data_fd[:, 0].real, np.unwrap(np.angle(y))]).T
 
 
-def phase_correction(data_fd, disable=False, fit_range=None, en_plot=False, extrapolate=False, rewrap=False,
-                     ret_fd=False, both=False):
+def phase_correction(data_fd, disable=False, fit_range=None, en_plot=False,
+                     extrapolate=False, rewrap=False, ret_fd=False, both=False):
     freqs = data_fd[:, 0].real
 
     if disable:
@@ -98,7 +98,7 @@ def zero_pad(data_td, length=100):
     return array([new_t, new_y]).T
 
 
-def window(data_td, win_width=None, win_start=None, shift=None, en_plot=False, slope=0.15):
+def window(data_td, win_width=None, win_start=None, shift=None, en_plot=False, slope=0.15, **k):
     t, y = data_td[:, 0], data_td[:, 1]
     t -= t[0]
     default_width = 10  # ps

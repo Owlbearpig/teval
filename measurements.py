@@ -1,11 +1,10 @@
 import logging
 import re
 import matplotlib.pyplot as plt
-from copy import deepcopy
 import numpy as np
 from datetime import datetime
 from numpy.fft import fft, fftfreq, rfft, rfftfreq
-from functions import window
+from functions import window, remove_offset
 from enum import Enum
 
 
@@ -79,8 +78,7 @@ class Measurement:
 
     def get_data_td(self):
         if self._data_td is None:
-            data = np.loadtxt(self.filepath)
-            self._data_td = data
+            self._data_td = np.loadtxt(self.filepath)
 
         return self._data_td
 
