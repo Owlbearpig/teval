@@ -14,7 +14,7 @@ from functions import unwrap, plt_show, window, local_minima_1d
 from measurements import MeasurementType, Measurement, Domain
 from mpl_settings import mpl_style_params
 from functions import phase_correction, do_fft, f_axis_idx_map, remove_offset
-from consts import c_thz
+from consts import c_thz, eps0
 from scipy.optimize import shgo
 from scipy.special import erfc
 from enum import Enum
@@ -574,16 +574,24 @@ class DataSet:
 
         return len(peaks_idx)
 
+    def _transmission(self, meas_, freq_range_=None):
+        ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.FrequencyDomain)
+
+        sam_fd = self.get_data(meas_, Domain.FrequencyDomain)
+
+        if freq_range_ is not None:
+            t = sam_fd[:, 1] / ref_fd[:, 1]
+        else:
+            freq_idx = f_axis_idx_map(ref_fd[:, 0].real, self.selected_freq)
+            t = sam_fd[freq_idx, 1] / ref_fd[freq_idx, 1]
+
+
+        return t
+
     def _amplitude_transmission(self, meas_):
-        ref_td, ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Both)
-        freq_idx = f_axis_idx_map(ref_fd[:, 0].real, self.selected_freq)
+        t = self._transmission(meas_)
 
-        sam_td, sam_fd = self.get_data(meas_, Domain.Both)
-
-        power_val_sam = np.abs(sam_fd[freq_idx, 1])
-        power_val_ref = np.abs(ref_fd[freq_idx, 1])
-
-        return (power_val_sam / power_val_ref)[0]
+        return np.abs(t)[0]
 
     def _cmplx_refractive_idx(self, meas_, freq_range=None):
         if self.options["sample_properties"]["default_values"]:
@@ -639,18 +647,23 @@ class DataSet:
             return alph
 
     def _conductivity(self, meas_, freq_range=None):
-        t_sub = self.sub_dataset # get t_sub
-        t_sam = self.get_t # same func as line above
-        n_sub = 1.4 # get n_sub
-        eps0 = 3 # import eps0
-        d_film = 3 # get d_film from options dict
-        # c_thz: check units
+        sub_pnt = (70, 10)
+        sub_meas = self.sub_dataset.get_measurement(*sub_pnt)
+        t_sub = self.sub_dataset._transmission(sub_meas, 1)
+        t_sam = self._transmission(meas_, 1)
+        n_sub = self.sub_dataset._cmplx_refractive_idx(sub_meas, freq_range=(0, 10))["refr_idx"]
 
-        sigma = (1/d_film) * eps0 * c_thz * (1 + n_sub) * (t_sub - t_sam) / t_sam
+        d_film = self.options["sample_properties"]["d_film"]
+
+        # [eps0] = second * Siemens, [c_thz] = um / ps, [1/d_film] = 1/um -> conversion: 1e12 * 1e-2 (S/cm)
+        sigma = 1e10 * (1/d_film) * eps0 * c_thz * (1 + n_sub) * (t_sub/t_sam - 1)
 
         return sigma
 
     def _calc_grid_vals(self):
+        if self.grid_vals is not None:
+            return self.grid_vals
+
         grid_vals = self._empty_grid.copy()
         sam_meas = self.measurements["sams"]
 
@@ -661,7 +674,7 @@ class DataSet:
 
             grid_vals[x_idx, y_idx] = self.grid_func(measurement)
 
-        return grid_vals.real
+        return grid_vals
 
     def select_quantity(self, quantity, label=""):
         if isinstance(quantity, Quantity):
@@ -825,8 +838,6 @@ class DataSet:
             return amp_interpol, phi_interpol
 
     def average_area(self, pnt_bot_left, pnt_top_right, label="A1"):
-        if not plt.fignum_exists(num=self.img_properties["fig_num"]):
-            return
         assert (pnt_bot_left[0] <= pnt_top_right[0]) and (pnt_bot_left[1] <= pnt_top_right[1])
 
         x_coords, y_coords = self.img_properties["x_coords"], self.img_properties["y_coords"]
@@ -838,6 +849,9 @@ class DataSet:
         x0_idx, y0_idx = self._coords_to_idx(*pnt_bot_left)
         x1_idx, y1_idx = self._coords_to_idx(*pnt_top_right)
 
+        if self.grid_vals is None:
+            self._calc_grid_vals()
+
         grid_vals = self.grid_vals[x0_idx:x1_idx+1, y0_idx:y1_idx+1]
         mean_val, std_val = np.mean(grid_vals), np.std(grid_vals)
 
@@ -847,6 +861,10 @@ class DataSet:
         meas_cnt = grid_vals.shape[0] * grid_vals.shape[1]
         logging.info(f"Average value of area {label} ({meas_cnt} measurements): {mean_s}±{std_s}")
         logging.info(f"Min: {min_s}, max: {max_s}\n")
+
+        ret = {"mean": mean_val, "std": std_val, "min": min_s, "max": max_s}
+        if not plt.fignum_exists(num=self.img_properties["fig_num"]):
+            return ret
 
         plt.figure(self.img_properties["fig_num"])
         ax = self.img_properties["img_ax"]
@@ -893,6 +911,8 @@ class DataSet:
         # add label
         ax.text(t_x, t_y, label,
                 color="black", fontsize=18, ha="center", va="center", fontweight="bold")
+
+        return ret
 
 
     def plot_point(self, point=None, en_td_plot=True, **kwargs_):
@@ -1012,6 +1032,15 @@ class DataSet:
         plt.plot(freq_axis[plot_range], alph)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Absorption coefficient (1/cm)")
+
+        if self.sub_dataset is not None:
+            sigma = self._conductivity(sam_meas)
+
+            plt.figure("Conductivity")
+            plt.plot(freq_axis[plot_range], sigma[plot_range].real, label="Real part")
+            plt.plot(freq_axis[plot_range], sigma[plot_range].imag, label="Imaginary part")
+            plt.xlabel("Frequency (THz)")
+            plt.ylabel("Conductivity (S/cm)")
 
         return ret
 
@@ -1184,16 +1213,14 @@ class DataSet:
             w0, w1 = int((img_extent[0] - info["extent"][0]) / dx), int((img_extent[1] - info["extent"][0]) / dx)
             h0, h1 = int((img_extent[2] - info["extent"][2]) / dy), int((img_extent[3] - info["extent"][2]) / dy)
 
-        grid_vals = self._calc_grid_vals()
+        self.grid_vals = self._calc_grid_vals()
 
-        grid_vals = grid_vals[w0:w1, h0:h1]
-
-        grid_vals = self._exclude_pixels(grid_vals)
+        shown_grid_vals = self.grid_vals.real
+        shown_grid_vals = shown_grid_vals[w0:w1, h0:h1]
+        shown_grid_vals = self._exclude_pixels(shown_grid_vals)
 
         if self.options["log_scale"]:
-            grid_vals = np.log10(grid_vals)
-
-        self.grid_vals = grid_vals
+            shown_grid_vals = np.log10(shown_grid_vals)
 
         fig = plt.figure(self.img_properties["fig_num"])
         ax = fig.add_subplot(111)
@@ -1204,9 +1231,9 @@ class DataSet:
 
         cbar_min, cbar_max = self.options["cbar_lim"]
         if cbar_min is None:
-            cbar_min = np.min(grid_vals)
+            cbar_min = np.min(shown_grid_vals)
         if cbar_max is None:
-            cbar_max = np.max(grid_vals)
+            cbar_max = np.max(shown_grid_vals)
 
         if self.options["log_scale"]:
             self.options["cbar_min"] = np.log10(cbar_min)
@@ -1216,7 +1243,7 @@ class DataSet:
                        float(img_extent[1] + self.img_properties["dx"] / 2),
                        float(img_extent[2] - self.img_properties["dy"] / 2),
                        float(img_extent[3] + self.img_properties["dy"] / 2))
-        img_ = ax.imshow(grid_vals.transpose((1, 0)),
+        img_ = ax.imshow(shown_grid_vals.transpose((1, 0)),
                          vmin=cbar_min, vmax=cbar_max,
                          origin="lower",
                          cmap=plt.get_cmap(self.options["color_map"]),

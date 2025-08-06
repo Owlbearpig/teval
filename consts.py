@@ -1,5 +1,6 @@
 from pathlib import Path
 from scipy.constants import c as c0
+from scipy.constants import epsilon_0 as eps0
 from numpy import pi
 import os
 from os import name as os_name
