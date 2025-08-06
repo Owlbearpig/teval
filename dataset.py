@@ -13,7 +13,7 @@ import numpy as np
 from functions import unwrap, plt_show, window, local_minima_1d
 from measurements import MeasurementType, Measurement, Domain
 from mpl_settings import mpl_style_params
-from functions import phase_correction, do_fft, f_axis_idx_map
+from functions import phase_correction, do_fft, f_axis_idx_map, remove_offset
 from consts import c_thz
 from scipy.optimize import shgo
 from scipy.special import erfc
@@ -99,6 +99,7 @@ class QuantityEnum(Enum):
     PeakCnt = Quantity("Peak Cnt")
     TransmissionAmp = Quantity("Amplitude Transmission", domain=Domain.FrequencyDomain)
     RefractiveIdx = Quantity("Refractive idx", domain=Domain.FrequencyDomain)
+    AbsorptionCoe = Quantity("Absorption coe", domain=Domain.FrequencyDomain)
 
 
 class LogLevel(Enum):
@@ -112,7 +113,7 @@ class DataSet:
     plotted_ref = False
     noise_floor = None
     time_axis = None
-    cache = {}
+    raw_data_cache = {}
     options = {}
     img_properties = {}
     selected_freq = None
@@ -120,6 +121,7 @@ class DataSet:
     grid_func = None
     grid_vals = None
     measurements = {"refs": (), "sams": (), "all": ()}
+    sub_dataset = None
 
     def __init__(self, data_path=None, options_=None):
         self.data_path = Path(data_path)
@@ -173,21 +175,28 @@ class DataSet:
                            "ref_pos": (None, None),
                            "ref_threshold": 0.95,
                            "dist_func": Dist.Position,
-                           "pp_opt": {"window_opt": {"enabled": True, "win_width": None, "win_start": None,
-                                                     "shift": None, "en_plot": False, "slope": 0.15},
-                                      "remove_dc": True,
+                           "pp_opt": {
+                               "window_opt": {"enabled": False, "win_width": None, "win_start": None,
+                                              "shift": None, "en_plot": False, "slope": 0.15},
+                               "remove_dc": True,
                                       },
                            "sample_properties": {"d": 1000, "layers": 1, "default_values": True},
                            }
-        default_options.update(options_)
-
         if "sample_properties" in options_:
             default_options["sample_properties"]["default_values"] = False
 
-        if not isinstance(default_options["result_dir"], Path):
-            default_options["result_dir"] = Path(default_options["result_dir"])
+        def check_values(new_options, default):
+            for k in default:
+                if k not in new_options:
+                    new_options[k] = default[k]
+                elif isinstance(default[k], dict) and isinstance(new_options[k], dict):
+                    check_values(new_options[k], default[k])
+        check_values(options_, default_options)
 
-        self.options.update(default_options)
+        if not isinstance(options_["result_dir"], Path):
+            options_["result_dir"] = Path(options_["result_dir"])
+
+        self.options.update(options_)
         self._apply_options()
 
     def _apply_options(self):
@@ -239,10 +248,10 @@ class DataSet:
 
     def _generate_coord_map(self, all_measurements_):
         # keys are of the format "xy" where x, y are the positions cut/0 filled to 3 dec. places
-        self.cache["coord_map"] = {}
+        self.raw_data_cache["coord_map"] = {}
         for meas in all_measurements_:
             key = "".join([f"{val:.3f}" for val in meas.position])
-            self.cache["coord_map"][key] = meas
+            self.raw_data_cache["coord_map"][key] = meas
 
     def _parse_measurements(self):
         if not isinstance(self.data_path, Path):
@@ -250,9 +259,9 @@ class DataSet:
 
         all_measurements = self._read_data_dir()
 
-        self.cache["id_map"] = dict(zip([id_.identifier for id_ in
-                                         sorted(all_measurements, key=lambda x: x.identifier)],
-                                        range(len(all_measurements))))
+        self.raw_data_cache["id_map"] = dict(zip([id_.identifier for id_ in
+                                                  sorted(all_measurements, key=lambda x: x.identifier)],
+                                                 range(len(all_measurements))))
 
         self._fill_cache(all_measurements)
 
@@ -263,7 +272,7 @@ class DataSet:
         first_measurement = self.measurements["all"][0]
         last_measurement = self.measurements["all"][-1]
 
-        logging.info(f"Dataset contains {len(all_measurements)} measurements.")
+        logging.info(f"Dataset contains {len(all_measurements)} measurements")
         logging.info(f"First measurement at: {first_measurement.meas_time}, "
                      f"last measurement: {last_measurement.meas_time}")
         time_del = last_measurement.meas_time - first_measurement.meas_time
@@ -341,17 +350,17 @@ class DataSet:
         if not refs_:
             logging.warning(f"No suitable refs found. Check ref_pos option or ref_threshold.")
 
-        logging.info("###\n")
+        logging.info("######################################################\n")
 
         self.measurements["refs"] = tuple(refs_)
 
     def _set_img_properties(self):
-        first_meas = self.measurements["all"][0]
-        sample_data_td = first_meas.get_data_td()
+        # first_meas = self.measurements["all"][0]
+        # sample_data_td = first_meas.get_data_td()
+        sample_data_td, sample_data_fd = self.get_data(self.measurements["all"][0], domain=Domain.Both)
         samples = int(sample_data_td.shape[0])
-        self.time_axis = sample_data_td[:, 0].real
 
-        sample_data_fd = first_meas.get_data_fd()
+        self.time_axis = sample_data_td[:, 0].real
         self.freq_axis = sample_data_fd[:, 0].real
 
         dt = np.mean(np.diff(self.time_axis))
@@ -436,28 +445,32 @@ class DataSet:
         self.selected_freq = freq
         self._update_fig_num()
 
-    def _pre_process(self, data_td):
-        if self.pp_opt["remove_dc"]:
-            data_td = remove_offset(data_td)
-            self.offset_corrected = True
+    def _pre_process(self, meas_):
+        pp_opt = self.options["pp_opt"]
 
-        if self.pp_opt["window_opt"]["enabled"]:
-            data_td = window(data_td, **self.pp_opt["window_opt"])
-            self.window_applied = True
+        idx = self.raw_data_cache["id_map"][meas_.identifier]
+        data_td = self.raw_data_cache["td"][idx]
+
+        if pp_opt["remove_dc"]:
+            data_td = remove_offset(data_td)
+
+        if pp_opt["window_opt"]["enabled"]:
+            data_td = window(data_td, **pp_opt["window_opt"])
 
         return data_td
 
     def get_data(self, meas, domain=None):
         if domain is None:
             domain = Domain.TimeDomain
-        idx = self.cache["id_map"][meas.identifier]
-        # TODO HOW TO IMPLEMENT PREPROC???
+
+        data_td = self._pre_process(meas)
+
         if domain == Domain.TimeDomain:
-            return array(self.cache["td"][idx])
+            return data_td
         elif domain == Domain.FrequencyDomain:
-            return array(self.cache["fd"][idx])
+            return do_fft(data_td)
         else:
-            return array(self.cache["td"][idx]), array(self.cache["fd"][idx])
+            return data_td, do_fft(data_td)
 
     def _fill_cache(self, all_measurements):
         cache_path = Path(self.data_path / "_cache")
@@ -481,13 +494,13 @@ class DataSet:
             iter_ = tqdm(enumerate(all_measurements), total=len(all_measurements),
                          desc="Saving as npy", colour="green")
             for i, meas in iter_:
-                idx = self.cache["id_map"][meas.identifier]
+                idx = self.raw_data_cache["id_map"][meas.identifier]
                 data_td[idx], data_fd[idx] = meas.get_data_td(), meas.get_data_fd()
 
             np.save(str(cache_path / "_td_cache.npy"), data_td)
             np.save(str(cache_path / "_fd_cache.npy"), data_fd)
 
-        self.cache["td"], self.cache["fd"] = data_td, data_fd
+        self.raw_data_cache["td"], self.raw_data_cache["fd"] = data_td, data_fd
 
     def _get_ref_argmax(self, measurement_):
         ref_td = self.get_data(measurement_)
@@ -526,8 +539,7 @@ class DataSet:
         freq_range_ = self.selected_freq
         freq_slice = (freq_range_[0] < self.freq_axis) * (self.freq_axis < freq_range_[1])
 
-        ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.FrequencyDomain)
-        sam_fd = meas_.get_data_fd()
+        ref_fd, sam_fd = self.get_ref_data(point=meas_.position, domain=Domain.Both)
 
         power_val_sam = np.sum(np.abs(sam_fd[freq_slice, 1])**2)
         power_val_ref = np.sum(np.abs(ref_fd[freq_slice, 1])**2)
@@ -566,9 +578,7 @@ class DataSet:
         ref_td, ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Both)
         freq_idx = f_axis_idx_map(ref_fd[:, 0].real, self.selected_freq)
 
-        sam_td = self.get_data(meas_, Domain.TimeDomain)
-        sam_td = window(sam_td)
-        sam_fd = do_fft(sam_td)
+        sam_td, sam_fd = self.get_data(meas_, Domain.Both)
 
         power_val_sam = np.abs(sam_fd[freq_idx, 1])
         power_val_ref = np.abs(ref_fd[freq_idx, 1])
@@ -592,31 +602,53 @@ class DataSet:
         freq_axis = freq_axis[freq_idx]
         omega = 2 * np.pi * freq_axis
 
-        phi_ref = phase_correction(ref_fd)
-        phi_sam = phase_correction(sam_fd)
+        phi_ref_corrected = phase_correction(ref_fd)
+        phi_sam_corrected = phase_correction(sam_fd)
 
-        phi =  phi_sam[freq_idx, 1] - phi_ref[freq_idx, 1]
+        phi =  phi_sam_corrected[freq_idx, 1] - phi_ref_corrected[freq_idx, 1]
 
         n = 1 + phi * c_thz / (omega * d)
+        n[n < 0] = 1
         kap = -c_thz * np.log(np.abs(sam_fd[freq_idx, 1] / ref_fd[freq_idx, 1]) * (1 + n) ** 2 / (4 * n)) / (omega * d)
 
-        return np.array([freq_axis, n + 1j * kap]).T
+        ret = {"freq_axis": freq_axis,
+               "refr_idx": n + 1j * kap,
+               "phi_ref_corr": phi_ref_corrected,
+               "phi_sam_corr": phi_sam_corrected,
+               }
+
+        return ret
 
     def _refractive_idx(self, meas_):
-        return np.real(self._cmplx_refractive_idx(meas_))[:, 1]
+        return np.mean(np.real(self._cmplx_refractive_idx(meas_)["refr_idx"]))
 
     def _extinction_coe(self, meas_):
-        return np.imag(self._cmplx_refractive_idx(meas_))[:, 1]
+        return np.mean(np.imag(self._cmplx_refractive_idx(meas_)["refr_idx"]))
 
     def _absorption_coef(self, meas_, freq_range=None):
-        n_cmplx = self._cmplx_refractive_idx(meas_, freq_range)
-        freq_axis = n_cmplx[:, 0].real
-        kap = n_cmplx[:, 1].imag
+        n_cmplx_res = self._cmplx_refractive_idx(meas_, freq_range)
+        freq_axis = n_cmplx_res["freq_axis"]
+        kap = n_cmplx_res["refr_idx"].imag
 
         omega = 2 * np.pi * freq_axis
         alph = (1 / 1e-4) * 2 * kap * omega / c_thz # 1/cm
 
-        return alph
+        if freq_range is None:
+            return np.mean(alph)
+        else:
+            return alph
+
+    def _conductivity(self, meas_, freq_range=None):
+        t_sub = self.sub_dataset # get t_sub
+        t_sam = self.get_t # same func as line above
+        n_sub = 1.4 # get n_sub
+        eps0 = 3 # import eps0
+        d_film = 3 # get d_film from options dict
+        # c_thz: check units
+
+        sigma = (1/d_film) * eps0 * c_thz * (1 + n_sub) * (t_sub - t_sam) / t_sam
+
+        return sigma
 
     def _calc_grid_vals(self):
         grid_vals = self._empty_grid.copy()
@@ -642,6 +674,10 @@ class DataSet:
             self.grid_func = quantity
             self.selected_quantity = Quantity(label, func=quantity)
 
+        single_freq_quant = [QuantityEnum.RefractiveIdx, QuantityEnum.AbsorptionCoe]
+        if quantity in single_freq_quant and isinstance(self.selected_freq, tuple):
+            logging.warning(f"Selected_freq is a tuple. Averaging range ({self.selected_freq})")
+
         func_map = {QuantityEnum.P2P: self._p2p,
                     QuantityEnum.Power: self._power,
                     QuantityEnum.MeasTimeDeltaRef2Sam: self._meas_time_delta,
@@ -651,6 +687,7 @@ class DataSet:
                     QuantityEnum.PeakCnt: partial(self._simple_peak_cnt, threshold=2.5),
                     QuantityEnum.TransmissionAmp: self._amplitude_transmission,
                     QuantityEnum.RefractiveIdx: self._refractive_idx,
+                    QuantityEnum.AbsorptionCoe: self._absorption_coef,
                     }
 
         if quantity in func_map:
@@ -664,7 +701,7 @@ class DataSet:
         pnt = (x, y)
         try:
             key = "".join([f"{val:.3f}" for val in pnt])
-            closest_meas = self.cache["coord_map"][key]
+            closest_meas = self.raw_data_cache["coord_map"][key]
         except KeyError:
             closest_meas, best_fit_val = None, np.inf
             for meas in meas_list:
@@ -702,7 +739,7 @@ class DataSet:
 
     def get_line(self, x=None, y=None):
         if x is None and y is None:
-            return
+            return None
 
         x_coords, y_coords = self.img_properties["x_coords"], self.img_properties["y_coords"]
 
@@ -893,7 +930,14 @@ class DataSet:
         absorb = np.abs(1/t)
 
         f_min, f_max = freq_axis[plot_range][0], freq_axis[plot_range][-1]
-        n_cmplx = self._cmplx_refractive_idx(sam_meas, (f_min, f_max))
+        simple_eval_res = self._cmplx_refractive_idx(sam_meas, (f_min, f_max))
+        phi_ref_corrected = simple_eval_res["phi_ref_corr"]
+        phi_sam_corrected = simple_eval_res["phi_sam_corr"]
+
+        plt.figure("phase slope")
+        plt.plot(phi_sam_corrected[:-1, 0], np.diff(phi_sam_corrected[:, 1]))
+
+        refr_idx = simple_eval_res["refr_idx"]
         alph = self._absorption_coef(sam_meas, (f_min, f_max))
 
         ret = {"freq_axis": freq_axis, "absorb": absorb, "t": t, "ref_fd": ref_fd, "sam_fd": sam_fd}
@@ -907,8 +951,10 @@ class DataSet:
             plt.xlabel("Frequency (THz)")
             plt.ylabel("Amplitude (dB)")
 
-            plt.figure("Uncorrected phase")
-            plt.plot(freq_axis[plot_range], phi_ref[plot_range, 1], label="Reference")
+            plt.figure("Phase")
+            plt.plot(freq_axis[plot_range], phi_ref[plot_range, 1], label="Reference", ls="dashed")
+            plt.plot(phi_ref_corrected[:, 0], phi_ref_corrected[:, 1],
+                     label="Reference (corrected)")
             plt.xlabel("Frequency (THz)")
             plt.ylabel("Phase (rad)")
 
@@ -930,7 +976,9 @@ class DataSet:
         plt.plot(freq_axis[plot_range], y_db, label=label)
 
         plt.figure("Phase")
-        plt.plot(freq_axis[plot_range], phi_sam[plot_range, 1], label=label)
+        plt.plot(freq_axis[plot_range], phi_sam[plot_range, 1], label=label, ls="dashed")
+        plt.plot(phi_sam_corrected[plot_range, 0], phi_sam_corrected[plot_range, 1],
+                 label=label + " (corrected)")
 
         plt.figure("Time domain")
         td_label = label
@@ -955,8 +1003,8 @@ class DataSet:
         plt.ylabel("Absorbance (dB)")
 
         plt.figure("Refractive index")
-        plt.plot(freq_axis[plot_range], n_cmplx[:, 1].real, label="Real part")
-        plt.plot(freq_axis[plot_range], n_cmplx[:, 1].imag, label="Imaginary part")
+        plt.plot(freq_axis[plot_range], refr_idx.real, label="Real part")
+        plt.plot(freq_axis[plot_range], refr_idx.imag, label="Imaginary part")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Refractive index")
 
@@ -982,8 +1030,7 @@ class DataSet:
         meas_times = np.array([(ref.meas_time - t0).total_seconds() / 3600 for ref in meas_set])
 
         for i, ref in enumerate(meas_set):
-            ref_td = self.get_data(ref)
-            ref_fd = do_fft(ref_td)
+            ref_td, ref_fd = self.get_data(ref, domain=Domain.Both)
 
             ref_zero_crossing[i] = self._get_zero_crossing(ref)
             ref_ampl_arr[i] = np.sum(np.abs(ref_fd[f_idx, 1]))
@@ -1057,8 +1104,7 @@ class DataSet:
 
         ampl_arr_db = np.zeros((len(ref_meas_set), len(freq_axis)))
         for i, ref in enumerate(ref_meas_set):
-            ref_td = self.get_data(ref)
-            ref_fd = do_fft(ref_td)
+            ref_td, ref_fd = self.get_data(ref, domain=Domain.Both)
             ampl_arr_db[i] = 20*np.log10(np.abs(ref_fd[:, 1]))
 
 
@@ -1313,6 +1359,11 @@ class DataSet:
         plt.text(pos_axis[0], 0.04, s)
 
         return opt_res
+
+    def add_sub_dataset(self, dataset):
+        self.sub_dataset = dataset
+
+
 
     def plot_jitter(self):
         x = [25, 50, 100, 200]

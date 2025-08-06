@@ -2,7 +2,8 @@ from dataset import DataSet, Dist, QuantityEnum, plt_show, PixelInterpolation
 
 options = {
 # filter paper
-"cbar_lim": (6.5, 7.6), # filter paper uncoated p2p img0
+# "cbar_lim": (6.5, 7.6), # filter paper uncoated p2p img0
+"cbar_lim": (1.15, 1.45), # filter paper uncoated p2p img0
 # "cbar_lim": (4.9, 5.9), # filter paper uncoated p2p img1
 # "cbar_lim": (0.8, 1.9), # filter paper coated p2p
 # "cbar_lim": (0.75, 0.90), # 1.5 THz
@@ -23,20 +24,23 @@ options = {
 "ref_pos": (4.0, None),
 "dist_func": Dist.Position,
 "img_title": "",
-    "sample_properties": {"d": 150, "layers": 1},
+    "sample_properties": {"d": 0.1, "layers": 1},
+    "pp_opt": {"window_opt": {"enabled": True}}
 }
 
 # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0", options)
-# dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img0", options)
+dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img0", options)
 
 # dataset = DataSet(r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0", options)
-dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0", options)
+# dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0", options)
 
 #dataset = DataSet(r"C:\Users\alexj\Data\IPHT2\Filter_coated\img2", options)
 
-# dataset.select_freq((1.45, 1.55))
-# dataset.select_quantity(QuantityEnum.P2P)
+dataset.select_freq(1.45)
+dataset.select_quantity(QuantityEnum.RefractiveIdx)
 dataset.plot_point((60, 10))
+dataset.plot_point((61, 10))
+dataset.plot_point((65, 10))
 # dataset.plot_point((64, 12), apply_window=False)
 
 # dataset.plot_image()
