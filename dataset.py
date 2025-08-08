@@ -32,7 +32,8 @@ ideas: add teralyzer evaluation (time consuming)
 - interactive imshow plots
 
 # units:
-[l] = um, [t] = ps, [alpha] = 1/cm (absorption coeff.), 
+[l] = um, [t] = ps, [alpha] = 1/cm (absorption coeff.), [sigma] = S/cm, [eps0] = Siemens * second
+
 """
 
 class PixelInterpolation(Enum):
@@ -110,20 +111,20 @@ class LogLevel(Enum):
     critical = logging.CRITICAL
 
 class DataSet:
-    plotted_ref = False
-    noise_floor = None
-    time_axis = None
-    raw_data_cache = {}
-    options = {}
-    img_properties = {}
-    selected_freq = None
-    selected_quantity = None
-    grid_func = None
-    grid_vals = None
-    measurements = {"refs": (), "sams": (), "all": ()}
-    sub_dataset = None
-
     def __init__(self, data_path=None, options_=None):
+        self.plotted_ref = False
+        self.noise_floor = None
+        self.time_axis = None
+        self.raw_data_cache = {}
+        self.options = {}
+        self.img_properties = {}
+        self.selected_freq = None
+        self.selected_quantity = None
+        self.grid_func = None
+        self.grid_vals = None
+        self.measurements = {"refs": (), "sams": (), "all": ()}
+        self.sub_dataset = None
+
         self.data_path = Path(data_path)
         self._check_path()
 
@@ -171,7 +172,7 @@ class DataSet:
                            "fig_label": "",
                            "img_title": "",
                            "en_cbar_label": False,
-                           "plot_range": slice(15, 900),
+                           "plot_range": slice(0, 900),
                            "ref_pos": (None, None),
                            "ref_threshold": 0.95,
                            "dist_func": Dist.Position,
@@ -179,6 +180,7 @@ class DataSet:
                                "window_opt": {"enabled": False, "win_width": None, "win_start": None,
                                               "shift": None, "en_plot": False, "slope": 0.15},
                                "remove_dc": True,
+                               "dt": 0,
                                       },
                            "sample_properties": {"d": 1000, "layers": 1, "default_values": True},
                            }
@@ -602,6 +604,13 @@ class DataSet:
         sam_fd = self.get_data(meas_, Domain.FrequencyDomain)
 
         freq_axis = ref_fd[:, 0].real
+
+        phi_ref = np.unwrap(np.angle(ref_fd[:, 1]))
+        phi_sam = np.unwrap(np.angle(sam_fd[:, 1]))
+
+        phi = - (phi_sam - phi_ref)
+        phi_corrected = phase_correction(freq_axis, phi)
+
         if freq_range is None:
             freq_idx = f_axis_idx_map(freq_axis, freq_range=self.selected_freq)
         else:
@@ -609,20 +618,21 @@ class DataSet:
 
         freq_axis = freq_axis[freq_idx]
         omega = 2 * np.pi * freq_axis
+        phi_ref = phi_ref[freq_idx]
+        phi_sam = phi_sam[freq_idx]
+        phi = phi[freq_idx]
+        phi_corrected = phi_corrected[freq_idx]
 
-        phi_ref_corrected = phase_correction(ref_fd)
-        phi_sam_corrected = phase_correction(sam_fd)
+        # phi =  - (phi_sam_corrected[freq_idx, 1] - phi_ref_corrected[freq_idx, 1])
 
-        phi =  phi_sam_corrected[freq_idx, 1] - phi_ref_corrected[freq_idx, 1]
-
-        n = 1 + phi * c_thz / (omega * d)
+        n = 1 + phi_corrected * c_thz / (omega * d)
         n[n < 0] = 1
         kap = -c_thz * np.log(np.abs(sam_fd[freq_idx, 1] / ref_fd[freq_idx, 1]) * (1 + n) ** 2 / (4 * n)) / (omega * d)
+        # kap = -c_thz * np.log(np.abs(sam_fd[freq_idx, 1] / ref_fd[freq_idx, 1])) / (omega * d)
 
         ret = {"freq_axis": freq_axis,
                "refr_idx": n + 1j * kap,
-               "phi_ref_corr": phi_ref_corrected,
-               "phi_sam_corr": phi_sam_corrected,
+               "phi_ref": phi_ref, "phi_sam": phi_sam, "phi": phi, "phi_corrected": phi_corrected,
                }
 
         return ret
@@ -651,12 +661,21 @@ class DataSet:
         sub_meas = self.sub_dataset.get_measurement(*sub_pnt)
         t_sub = self.sub_dataset._transmission(sub_meas, 1)
         t_sam = self._transmission(meas_, 1)
-        n_sub = self.sub_dataset._cmplx_refractive_idx(sub_meas, freq_range=(0, 10))["refr_idx"]
+        sub_res = self.sub_dataset._cmplx_refractive_idx(sub_meas, freq_range=(0, 10))
 
+        f_axis = sub_res["freq_axis"]
+        n_sub = sub_res["refr_idx"]
         d_film = self.options["sample_properties"]["d_film"]
 
         # [eps0] = second * Siemens, [c_thz] = um / ps, [1/d_film] = 1/um -> conversion: 1e12 * 1e-2 (S/cm)
         sigma = 1e10 * (1/d_film) * eps0 * c_thz * (1 + n_sub) * (t_sub/t_sam - 1)
+
+        # phase correction, [dt] = fs
+        dt = self.options["pp_opt"]["dt"]
+        dt *= 1e-3
+        sigma *= np.exp(-1j*dt*2*np.pi*f_axis)
+
+        sigma.imag *= 1
 
         return sigma
 
@@ -945,17 +964,13 @@ class DataSet:
 
         freq_axis = ref_fd[:, 0].real
 
-        phi_ref, phi_sam = unwrap(ref_fd), unwrap(sam_fd)
         t = sam_fd[:, 1] / ref_fd[:, 1]
         absorb = np.abs(1/t)
 
         f_min, f_max = freq_axis[plot_range][0], freq_axis[plot_range][-1]
         simple_eval_res = self._cmplx_refractive_idx(sam_meas, (f_min, f_max))
-        phi_ref_corrected = simple_eval_res["phi_ref_corr"]
-        phi_sam_corrected = simple_eval_res["phi_sam_corr"]
-
-        plt.figure("phase slope")
-        plt.plot(phi_sam_corrected[:-1, 0], np.diff(phi_sam_corrected[:, 1]))
+        phi = simple_eval_res["phi"]
+        phi_corrected = simple_eval_res["phi_corrected"]
 
         refr_idx = simple_eval_res["refr_idx"]
         alph = self._absorption_coef(sam_meas, (f_min, f_max))
@@ -970,13 +985,6 @@ class DataSet:
             plt.plot(freq_axis[plot_range], y_db, label="Reference")
             plt.xlabel("Frequency (THz)")
             plt.ylabel("Amplitude (dB)")
-
-            plt.figure("Phase")
-            plt.plot(freq_axis[plot_range], phi_ref[plot_range, 1], label="Reference", ls="dashed")
-            plt.plot(phi_ref_corrected[:, 0], phi_ref_corrected[:, 1],
-                     label="Reference (corrected)")
-            plt.xlabel("Frequency (THz)")
-            plt.ylabel("Phase (rad)")
 
             plt.figure("Time domain")
             plt.plot(ref_td[:, 0], ref_td[:, 1], label="Reference")
@@ -996,9 +1004,13 @@ class DataSet:
         plt.plot(freq_axis[plot_range], y_db, label=label)
 
         plt.figure("Phase")
-        plt.plot(freq_axis[plot_range], phi_sam[plot_range, 1], label=label, ls="dashed")
-        plt.plot(phi_sam_corrected[plot_range, 0], phi_sam_corrected[plot_range, 1],
-                 label=label + " (corrected)")
+        plt.plot(freq_axis[plot_range], phi, label="Original", ls="dashed")
+        plt.plot(freq_axis[plot_range], phi_corrected, label="Corrected")
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("Phase (rad)")
+
+        plt.figure("phase slope")
+        plt.plot(freq_axis[plot_range][:-1], np.diff(phi_corrected))
 
         plt.figure("Time domain")
         td_label = label
@@ -1039,6 +1051,7 @@ class DataSet:
             plt.figure("Conductivity")
             plt.plot(freq_axis[plot_range], sigma[plot_range].real, label="Real part")
             plt.plot(freq_axis[plot_range], sigma[plot_range].imag, label="Imaginary part")
+            plt.ylim((-1e3, 1.5e5))
             plt.xlabel("Frequency (THz)")
             plt.ylabel("Conductivity (S/cm)")
 
@@ -1387,8 +1400,8 @@ class DataSet:
 
         return opt_res
 
-    def add_sub_dataset(self, dataset):
-        self.sub_dataset = dataset
+    def link_sub_dataset(self, dataset_):
+        self.sub_dataset = dataset_
 
 
 

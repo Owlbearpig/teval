@@ -13,7 +13,7 @@ def do_fft(data_td):
     data_td = nan_to_num(data_td)
 
     dt = float(np.mean(np.diff(data_td[:, 0])))
-    freqs, data_fd = rfftfreq(n=len(data_td[:, 0]), d=dt), np.conj(rfft(data_td[:, 1]))
+    freqs, data_fd = rfftfreq(n=len(data_td[:, 0]), d=dt), rfft(data_td[:, 1])
 
     return array([freqs, data_fd]).T
 
@@ -41,46 +41,34 @@ def unwrap(data_fd):
     return array([data_fd[:, 0].real, np.unwrap(np.angle(y))]).T
 
 
-def phase_correction(data_fd, disable=False, fit_range=None, en_plot=False,
-                     extrapolate=False, rewrap=False, ret_fd=False, both=False):
-    freqs = data_fd[:, 0].real
-
+def phase_correction(freq_axis_, phi, disable=False, fit_range=None, en_plot=False,
+                     extrapolate=False, rewrap=False):
     if disable:
-        return array([freqs, np.unwrap(np.angle(data_fd[:, 1]))]).T
-
-    phase_unwrapped = unwrap(data_fd)
+        return phi
 
     if fit_range is None:
-        fit_range = [0.5, 0.65]
+        fit_range = [0.5, 1.5]
 
-    fit_slice = (freqs >= fit_range[0]) * (freqs <= fit_range[1])
-    p = np.polyfit(freqs[fit_slice], phase_unwrapped[fit_slice, 1], 1)
+    fit_slice = (freq_axis_ >= fit_range[0]) * (freq_axis_ <= fit_range[1])
+    p = np.polyfit(freq_axis_[fit_slice], phi[fit_slice], 1)
 
-    phase_corrected = phase_unwrapped[:, 1] - p[1].real
+    phi_corrected = phi - p[1].real
 
     if en_plot:
         plt.figure("phase_correction")
-        plt.plot(freqs, phase_unwrapped[:, 1], label="Unwrapped phase")
-        plt.plot(freqs, phase_corrected, label="Shifted phase")
-        # plt.plot(freqs, freqs * p[0].real, label="Lin. fit (slope*freq)")
+        plt.plot(freq_axis_, phi, label="Unwrapped phase")
+        plt.plot(freq_axis_, phi_corrected, label="Shifted phase")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad)")
         plt.legend()
 
     if extrapolate:
-        phase_corrected = p[0].real * freqs
+        phi_corrected = p[0].real * freq_axis_
 
     if rewrap:
-        phase_corrected = np.angle(np.exp(1j * phase_corrected))
+        phi_corrected = np.angle(np.exp(1j * phi_corrected))
 
-    y = np.abs(data_fd[:, 1]) * np.exp(1j * phase_corrected)
-    if both:
-        return do_ifft(array([freqs, y]).T), array([freqs, y]).T
-
-    if ret_fd:
-        return array([freqs, y]).T
-    else:
-        return array([freqs, phase_corrected]).T
+    return phi_corrected
 
 def remove_offset(data_td):
     data_td[:, 1] -= np.mean(data_td[:10, 1])

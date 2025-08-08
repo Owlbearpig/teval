@@ -24,32 +24,32 @@ options = {
 "ref_pos": (4.0, None),
 "dist_func": Dist.Position,
 "img_title": "",
-    "sample_properties": {"d": 150, "layers": 1, "d_film": 0.010},
-    "pp_opt": {"window_opt": {"enabled": True}}
+    "sample_properties": {"d": 150,
+                          "d_film": 0.010,
+                          },
+    "pp_opt": {"window_opt": {"enabled": True, "slope": 0.99},
+               "dt": 55, # dt in fs
+               },
 }
 
-sub_dataset = DataSet(r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0", options)
-dataset = DataSet(r"C:\Users\alexj\Data\IPHT2\Filter_coated\img0", options)
+#sub_dataset = DataSet(r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0", options)
+#dataset = DataSet(r"C:\Users\alexj\Data\IPHT2\Filter_coated\img0", options)
 
-# sub_dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0", options)
-# dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img0", options)
+sub_dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0", options)
+dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img0", options)
 
-dataset.add_sub_dataset(sub_dataset)
+dataset.link_sub_dataset(sub_dataset)
 
-# dataset = DataSet(r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0", options)
-# dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0", options)
+dataset.select_freq(0.55)
+dataset.select_quantity(QuantityEnum.TransmissionAmp)
 
-#dataset = DataSet(r"C:\Users\alexj\Data\IPHT2\Filter_coated\img2", options)
-
-# dataset.select_freq(1.45)
-sub_dataset.select_quantity(QuantityEnum.RefractiveIdx)
-
-dataset.plot_point((60, 10))
+sub_dataset.plot_point((60, 10))
+# sub_dataset.plot_point((70, 10))
 # dataset.plot_point((61, 10))
 # dataset.plot_point((65, 10))
 # dataset.plot_point((64, 12), apply_window=False)
 
-dataset.plot_image()
+# dataset.plot_image()
 # dataset.plot_refs()
 
 # dataset.average_area((19, -2), (32, 5), label="2")
