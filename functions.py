@@ -47,7 +47,7 @@ def phase_correction(freq_axis_, phi, disable=False, fit_range=None, en_plot=Fal
         return phi
 
     if fit_range is None:
-        fit_range = [0.5, 1.5]
+        fit_range = [0.5, 1.50]
 
     fit_slice = (freq_axis_ >= fit_range[0]) * (freq_axis_ <= fit_range[1])
     p = np.polyfit(freq_axis_[fit_slice], phi[fit_slice], 1)

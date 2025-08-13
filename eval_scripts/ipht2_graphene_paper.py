@@ -24,12 +24,15 @@ options = {
 "ref_pos": (4.0, None),
 "dist_func": Dist.Position,
 "img_title": "",
-    "sample_properties": {"d": 150,
-                          "d_film": 0.010,
-                          },
-    "pp_opt": {"window_opt": {"enabled": True, "slope": 0.99},
-               "dt": 55, # dt in fs
-               },
+"sample_properties": {"d": 150,
+                      "d_film": 0.010,
+                      },
+"pp_opt": {"window_opt": {"enabled": True,
+                          "slope": 0.99},
+           },
+"eval_opt": {"dt": 55,  # dt in fs
+             "sub_pnt": (70, 10),
+             },
 }
 
 #sub_dataset = DataSet(r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0", options)

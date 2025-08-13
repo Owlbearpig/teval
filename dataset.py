@@ -595,7 +595,7 @@ class DataSet:
 
         return np.abs(t)[0]
 
-    def _cmplx_refractive_idx(self, meas_, freq_range=None):
+    def _single_layer_eval(self, meas_, freq_range=None):
         if self.options["sample_properties"]["default_values"]:
             logging.warning(f"Using default sample properties: {self.options['sample_properties']}")
 
@@ -638,13 +638,13 @@ class DataSet:
         return ret
 
     def _refractive_idx(self, meas_):
-        return np.mean(np.real(self._cmplx_refractive_idx(meas_)["refr_idx"]))
+        return np.mean(np.real(self._single_layer_eval(meas_)["refr_idx"]))
 
     def _extinction_coe(self, meas_):
-        return np.mean(np.imag(self._cmplx_refractive_idx(meas_)["refr_idx"]))
+        return np.mean(np.imag(self._single_layer_eval(meas_)["refr_idx"]))
 
     def _absorption_coef(self, meas_, freq_range=None):
-        n_cmplx_res = self._cmplx_refractive_idx(meas_, freq_range)
+        n_cmplx_res = self._single_layer_eval(meas_, freq_range)
         freq_axis = n_cmplx_res["freq_axis"]
         kap = n_cmplx_res["refr_idx"].imag
 
@@ -657,11 +657,11 @@ class DataSet:
             return alph
 
     def _conductivity(self, meas_, freq_range=None):
-        sub_pnt = (70, 10)
+        sub_pnt = self.options["eval_opt"]["sub_pnt"]
         sub_meas = self.sub_dataset.get_measurement(*sub_pnt)
+        sub_res = self.sub_dataset._single_layer_eval(sub_meas, freq_range=(0, 10))
         t_sub = self.sub_dataset._transmission(sub_meas, 1)
         t_sam = self._transmission(meas_, 1)
-        sub_res = self.sub_dataset._cmplx_refractive_idx(sub_meas, freq_range=(0, 10))
 
         f_axis = sub_res["freq_axis"]
         n_sub = sub_res["refr_idx"]
@@ -671,7 +671,7 @@ class DataSet:
         sigma = 1e10 * (1/d_film) * eps0 * c_thz * (1 + n_sub) * (t_sub/t_sam - 1)
 
         # phase correction, [dt] = fs
-        dt = self.options["pp_opt"]["dt"]
+        dt = self.options["eval_opt"]["dt"]
         dt *= 1e-3
         sigma *= np.exp(-1j*dt*2*np.pi*f_axis)
 
@@ -968,7 +968,7 @@ class DataSet:
         absorb = np.abs(1/t)
 
         f_min, f_max = freq_axis[plot_range][0], freq_axis[plot_range][-1]
-        simple_eval_res = self._cmplx_refractive_idx(sam_meas, (f_min, f_max))
+        simple_eval_res = self._single_layer_eval(sam_meas, (f_min, f_max))
         phi = simple_eval_res["phi"]
         phi_corrected = simple_eval_res["phi_corrected"]
 
@@ -1051,7 +1051,7 @@ class DataSet:
             plt.figure("Conductivity")
             plt.plot(freq_axis[plot_range], sigma[plot_range].real, label="Real part")
             plt.plot(freq_axis[plot_range], sigma[plot_range].imag, label="Imaginary part")
-            plt.ylim((-1e3, 1.5e5))
+            # plt.ylim((-1e3, 1.5e5))
             plt.xlabel("Frequency (THz)")
             plt.ylabel("Conductivity (S/cm)")
 
