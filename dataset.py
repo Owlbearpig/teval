@@ -6,13 +6,13 @@ import consts
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-import matplotlib as mpl
 from numpy import array
 from pathlib import Path
 import numpy as np
-from functions import unwrap, plt_show, window, local_minima_1d
+from functions import unwrap, window, local_minima_1d
 from measurements import MeasurementType, Measurement, Domain
 from mpl_settings import mpl_style_params
+import matplotlib as mpl
 from functions import phase_correction, do_fft, f_axis_idx_map, remove_offset
 from consts import c_thz, eps0
 from scipy.optimize import shgo
@@ -28,13 +28,15 @@ TODO:
 How are measurements mapped when multiple measurements are performed at the same x-y coordinates? 
 
 ideas: add teralyzer evaluation (time consuming)
-- Add plt_show here
+- Add plt_show here (done, needs testing)
+- Add point in image to show where .plot_point()
 - interactive imshow plots
 
 # units:
 [l] = um, [t] = ps, [alpha] = 1/cm (absorption coeff.), [sigma] = S/cm, [eps0] = Siemens * second
 
 """
+
 
 class PixelInterpolation(Enum):
     # imshow(interpolation=pixel_interpolation)
@@ -162,13 +164,13 @@ class DataSet:
         # some color_map options: ['viridis', 'plasma', 'inferno', 'magma', 'cividis']
         default_options = {"log_level": LogLevel.info,
                            "result_dir": consts.result_dir,
+                           "save_plots": False,
                            "excluded_areas": None,
                            "cbar_lim": (None, None),
                            "log_scale": False,
                            "color_map": "autumn",
                            "invert_x": False, "invert_y": False,
                            "pixel_interpolation": PixelInterpolation.none,
-                           "rcParams": mpl_style_params(),
                            "fig_label": "",
                            "img_title": "",
                            "en_cbar_label": False,
@@ -183,6 +185,17 @@ class DataSet:
                                "dt": 0,
                                       },
                            "sample_properties": {"d": 1000, "layers": 1, "default_values": True},
+                           "shown_plots": {
+                               "Time domain": True,
+                               "Spectrum": True,
+                               "Phase": True,
+                               "Phase slope": False,
+                               "Amplitude transmission": False,
+                               "Absorbance": False,
+                               "Refractive index": False,
+                               "Absorption coefficient": False,
+                               "Conductivity": False,
+                           },
                            }
         if "sample_properties" in options_:
             default_options["sample_properties"]["default_values"] = False
@@ -202,9 +215,9 @@ class DataSet:
         self._apply_options()
 
     def _apply_options(self):
-        self.options["rcParams"]["savefig.directory"] = self.options["result_dir"]
-        mpl.rcParams.update(self.options["rcParams"])
+        new_rc_params = {"savefig.directory": self.options["result_dir"]}
 
+        mpl.rcParams.update(mpl_style_params(new_rc_params))
         logging.basicConfig(level=self.options["log_level"].value)
 
     def _read_data_dir(self):
@@ -1009,7 +1022,7 @@ class DataSet:
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad)")
 
-        plt.figure("phase slope")
+        plt.figure("Phase slope")
         plt.plot(freq_axis[plot_range][:-1], np.diff(phi_corrected))
 
         plt.figure("Time domain")
@@ -1047,8 +1060,9 @@ class DataSet:
 
         if self.sub_dataset is not None:
             sigma = self._conductivity(sam_meas)
-
+            plot_range = slice(30, 550)
             plt.figure("Conductivity")
+            plt.title(label)
             plt.plot(freq_axis[plot_range], sigma[plot_range].real, label="Real part")
             plt.plot(freq_axis[plot_range], sigma[plot_range].imag, label="Imaginary part")
             # plt.ylim((-1e3, 1.5e5))
@@ -1403,7 +1417,46 @@ class DataSet:
     def link_sub_dataset(self, dataset_):
         self.sub_dataset = dataset_
 
+    def save_fig(self, fig_num_, filename=None, **kwargs):
+        save_dir = Path(self.options["result_dir"])
 
+        fig = plt.figure(fig_num_)
+
+        if filename is None:
+            try:
+                filename_s = str(fig.canvas.get_window_title())
+            except AttributeError:
+                filename_s = str(fig.canvas.manager.get_window_title())
+        else:
+            filename_s = str(filename)
+
+        illegal_chars = ["(", ")"]
+        for char in illegal_chars:
+            filename_s = filename_s.replace(char, '')
+        filename_s.replace(" ", "_")
+
+        fig.set_size_inches((12, 9), forward=False)
+        plt.subplots_adjust(wspace=0.3)
+        plt.savefig(save_dir / (filename_s + ".pdf"), bbox_inches='tight', dpi=300, pad_inches=0, **kwargs)
+
+    def plt_show(self):
+        for fig_num in plt.get_fignums():
+            fig = plt.figure(fig_num)
+            fig_label = fig.get_label()
+            for ax in fig.get_axes():
+                h, labels = ax.get_legend_handles_labels()
+                if labels:
+                    ax.legend()
+
+            if self.options["save_plots"]:
+                self.save_fig(fig_num)
+
+            if fig_label in self.options["shown_plots"]:
+                if not self.options["shown_plots"][fig_label]:
+                    logging.info(f"Not showing plot: {fig_label}")
+                    plt.close(fig_num)
+
+        plt.show()
 
     def plot_jitter(self):
         x = [25, 50, 100, 200]
@@ -1516,4 +1569,4 @@ if __name__ == '__main__':
     # dataset.plot_jitter()
     # dataset.plot_climate(r"/home/ftpuser/ftp/Data/Stability/T_RH_sensor_logs/2024-11-20 17-27-58_log.txt", quantity=ClimateQuantity.Temperature)
 
-    plt_show(en_save=False)
+    dataset.plt_show()

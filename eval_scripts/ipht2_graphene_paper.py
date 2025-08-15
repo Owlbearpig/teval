@@ -1,4 +1,4 @@
-from dataset import DataSet, Dist, QuantityEnum, plt_show, PixelInterpolation
+from dataset import DataSet, Dist, QuantityEnum, PixelInterpolation
 
 options = {
 # filter paper
@@ -18,7 +18,17 @@ options = {
 #"cbar_lim": (0.0045, 0.0100), # 1.45 - 1.55 THz
 #"cbar_lim": (0.005, 0.02), # 1.00 - 1.20 THz
 #"cbar_lim": (0.003, 0.013), # 1.00 - 1.20 THz img2
-
+"shown_plots": {
+    "Time domain": False,
+    "Spectrum": False,
+    "Phase": False,
+    "Phase slope": False,
+    "Amplitude transmission": False,
+    "Absorbance": False,
+    "Refractive index": False,
+    "Absorption coefficient": False,
+    "Conductivity": False,
+},
 "pixel_interpolation": PixelInterpolation.none,
 "plot_range": slice(30, 650),
 "ref_pos": (4.0, None),
@@ -57,4 +67,4 @@ sub_dataset.plot_point((60, 10))
 
 # dataset.average_area((19, -2), (32, 5), label="2")
 
-plt_show(en_save=False)
+dataset.plt_show()

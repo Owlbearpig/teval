@@ -1,4 +1,4 @@
-from dataset import DataSet, Dist, QuantityEnum, plt_show, PixelInterpolation
+from dataset import DataSet, Dist, QuantityEnum, PixelInterpolation
 import logging
 
 options = {
@@ -24,9 +24,20 @@ options = {
 "pp_opt": {"window_opt": {"enabled": True,
                           "slope": 0.99},
            },
-"eval_opt": {"dt": 0, # dt in fs
+"eval_opt": {"dt": -5, # dt in fs
              "sub_pnt": (50, 10),
              },
+"shown_plots": {
+    "Time domain": False,
+    "Spectrum": False,
+    "Phase": False,
+    "Phase slope": True,
+    "Amplitude transmission": False,
+    "Absorbance": False,
+    "Refractive index": False,
+    "Absorption coefficient": False,
+    "Conductivity": True,
+},
 }
 
 dataset = DataSet(r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img8", options)
@@ -52,6 +63,9 @@ dataset.plot_refs()
 # img 9
 dataset.average_area((45, 5), (57, 19), label="Sub. 2")
 dataset.average_area((75, 5), (80, 19), label="9")
-dataset.plot_point((78, 10))
+# dataset.plot_point((72, 10))
+# dataset.plot_point((82, 10))
+dataset.plot_point((82, 9.5))
 
-plt_show(en_save=False)
+dataset.plt_show()
+

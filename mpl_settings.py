@@ -1,8 +1,8 @@
-import matplotlib as mpl
 import numpy as np
 from consts import os_name, Path, result_dir
 import matplotlib.pyplot as plt
 import matplotlib.font_manager
+import matplotlib as mpl
 
 
 def mpl_style_params(new_rcparams=None):
