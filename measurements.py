@@ -9,8 +9,8 @@ from enum import Enum
 
 
 class Domain(Enum):
-    TimeDomain = 0
-    FrequencyDomain = 1
+    Time = 0
+    Frequency = 1
     Both = 2
 
 

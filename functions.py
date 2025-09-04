@@ -9,6 +9,13 @@ from numpy.fft import irfft, rfft, rfftfreq
 from scipy import signal
 
 
+def check_dict_values(new_options, default):
+    for k in default:
+        if k not in new_options:
+            new_options[k] = default[k]
+        elif isinstance(default[k], dict) and isinstance(new_options[k], dict):
+            check_dict_values(new_options[k], default[k])
+
 def do_fft(data_td):
     data_td = nan_to_num(data_td)
 
@@ -120,10 +127,15 @@ def window(data_td, win_width=None, win_start=None, shift=None, en_plot=False, s
     y_win = y * window_mask
 
     if en_plot:
-        plt.figure("Windowing")
-        plt.plot(t, y, label="Sam. before windowing")
+        if "fig_label" in k:
+            fig_label = f"_{k['fig_label']}"
+        else:
+            fig_label = ""
+
+        plt.figure("Window" + fig_label)
+        plt.plot(t, y, label="Before windowing")
         plt.plot(t, np.max(np.abs(y)) * window_mask, label="Window")
-        plt.plot(t, y_win, label="Sam. after windowing")
+        plt.plot(t, y_win, label="After windowing")
         plt.xlabel("Time (ps)")
         plt.ylabel("Amplitude (nA)")
         plt.legend()
