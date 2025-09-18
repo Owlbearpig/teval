@@ -7,7 +7,15 @@ from numpy import array, nan_to_num, zeros, pi
 from consts import c0, THz
 from numpy.fft import irfft, rfft, rfftfreq
 from scipy import signal
+from enum import Enum
+from matplotlib._pylab_helpers import Gcf
 
+class WindowTypes(Enum):
+    tukey = signal.windows.tukey
+    triang = signal.windows.triang
+    hamming = signal.windows.hamming
+    hann = signal.windows.hann
+    gaussian = signal.windows.gaussian
 
 def check_dict_values(new_options, default):
     for k in default:
@@ -113,7 +121,9 @@ def window(data_td, win_width=None, win_start=None, shift=None, en_plot=False, s
     else:
         win_start = int(win_start / dt)
 
-    window_arr = signal.windows.tukey(win_width, slope)
+    window_function = k["type"]
+
+    window_arr = window_function(win_width, slope)
     window_mask = np.zeros(len(y))
     window_mask[:win_width] = window_arr
 

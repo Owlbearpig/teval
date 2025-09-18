@@ -9,12 +9,12 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from numpy import array
 from pathlib import Path
 import numpy as np
-from functions import unwrap, window, local_minima_1d, check_dict_values
+from functions import unwrap, window, local_minima_1d, check_dict_values, WindowTypes
 from measurements import MeasurementType, Measurement, Domain
 from mpl_settings import mpl_style_params
 import matplotlib as mpl
 from functions import phase_correction, do_fft, f_axis_idx_map, remove_offset
-from consts import c_thz, eps0
+from consts import c_thz, eps0_thz
 from scipy.optimize import shgo
 from scipy.special import erfc
 from enum import Enum
@@ -24,17 +24,22 @@ from tqdm import tqdm
 
 
 """
-TODO: 
-How are measurements mapped when multiple measurements are performed at the same x-y coordinates? 
+TODOs: 
+- How are measurements mapped when multiple measurements are performed at the same x-y coordinates?
+- Setting cbar lims sucks... set lims based on area min max?
+- Fix runtime / use cache for t calc?
+- window function (fuctions.py): allow negative values (wrap around) + fix plot (clipping)
+- Logging is messy, also fix log levels and RuntimeWarnings
+- freq_range variable in transmission function (and other functions?)
 
-ideas: add teralyzer evaluation (time consuming)
+New ideas: add teralyzer evaluation (time consuming)
 - Add plt_show here (done, needs testing)
 - Add point in image to show where .plot_point()
 - interactive imshow plots
 
 # units:
-[l] = um, [t] = ps, [alpha] = 1/cm (absorption coeff.), [sigma] = S/cm, [eps0] = Siemens * second
-
+[l] = um, [t] = ps, [alpha] = 1/cm (absorption coeff.), [sigma] = S/cm, [eps0] = Siemens * ps,
+[f] = THz (1/ps)
 """
 
 
@@ -188,11 +193,16 @@ class DataSet:
                            "dist_func": Dist.Position,
                            "pp_opt": {
                                "window_opt": {"enabled": False, "win_width": None, "win_start": None,
-                                              "shift": None, "slope": 0.15, "en_plot": False, },
+                                              "shift": None, "slope": 0.15, "en_plot": False,
+                                              "type": WindowTypes.tukey},
                                "remove_dc": True,
                                "dt": 0,
                                       },
                            "sample_properties": {"d": 1000, "layers": 1, "default_values": True},
+                           "eval_opt": {"dt": 0,  # dt in fs
+                                        "sub_pnt": (0, 0),
+                                        "fit_range": (0.50, 2.20),
+                                        },
                            "shown_plots": {
                                "Window": True,
                                "Time domain": True,
@@ -705,18 +715,24 @@ class DataSet:
         else:
             return alph
 
-    def _conductivity(self, meas_):
+    def _eval_sub(self):
         sub_pnt = self.options["eval_opt"]["sub_pnt"]
         sub_meas = self.sub_dataset.get_measurement(*sub_pnt)
         sub_res = self.sub_dataset.single_layer_eval(sub_meas, freq_range=(0, 10))
-        t_sub = self.sub_dataset.transmission(sub_meas, 1)
+        sub_res["t_sub"] = self.sub_dataset.transmission(sub_meas, 1)
+
+        return sub_res
+
+    def _conductivity(self, meas_):
+        sub_res = self._eval_sub()
         t_sam = self.transmission(meas_, 1)
 
         n_sub = sub_res["refr_idx"]
+        t_sub = sub_res["t_sub"]
         d_film = self.options["sample_properties"]["d_film"]
 
-        # [eps0] = second * Siemens, [c_thz] = um / ps, [1/d_film] = 1/um -> conversion: 1e12 * 1e-2 (S/cm)
-        sigma = 1e10 * (1/d_film) * eps0 * c_thz * (1 + n_sub) * (t_sub/t_sam - 1)
+        # [eps0_thz] = ps * Siemens / um, [c_thz] = um / ps, [1/d_film] = 1/um -> conversion: 1e4 (S/cm)
+        sigma = 1e4 * (1/d_film) * eps0_thz * c_thz * (1 + n_sub) * (t_sub/t_sam - 1)
 
         # phase correction, [dt] = fs
         dt = self.options["eval_opt"]["dt"]
@@ -1011,6 +1027,10 @@ class DataSet:
             sam_meas = self.get_measurement(*point)
         ref_meas = self.find_nearest_ref(sam_meas)
 
+        logging.info(f"Plotting point {point}")
+        logging.info(f"Reference measurement: {ref_meas}")
+        logging.info(f"Sample measurement: {sam_meas}")
+
         # TODO redo window plotting
         if self.options["shown_plots"]["Window"]:
             self.options["pp_opt"]["window_opt"]["en_plot"] = True
@@ -1112,7 +1132,7 @@ class DataSet:
 
         if self.sub_dataset is not None:
             sigma = self._conductivity(sam_meas)
-            plot_range = slice(30, 550)
+            # plot_range = slice(30, 550)
             plt.figure("Conductivity")
             plt.title(label)
             plt.plot(freq_axis[plot_range], sigma[plot_range].real, label="Real part")
@@ -1477,6 +1497,14 @@ class DataSet:
 
     def link_sub_dataset(self, dataset_):
         self.sub_dataset = dataset_
+
+    def _is_figure_open(self, num):
+        # not used
+        for fig_num in plt.get_fignums():
+            fig = plt.figure(fig_num)
+            if num == fig.get_label():
+                return True
+        return False
 
     def save_fig(self, fig_num_, filename=None, **kwargs):
         save_dir = Path(self.options["result_dir"])

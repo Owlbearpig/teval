@@ -18,7 +18,4 @@ else:
 # physical constants
 THz = 1e12
 c_thz = c0 * 1e-6  # um / ps -> 1e6 / 1e-12 = 1e-6
-
-# plotting
-plot_range1 = slice(15, 900)
-plot_range2 = slice(15, 900)
+eps0_thz = eps0 * 1e6 # F / m = S / (Hz * m) = Siemens * s / m = 1e12 ps * S / m = 1e6 ps * S / um
