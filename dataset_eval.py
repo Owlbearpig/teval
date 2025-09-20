@@ -1,5 +1,5 @@
 from dataset import DataSet
-from functions import check_dict_values
+from functions import check_dict_values, window
 from scipy.optimize import shgo
 from functools import partial
 import numpy as np
@@ -57,6 +57,25 @@ class DatasetEval(DataSet):
         model_ = sig_cc + sigma_l
 
         return model_.real + 1j * model_.imag
+
+    def _model_1layer(self, freqs, n3_, shift_=0):
+        d = self.options["sample_properties"]["d"]
+        n1 = 1
+        w_ = 2 * np.pi * freqs
+        t_as = 2 * n1 / (n1 + n3_)
+        t_sa = 2 * n3_ / (n1 + n3_)
+        r_as = (n1 - n3_) / (n1 + n3_)
+        r_sa = (n3_ - n1) / (n1 + n3_)
+
+        exp = np.exp(1j * (d * w_ / c_thz) * n3_)
+
+        e_sam = t_as * t_sa * exp / (1 + r_as * r_sa * exp ** 2)
+        e_ref = np.exp(1j * (d * w_ / c_thz))
+        phase_shift = np.exp(1j * shift_ * 1e-3 * w_)
+
+        t = phase_shift * e_sam / e_ref
+
+        return np.nan_to_num(t)
 
     def _model_2layer(self, freq, n_sub, n_film, shift_=0):
         # n_sub += 0.01
@@ -137,23 +156,21 @@ class DatasetEval(DataSet):
                         )
         return opt_res_
 
-    def _opt_fun_ri(self, x_, freq, n_sub_, t_exp_):
-        if x_[0] < 1 or x_[1] < 0:
-            return np.inf
+    def _opt_fun_1layer(self, x_, freq_, t_exp_, bounds_=None, shift=0):
+        if bounds_ is not None:
+            for i, p_ in enumerate(x_):
+                if not (bounds_[i][0] < p_) * (p_ < bounds_[i][1]):
+                    return np.inf
 
-        n_film_ = x_[0] + 1j * x_[1]
+        n = x_[0] + 1j * x_[1]
+        t_mod = self._model_1layer(freq_, n, shift_=shift)
 
-        t_mod = self._model_2layer(freq, n_sub=n_sub_, n_film=n_film_)
+        abs_loss = (np.abs(t_mod) - np.abs(t_exp_)) ** 2
+        ang_loss = (np.angle(t_mod) - np.angle(t_exp_)) ** 2
 
-        mag = (np.abs(t_mod) - np.abs(t_exp_))**2
-        ang = (np.angle(t_mod) - np.angle(t_exp_))**2
+        return abs_loss + ang_loss
 
-        # real_part = (t_mod.real - t_exp_.real) ** 2
-        # imag_part = (t_mod.imag - t_exp_.imag) ** 2
-
-        return mag + ang
-
-    def _fit_refractive_index(self, t_exp_, sub_res):
+    def _fit_2layer(self, t_exp_, n_sub_):
         min_kwargs = {"method": "Nelder-Mead",
                       "options": {
                           "maxev": np.inf,
@@ -175,13 +192,13 @@ class DatasetEval(DataSet):
         }
 
         f0, f1 = self.options["eval_opt"]["fit_range"]
-        freq_mask = (f0 <= self.freq_axis) * (self.freq_axis < f1)
+        freq_mask = (f0 <= self.freq_axis) * (self.freq_axis <= f1)
 
         n_opt = np.zeros_like(self.freq_axis, dtype=complex)
         for f_idx in np.arange(len(self.freq_axis))[freq_mask]:
-            args_ = (self.freq_axis[f_idx], sub_res["refr_idx"][f_idx], t_exp_[f_idx])
+            args_ = (self.freq_axis[f_idx], n_sub_[f_idx], t_exp_[f_idx])
 
-            opt_res_ = shgo(self._opt_fun_ri,
+            opt_res_ = shgo(self._opt_fun_2layer,
                             bounds=[(1, 10), (1, 10)],
                             minimizer_kwargs=min_kwargs,
                             options=shgo_options,
@@ -192,6 +209,65 @@ class DatasetEval(DataSet):
 
         return n_opt
 
+    def _opt_fun_2layer(self, x_, freq, n_sub_, t_exp_):
+        #if x_[0] < 1 or x_[1] < 0:
+        #    return np.inf
+
+        n_film_ = x_[0] + 1j * x_[1]
+
+        t_mod = self._model_2layer(freq, n_sub=n_sub_, n_film=n_film_)
+
+        mag = (np.abs(t_mod) - np.abs(t_exp_))**2
+        ang = (np.angle(t_mod) - np.angle(t_exp_))**2
+
+        # real_part = (t_mod.real - t_exp_.real) ** 2
+        # imag_part = (t_mod.imag - t_exp_.imag) ** 2
+
+        return mag + ang
+
+    def _fit_1layer(self, t_exp_):
+        bounds = [(3.00, 3.10), (0.0, 0.020)]
+        min_kwargs = {"method": "Nelder-Mead",
+                      "options": {
+                          "maxev": np.inf,
+                          "maxiter": 4000,
+                          "tol": 1e-12,
+                          "fatol": 1e-12,
+                          "xatol": 1e-12,
+                      }
+                      }
+
+        f0, f1 = self.options["eval_opt"]["fit_range"]
+        freq_mask = (f0 <= self.freq_axis) * (self.freq_axis <= f1)
+
+        shift = 15.3 # 15.3  # 30
+        # for d in np.arange(640, 655, 1.0) * 1e-6:
+        for shift in [32]: # [*np.arange(31.75, 31.85, 0.001)]:  # , *np.arange(14.5, 15.9, 0.1)]:
+            n_opt = np.zeros_like(self.freq_axis, dtype=complex)
+            for f_idx in np.arange(len(self.freq_axis))[freq_mask]:
+
+                cost = partial(self._opt_fun_1layer,
+                               freq_=self.freq_axis[f_idx],
+                               t_exp_=t_exp_[f_idx],
+                               shift=shift,
+                               bounds_=bounds)
+
+                opt_res_ = shgo(cost, bounds, minimizer_kwargs=min_kwargs)
+                n_opt[f_idx] = opt_res_.x[0] + opt_res_.x[1] * 1j
+
+            #"""
+            n_opt = window(np.array([freqs, n_opt.imag]).T)
+            f_mask = (0.60 < self.freq_axis) * (self.freq_axis < 2.5)
+            fft_ = np.fft.rfft(n_opt[f_mask].imag)
+            fft_freq_axis = np.fft.rfftfreq(len(n_opt[f_mask].imag),
+                                            d=np.mean(np.diff(self.freq_axis)))
+            mask_ = (10 < fft_freq_axis) * (fft_freq_axis < 20)
+            print(np.max(np.abs(fft_[mask_])), shift)
+            plt.figure("fft")
+            plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
+            #"""
+
+        return n_opt
 
     def conductivity_model(self, sigma_exp):
         opt_res = self._fit_conductivity_model(sigma_exp)
@@ -211,29 +287,52 @@ class DatasetEval(DataSet):
         f_axis = self.freq_axis
         plot_range = self.options["plot_range"]
 
-        meas = self.get_measurement(*pnt)
-        sigma_exp = self._conductivity(meas)
+        meas_sub = self.get_measurement(*self.options["eval_opt"]["sub_pnt"])
+        meas_film = self.get_measurement(*pnt)
+        sigma_exp = self._conductivity(meas_film)
         sigma_model = self.conductivity_model(sigma_exp)
 
-        sub_res = self._eval_sub()
-        t_exp = self.transmission(meas, 1)
-        n_film = self._fit_refractive_index(t_exp, sub_res)
+        t_exp_2layer = self.transmission(meas_film, 1)
+        t_exp_2layer = np.abs(t_exp_2layer) * np.exp(-1j * np.angle(t_exp_2layer))
 
-        t_mod = self._model_2layer(self.freq_axis, n_sub=sub_res["refr_idx"], n_film=n_film, shift_=0)
+        self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = True
+        self.sub_dataset.options["pp_opt"]["window_opt"]["en_plot"] = True
+        t_exp_1layer = self.sub_dataset.transmission(meas_sub, 1)
+        self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = False
+        t_exp_1layer = np.abs(t_exp_1layer) * np.exp(-1j * np.angle(t_exp_1layer))
+
+        n_sub = self._fit_1layer(t_exp_1layer)
+        n_film = self._fit_2layer(t_exp_2layer, n_sub)
+
+        t_mod_sub = self._model_1layer(self.freq_axis, n_sub, shift_=32)
+        t_mod_film = self._model_2layer(self.freq_axis, n_sub=n_sub, n_film=n_film, shift_=0)
+
         f0, f1 = self.options["eval_opt"]["fit_range"]
         f_mask = (f0 < self.freq_axis)*(self.freq_axis < f1)
+
+        plt.figure("n_sub")
+        plt.plot(self.freq_axis, n_sub.real, label="Real part")
+        plt.plot(self.freq_axis, n_sub.imag, label="Imaginary part")
 
         plt.figure("n_opt")
         plt.plot(self.freq_axis, n_film.real, label="real")
         plt.plot(self.freq_axis, n_film.imag, label="imag")
 
-        plt.figure("Transmission fit")
-        plt.plot(self.freq_axis[f_mask], np.abs(t_exp[f_mask]), label="Experiment")
-        plt.plot(self.freq_axis[f_mask], np.abs(t_mod[f_mask]), label="Model")
+        plt.figure("Transmission fit abs film")
+        plt.plot(self.freq_axis[f_mask], np.abs(t_exp_2layer[f_mask]), label="Experiment")
+        plt.plot(self.freq_axis[f_mask], np.abs(t_mod_film[f_mask]), label="Model")
 
-        plt.figure("Transmission fit angle")
-        plt.plot(self.freq_axis[f_mask], np.angle(t_exp[f_mask]), label="Experiment")
-        plt.plot(self.freq_axis[f_mask], np.angle(t_mod[f_mask]), label="Model")
+        plt.figure("Transmission fit angle film")
+        plt.plot(self.freq_axis[f_mask], np.angle(t_exp_2layer[f_mask]), label="Experiment")
+        plt.plot(self.freq_axis[f_mask], np.angle(t_mod_film[f_mask]), label="Model")
+
+        plt.figure("Transmission fit abs sub")
+        plt.plot(self.freq_axis[f_mask], np.abs(t_exp_1layer[f_mask]), label="Experiment")
+        plt.plot(self.freq_axis[f_mask], np.abs(t_mod_sub[f_mask]), label="Model")
+
+        plt.figure("Transmission fit angle sub")
+        plt.plot(self.freq_axis[f_mask], np.angle(t_exp_1layer[f_mask]), label="Experiment")
+        plt.plot(self.freq_axis[f_mask], np.angle(t_mod_sub[f_mask]), label="Model")
 
     def plot_eval_res(self):
         pass

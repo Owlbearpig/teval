@@ -29,13 +29,13 @@ options = {
 "pp_opt": {"window_opt": {"enabled": False,
                           "slope": 0.99,
                           # "win_start": 0,
-                          "win_width": 15,
+                          "win_width": 8*15,
                           "type": WindowTypes.tukey,
                           },
            },
 "eval_opt": {"dt": 0, # dt in fs
              "sub_pnt": (31, 5),
-             "fit_range": (0.65, 1.2),
+             "fit_range": (0.15, 3.2),
              },
 "shown_plots": {
     "Window": True,
