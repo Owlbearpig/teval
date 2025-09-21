@@ -213,7 +213,7 @@ class DatasetEval(DataSet):
         freq_mask = (f0 <= self.freq_axis) * (self.freq_axis <= f1)
 
         best_ = (None, np.inf)
-        n_opt_best = None
+        n_opt_best = None # TODO FIND CORRECT VALUES
         for d in [657]:  # [*np.arange(656.85, 657.00, 0.01)]: # [645.4]:
             for shift in [50]:  # [*np.arange(50.05, 50.15, 0.01)]:  # [15.6]:
                 self.options["sample_properties"]["d"] = d
