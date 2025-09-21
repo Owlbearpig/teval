@@ -121,7 +121,10 @@ def window(data_td, win_width=None, win_start=None, shift=None, en_plot=False, s
     else:
         win_start = int(win_start / dt)
 
-    window_function = k["type"]
+    if "type" in k:
+        window_function = k["type"]
+    else:
+        window_function = WindowTypes.tukey
 
     window_arr = window_function(win_width, slope)
     window_mask = np.zeros(len(y))

@@ -1,11 +1,12 @@
 from dataset import DataSet
-from functions import check_dict_values, window
+from functions import window
 from scipy.optimize import shgo
 from functools import partial
 import numpy as np
 from consts import eps0_thz, c_thz
 import matplotlib.pyplot as plt
 import logging
+from scipy.signal import iirnotch, filtfilt
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -101,7 +102,7 @@ class DatasetEval(DataSet):
         e_ref = np.exp(1j * ((d + h) * w_ / c_thz))
         phase_shift = np.exp(1j * shift_ * 1e-3 * w_)  # 6, 16
 
-        t = phase_shift * e_ref / e_sam
+        t = phase_shift * e_sam / e_ref
 
         return np.nan_to_num(t)
 
@@ -159,7 +160,7 @@ class DatasetEval(DataSet):
     def _opt_fun_1layer(self, x_, freq_, t_exp_, bounds_=None, shift=0):
         if bounds_ is not None:
             for i, p_ in enumerate(x_):
-                if not (bounds_[i][0] < p_) * (p_ < bounds_[i][1]):
+                if not (bounds_[i][0] <= p_) * (p_ <= bounds_[i][1]):
                     return np.inf
 
         n = x_[0] + 1j * x_[1]
@@ -170,7 +171,24 @@ class DatasetEval(DataSet):
 
         return abs_loss + ang_loss
 
+    def _opt_fun_2layer(self, x_, freq, n_sub_, t_exp_, shift=0):
+        #if x_[0] < 1 or x_[1] < 0:
+        #    return np.inf
+
+        n_film_ = x_[0] + 1j * x_[1]
+
+        t_mod = self._model_2layer(freq, n_sub=n_sub_, n_film=n_film_, shift_=shift)
+
+        mag = (np.abs(t_mod) - np.abs(t_exp_))**2
+        ang = (np.angle(t_mod) - np.angle(t_exp_))**2
+
+        # real_part = (t_mod.real - t_exp_.real) ** 2
+        # imag_part = (t_mod.imag - t_exp_.imag) ** 2
+
+        return mag + ang
+
     def _fit_2layer(self, t_exp_, n_sub_):
+        bounds_ = [(1, 3), (1, 3)]
         min_kwargs = {"method": "Nelder-Mead",
                       "options": {
                           "maxev": np.inf,
@@ -194,39 +212,69 @@ class DatasetEval(DataSet):
         f0, f1 = self.options["eval_opt"]["fit_range"]
         freq_mask = (f0 <= self.freq_axis) * (self.freq_axis <= f1)
 
-        n_opt = np.zeros_like(self.freq_axis, dtype=complex)
-        for f_idx in np.arange(len(self.freq_axis))[freq_mask]:
-            args_ = (self.freq_axis[f_idx], n_sub_[f_idx], t_exp_[f_idx])
+        best_ = (None, np.inf)
+        n_opt_best = None
+        for d in [657]:  # [*np.arange(656.85, 657.00, 0.01)]: # [645.4]:
+            for shift in [50]:  # [*np.arange(50.05, 50.15, 0.01)]:  # [15.6]:
+                self.options["sample_properties"]["d"] = d
+                n_opt = np.zeros_like(self.freq_axis, dtype=complex)
+                for f_idx in np.arange(len(self.freq_axis))[freq_mask]:
+                    args_ = (self.freq_axis[f_idx], n_sub_[f_idx], t_exp_[f_idx], shift)
 
-            opt_res_ = shgo(self._opt_fun_2layer,
-                            bounds=[(1, 10), (1, 10)],
-                            minimizer_kwargs=min_kwargs,
-                            options=shgo_options,
-                            args=args_,
-                            )
-            n_opt[f_idx] = opt_res_.x[0] + 1j * opt_res_.x[1]
-            print(self.freq_axis[f_idx], opt_res_.x, opt_res_.fun)
+                    opt_res_ = shgo(self._opt_fun_2layer,
+                                    bounds=bounds_,
+                                    minimizer_kwargs=min_kwargs,
+                                    options=shgo_options,
+                                    args=args_,
+                                    iters=2,
+                                    )
+                    n_opt[f_idx] = opt_res_.x[0] + opt_res_.x[1] * 1j
+                    print(self.freq_axis[f_idx], n_opt[f_idx])
 
-        return n_opt
+                n_imag = n_opt.imag
+                # n_imag = n_imag - np.mean(n_imag[freq_mask])
 
-    def _opt_fun_2layer(self, x_, freq, n_sub_, t_exp_):
-        #if x_[0] < 1 or x_[1] < 0:
-        #    return np.inf
+                win_settings = {"en_plot": False, "win_start": f0, "win_width": f1 - f0, "fig_label": "FFT"}
+                n_imag = window(np.array([self.freq_axis, n_imag]).T, **win_settings)
+                n_imag = n_imag[:, 1]
 
-        n_film_ = x_[0] + 1j * x_[1]
+                fft_ = np.fft.rfft(n_imag[freq_mask])
+                fft_freq_axis = np.fft.rfftfreq(len(n_imag[freq_mask]),
+                                                d=np.mean(np.diff(self.freq_axis)))
+                # mask_ = (10 < fft_freq_axis) * (fft_freq_axis < 20)
 
-        t_mod = self._model_2layer(freq, n_sub=n_sub_, n_film=n_film_)
+                mask_ = (10 < fft_freq_axis) * (fft_freq_axis < 20)
+                peak_val, peak_idx = np.max(np.abs(fft_[mask_])), np.argmax(np.abs(fft_[mask_]))
 
-        mag = (np.abs(t_mod) - np.abs(t_exp_))**2
-        ang = (np.angle(t_mod) - np.angle(t_exp_))**2
+                print(peak_val, shift, self.options["sample_properties"]["d"])
+                #"""
+                plt.figure("TEST")
+                plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
+                #"""
 
-        # real_part = (t_mod.real - t_exp_.real) ** 2
-        # imag_part = (t_mod.imag - t_exp_.imag) ** 2
+                fs = 1 / np.mean(np.diff(self.freq_axis))
+                Q = 0.5  # quality factor: higher = narrower
 
-        return mag + ang
+                peak_freq = fft_freq_axis[mask_][peak_idx]
+                # print(peak_freq, fs)
+                b, a = iirnotch(peak_freq / (fs / 2), Q)
+
+                n_opt.real = filtfilt(b, a, n_opt.real)
+                n_opt.imag = filtfilt(b, a, n_opt.imag)
+
+                # plt.figure("TEST2")
+                # plt.plot(n_imag[freq_mask], label="Before filter")
+                # plt.plot(n_opt.imag, label="After filter")
+
+                if peak_val < best_[1]:
+                    best_ = ((shift, d), peak_val)
+                    n_opt_best = n_opt
+
+        print(best_)
+        return n_opt_best
 
     def _fit_1layer(self, t_exp_):
-        bounds = [(3.00, 3.10), (0.0, 0.020)]
+        bounds = [(3.00, 3.10), (0.001, 0.010)]
         min_kwargs = {"method": "Nelder-Mead",
                       "options": {
                           "maxev": np.inf,
@@ -241,33 +289,65 @@ class DatasetEval(DataSet):
         freq_mask = (f0 <= self.freq_axis) * (self.freq_axis <= f1)
 
         shift = 15.3 # 15.3  # 30
-        # for d in np.arange(640, 655, 1.0) * 1e-6:
-        for shift in [32]: # [*np.arange(31.75, 31.85, 0.001)]:  # , *np.arange(14.5, 15.9, 0.1)]:
-            n_opt = np.zeros_like(self.freq_axis, dtype=complex)
-            for f_idx in np.arange(len(self.freq_axis))[freq_mask]:
+        best_ = (None, np.inf)
+        n_opt_best = None
+        for d in [657] :#[*np.arange(656.85, 657.00, 0.01)]: # [645.4]:
+            for shift in [50]:#[*np.arange(50.05, 50.15, 0.01)]:  # [15.6]:
+                self.options["sample_properties"]["d"] = d
+                n_opt = np.zeros_like(self.freq_axis, dtype=complex)
+                for f_idx in np.arange(len(self.freq_axis))[freq_mask]:
 
-                cost = partial(self._opt_fun_1layer,
-                               freq_=self.freq_axis[f_idx],
-                               t_exp_=t_exp_[f_idx],
-                               shift=shift,
-                               bounds_=bounds)
+                    cost = partial(self._opt_fun_1layer,
+                                   freq_=self.freq_axis[f_idx],
+                                   t_exp_=t_exp_[f_idx],
+                                   shift=shift,
+                                   bounds_=bounds)
 
-                opt_res_ = shgo(cost, bounds, minimizer_kwargs=min_kwargs)
-                n_opt[f_idx] = opt_res_.x[0] + opt_res_.x[1] * 1j
+                    opt_res_ = shgo(cost, bounds, minimizer_kwargs=min_kwargs, iters=3)
+                    n_opt[f_idx] = opt_res_.x[0] + opt_res_.x[1] * 1j
 
-            #"""
-            n_opt = window(np.array([freqs, n_opt.imag]).T)
-            f_mask = (0.60 < self.freq_axis) * (self.freq_axis < 2.5)
-            fft_ = np.fft.rfft(n_opt[f_mask].imag)
-            fft_freq_axis = np.fft.rfftfreq(len(n_opt[f_mask].imag),
-                                            d=np.mean(np.diff(self.freq_axis)))
-            mask_ = (10 < fft_freq_axis) * (fft_freq_axis < 20)
-            print(np.max(np.abs(fft_[mask_])), shift)
-            plt.figure("fft")
-            plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
-            #"""
+                n_imag = n_opt.imag
+                # n_imag = n_imag - np.mean(n_imag[freq_mask])
 
-        return n_opt
+                win_settings = {"en_plot": False, "win_start": f0, "win_width": f1-f0, "fig_label": "FFT"}
+                n_imag = window(np.array([self.freq_axis, n_imag]).T, **win_settings)
+                n_imag = n_imag[:, 1]
+
+                fft_ = np.fft.rfft(n_imag[freq_mask])
+                fft_freq_axis = np.fft.rfftfreq(len(n_imag[freq_mask]),
+                                                d=np.mean(np.diff(self.freq_axis)))
+                # mask_ = (10 < fft_freq_axis) * (fft_freq_axis < 20)
+
+                mask_ = (10 < fft_freq_axis) * (fft_freq_axis < 20)
+                peak_val, peak_idx = np.max(np.abs(fft_[mask_])), np.argmax(np.abs(fft_[mask_]))
+
+                print(peak_val, shift, self.options["sample_properties"]["d"])
+                """
+                plt.figure("TEST")
+                plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
+                """
+
+                fs = 1/np.mean(np.diff(self.freq_axis))
+                Q = 0.5  # quality factor: higher = narrower
+
+                peak_freq = fft_freq_axis[mask_][peak_idx]
+                # print(peak_freq, fs)
+                b, a = iirnotch(peak_freq / (fs / 2), Q)
+
+                n_opt.real = filtfilt(b, a, n_opt.real)
+                n_opt.imag = filtfilt(b, a, n_opt.imag)
+
+                # plt.figure("TEST2")
+                # plt.plot(n_imag[freq_mask], label="Before filter")
+                # plt.plot(n_opt.imag, label="After filter")
+
+                if peak_val < best_[1]:
+                    best_ = ((shift, d), peak_val)
+                    n_opt_best = n_opt
+
+        print(best_)
+
+        return n_opt_best
 
     def conductivity_model(self, sigma_exp):
         opt_res = self._fit_conductivity_model(sigma_exp)
@@ -302,9 +382,10 @@ class DatasetEval(DataSet):
         t_exp_1layer = np.abs(t_exp_1layer) * np.exp(-1j * np.angle(t_exp_1layer))
 
         n_sub = self._fit_1layer(t_exp_1layer)
+        # self.plt_show()
         n_film = self._fit_2layer(t_exp_2layer, n_sub)
 
-        t_mod_sub = self._model_1layer(self.freq_axis, n_sub, shift_=32)
+        t_mod_sub = self._model_1layer(self.freq_axis, n_sub)
         t_mod_film = self._model_2layer(self.freq_axis, n_sub=n_sub, n_film=n_film, shift_=0)
 
         f0, f1 = self.options["eval_opt"]["fit_range"]
@@ -314,7 +395,7 @@ class DatasetEval(DataSet):
         plt.plot(self.freq_axis, n_sub.real, label="Real part")
         plt.plot(self.freq_axis, n_sub.imag, label="Imaginary part")
 
-        plt.figure("n_opt")
+        plt.figure("n_film")
         plt.plot(self.freq_axis, n_film.real, label="real")
         plt.plot(self.freq_axis, n_film.imag, label="imag")
 

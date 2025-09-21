@@ -1,4 +1,4 @@
-from dataset import DataSet, Dist, QuantityEnum, plt_show, PixelInterpolation
+from dataset import DataSet, Dist, QuantityEnum, PixelInterpolation
 
 options = {
 # "cbar_lim": (6.90, 7.30), # img0
@@ -48,4 +48,4 @@ dataset.plot_refs()
 
 # dataset.average_area((19, -2), (32, 5), label="2") # img3
 
-plt_show(en_save=False)
+dataset.plt_show()

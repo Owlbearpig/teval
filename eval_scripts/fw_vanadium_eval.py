@@ -33,9 +33,9 @@ options = {
                           "type": WindowTypes.tukey,
                           },
            },
-"eval_opt": {"dt": 0, # dt in fs
+"eval_opt": {"dt": 0, # pulse shift in fs
              "sub_pnt": (31, 5),
-             "fit_range": (0.15, 3.2),
+             "fit_range": (0.5, 1.5),
              },
 "shown_plots": {
     "Window": True,
@@ -48,10 +48,15 @@ options = {
     "Refractive index": False,
     "Absorption coefficient": False,
     "Conductivity": True,
+
+    "TEST": False,
 },
 }
-sam_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
-sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
+#sam_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
+#sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
+
+sam_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
+sub_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
 
 dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
 

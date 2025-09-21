@@ -732,6 +732,7 @@ class DataSet:
         d_film = self.options["sample_properties"]["d_film"]
 
         # [eps0_thz] = ps * Siemens / um, [c_thz] = um / ps, [1/d_film] = 1/um -> conversion: 1e4 (S/cm)
+        # 1 / um = 1 / (1e-6 m) = 1 / (1e-6 * 1e2 cm) = 1 / (1e-4 cm) = 1e4 * 1 / cm
         sigma = 1e4 * (1/d_film) * eps0_thz * c_thz * (1 + n_sub) * (t_sub/t_sam - 1)
 
         # phase correction, [dt] = fs
@@ -1529,6 +1530,13 @@ class DataSet:
         plt.savefig(save_dir / (filename_s + ".pdf"), bbox_inches='tight', dpi=300, pad_inches=0, **kwargs)
 
     def plt_show(self):
+
+        fig_labels = [plt.figure(fig_num).get_label() for fig_num in plt.get_fignums()]
+        if "TEST" in fig_labels:
+            only_show_test = True
+        else:
+            only_show_test = False
+
         not_shown = []
         for fig_num in plt.get_fignums():
             fig = plt.figure(fig_num)
@@ -1543,6 +1551,11 @@ class DataSet:
 
             if fig_label in self.options["shown_plots"]:
                 if not self.options["shown_plots"][fig_label]:
+                    not_shown.append(fig_label)
+                    plt.close(fig_num)
+
+            if "TEST" in self.options["shown_plots"] and only_show_test:
+                if str(fig_label) != "TEST":
                     not_shown.append(fig_label)
                     plt.close(fig_num)
 
