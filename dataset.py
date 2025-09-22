@@ -1534,6 +1534,7 @@ class DataSet:
         fig_labels = [plt.figure(fig_num).get_label() for fig_num in plt.get_fignums()]
         if "TEST" in fig_labels:
             only_show_test = True
+            logging.warning("Only showing TEST figure")
         else:
             only_show_test = False
 
@@ -1549,13 +1550,12 @@ class DataSet:
             if self.options["save_plots"]:
                 self.save_fig(fig_num)
 
+            if only_show_test and fig_label != "TEST":
+                not_shown.append(fig_label)
+                plt.close(fig_num)
+                continue
             if fig_label in self.options["shown_plots"]:
                 if not self.options["shown_plots"][fig_label]:
-                    not_shown.append(fig_label)
-                    plt.close(fig_num)
-
-            if "TEST" in self.options["shown_plots"] and only_show_test:
-                if str(fig_label) != "TEST":
                     not_shown.append(fig_label)
                     plt.close(fig_num)
 
