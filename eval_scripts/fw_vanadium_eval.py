@@ -37,7 +37,7 @@ options = {
              "shift_film": 0,
              "sub_pnt": (31, 5),
              "fit_range_film": (0.65, 3.2),
-             "fit_range_sub": (0.5, 3.5),
+             "fit_range_sub": (0*0.5, 3.5),
              },
 "shown_plots": {
     "Window": True,
@@ -52,11 +52,11 @@ options = {
     "Conductivity": True,
 },
 }
-sam_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
-sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
+#sam_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
+#sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
 
-#sam_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
-#sub_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
+sam_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
+sub_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
 
 dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
 

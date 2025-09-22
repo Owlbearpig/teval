@@ -7,6 +7,7 @@ from consts import eps0_thz, c_thz
 import matplotlib.pyplot as plt
 import logging
 from scipy.signal import iirnotch, filtfilt
+from numpy import polyfit
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -387,6 +388,13 @@ class DatasetEval(DataSet):
 
         return sigma_model_
 
+    def phase_fit_(self, freq, phi):
+
+        z = polyfit(freq, phi, 1)
+        plt.figure("TEST")
+        plt.plot(freq, z[0]*freq + z[1])
+        print(z)
+
     def eval_point(self, pnt):
         f_axis = self.freq_axis
         plot_range = self.options["plot_range"]
@@ -410,7 +418,7 @@ class DatasetEval(DataSet):
         self.options["pp_opt"]["window_opt"]["fig_label"] = "film"
         t_exp_2layer = self.transmission(meas_film, 1)
         self.options["pp_opt"]["window_opt"]["enabled"] = False
-        t_exp_2layer = np.abs(t_exp_2layer) * np.exp(-1j * np.angle(t_exp_2layer))
+        t_exp_2layer = np.abs(t_exp_2layer) * np.exp(-1j * (np.angle(t_exp_2layer) + 0.0420))
 
         n_film = self._fit_2layer(t_exp_2layer, n_sub)
         # self.plt_show()
@@ -443,6 +451,14 @@ class DatasetEval(DataSet):
         plt.figure("Transmission fit angle film")
         plt.plot(self.freq_axis[f_mask], np.angle(t_exp_2layer[f_mask]), label="Experiment")
         plt.plot(self.freq_axis[f_mask], np.angle(t_mod_film[f_mask]), label="Model")
+
+        plt.figure("TEST2")
+        phi_1l =  np.unwrap(np.angle(t_exp_1layer[f_mask]))
+        phi_2l = np.unwrap(np.angle(t_exp_2layer[f_mask]))
+        plt.plot(self.freq_axis[f_mask], phi_1l, label="Experiment 1l")
+        plt.plot(self.freq_axis[f_mask], phi_2l, label="Experiment 2l")
+        #self.phase_fit_(self.freq_axis[f_mask], phi_1l)
+        # self.phase_fit_(self.freq_axis[f_mask], phi_2l)
 
         plt.figure("Transmission fit abs sub")
         plt.plot(self.freq_axis[f_mask], np.abs(t_exp_1layer[f_mask]), label="Experiment")
