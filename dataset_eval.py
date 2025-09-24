@@ -324,7 +324,7 @@ class DatasetEval(DataSet):
         best_ = ((None, None), np.inf)
         n_opt_best = None
         for d_sub in [639]:#[*np.arange(640, 651, 1)]: # [645.4]: # 650 # 647
-            for shift in [-2]: # [15.6]: # 28 # 22
+            for shift in [-4]: # [15.6]: # 28 # 22
                 self.options["sample_properties"]["d_1"] = d_sub
                 self.options["eval_opt"]["shift_sub"] = shift
                 gof = 0

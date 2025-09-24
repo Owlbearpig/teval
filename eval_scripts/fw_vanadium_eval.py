@@ -25,16 +25,17 @@ options = {
 "img_title": "",
 "sample_properties": {"d_1": 650, "d_2": 650, "d_film": 0.300, },
 "pp_opt": {"window_opt": {"enabled": False,
-                          "slope": 0.01, # 0.99
+                          "slope": 0.50, # 0.99
                           # "win_start": 0,
-                          "win_width": 120,#5*(12+0), # 5*15 # 36
+                          "win_width": 8*(15+0), # 5*15 # 36
                           "type": WindowTypes.tukey,
                           },
            "filter_opt": {"enabled": True, "f_range": (0.3, 3.0), },
+           "remove_dc": True,
            },
 "eval_opt": {"shift_sub": 0, # ref <-> sam pulse shift in fs
              "shift_film": 0,
-             "sub_pnt": (31, 5),
+             "sub_pnt": (30, 10),
              "fit_range_film": (0.65, 3.2),
              "fit_range_sub": (0.5, 1.5),
              "nfp": 4, # number of fp pulses contained in window ("inf" or 0, 1, ..., N)
@@ -62,11 +63,11 @@ sub_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
 dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
 
 dataset_eval.select_freq((2.00, 2.10))
-dataset_eval.select_quantity(QuantityEnum.P2P)
+dataset_eval.select_quantity(QuantityEnum.Power)
 
 # dataset_eval.plot_system_stability()
 
-#dataset_eval.plot_image()
+# dataset_eval.plot_image()
 #dataset_eval.plot_refs()
 # dataset_eval.plot_line(line_coords=10.0, direction=Direction.Horizontal)
 

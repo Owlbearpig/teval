@@ -1160,6 +1160,8 @@ class DataSet:
             meas_set = self.measurements["refs"]
 
         selected_freq_ = self.selected_freq
+        if isinstance(selected_freq_, tuple):
+            selected_freq_ = selected_freq_[0]
         f_idx = np.argmin(np.abs(self.freq_axis - selected_freq_))
 
         ref_ampl_arr, ref_angle_arr, ref_zero_crossing = np.zeros((3, len(meas_set)))
