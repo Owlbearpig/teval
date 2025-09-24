@@ -61,7 +61,7 @@ class DatasetEval(DataSet):
         return model_.real + 1j * model_.imag
 
     def _model_1layer(self, freqs, n3_):
-        d = self.options["sample_properties"]["d"]
+        d = self.options["sample_properties"]["d_1"]
         shift_ = self.options["eval_opt"]["shift_sub"]
         n1 = 1
         w_ = 2 * np.pi * freqs
@@ -83,7 +83,7 @@ class DatasetEval(DataSet):
     def _model_2layer(self, freq, n_sub, n_film):
         # n_sub += 0.01
         n1, n4 = 1, 1
-        d = self.options["sample_properties"]["d"]
+        d = self.options["sample_properties"]["d_2"]
         h = self.options["sample_properties"]["d_film"]
         shift_ = self.options["eval_opt"]["shift_film"]
         w_ = 2 * np.pi * freq
@@ -207,9 +207,9 @@ class DatasetEval(DataSet):
                       "options": {
                           #"maxev": np.inf,
                           "maxiter": 400,
-                          "tol": 1e-10,
-                          "fatol": 1e-10,
-                          "xatol": 1e-10,
+                          "tol": 1e-6,
+                          "fatol": 1e-6,
+                          "xatol": 1e-6,
                       }
                       }
         shgo_options = {
@@ -228,9 +228,10 @@ class DatasetEval(DataSet):
 
         best_ = (None, np.inf)
         n_opt_best = None
-        for d in [650]:#[*np.arange(640.00, 655, 5.0)]: # [656.8]:#
-            for shift in [30]:#[*np.arange(0, 60, 5)]:  # [61.1]:
-                self.options["sample_properties"]["d"] = d
+        for d_sub in [650]:#[*np.arange(640.00, 655, 5.0)]: # [656.8]:# 650
+            for shift in [30]:  # [61.1]: # 30
+                # self.options["sample_properties"]["d_film"] = d_film
+                self.options["sample_properties"]["d_2"] = d_sub
                 self.options["eval_opt"]["shift_film"] = shift
 
                 gof = 0
@@ -266,8 +267,7 @@ class DatasetEval(DataSet):
                 peak_val, peak_idx = np.max(np.abs(fft_[mask_])), np.argmax(np.abs(fft_[mask_]))
 
                 gof = gof / np.sum(freq_mask)
-                print("Film:", peak_val, self.options["eval_opt"]["shift_film"],
-                      self.options["sample_properties"]["d"], gof)
+                print("Film:", peak_val, shift, d_sub, gof)
 
                 #plt.figure("TEST3")
                 #plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
@@ -288,18 +288,18 @@ class DatasetEval(DataSet):
                 #plt.plot(n_opt.imag, label="After filter")
 
                 if peak_val < best_[1]:
-                    best_ = ((shift, d), peak_val, gof)
+                    best_ = ((shift, d_sub), peak_val, gof)
                     n_opt_best = n_opt
 
-        print(best_)
+        print("Best film: ", best_)
         return n_opt_best
 
     def _fit_1layer(self, t_exp_):
-        bounds = [(3.00, 3.10), (0.001, 0.010)]
+        bounds = [(3.05, 3.13), (0.0, 0.015)]
         min_kwargs = {"method": "Nelder-Mead",
                       "options": {
-                          "maxev": np.inf,
-                          "maxiter": 4000,
+                          #"maxev": np.inf,
+                          #"maxiter": 4000,
                           "tol": 1e-12,
                           "fatol": 1e-12,
                           "xatol": 1e-12,
@@ -310,11 +310,11 @@ class DatasetEval(DataSet):
         freq_mask = (f0 <= self.freq_axis) * (self.freq_axis <= f1)
 
         shift = 15.3 # 15.3  # 30
-        best_ = (None, np.inf)
+        best_ = ((None, None), np.inf)
         n_opt_best = None
-        for d in [650]:# [*np.arange(648, 657.00, 1)]: # [645.4]: # 657
-            for shift in [28]:#[*np.arange(20, 35, 1)]:  # [15.6]: # 50
-                self.options["sample_properties"]["d"] = d
+        for d_sub in [639]:#[*np.arange(640, 651, 1)]: # [645.4]: # 650 # 647
+            for shift in [0]:#[*np.arange(10, 25, 2)]:  # [15.6]: # 28 # 22
+                self.options["sample_properties"]["d_1"] = d_sub
                 self.options["eval_opt"]["shift_sub"] = shift
                 gof = 0
                 n_opt = np.zeros_like(self.freq_axis, dtype=complex)
@@ -330,27 +330,25 @@ class DatasetEval(DataSet):
                     gof += opt_res_.fun
 
                 n_imag = n_opt.imag
-                # n_imag = n_imag - np.mean(n_imag[freq_mask])
+                n_imag_mean = np.mean(n_imag[freq_mask])
 
                 win_settings = {"en_plot": False, "win_start": f0, "win_width": f1-f0, "fig_label": "FFT"}
                 n_imag = window(np.array([self.freq_axis, n_imag]).T, **win_settings)
                 n_imag = n_imag[:, 1]
 
-                fft_ = np.fft.rfft(n_imag[freq_mask])
+                fft_ = np.fft.rfft(n_imag[freq_mask] - n_imag_mean)
                 fft_freq_axis = np.fft.rfftfreq(len(n_imag[freq_mask]),
                                                 d=np.mean(np.diff(self.freq_axis)))
-                # mask_ = (10 < fft_freq_axis) * (fft_freq_axis < 20)
 
-                mask_ = (10 < fft_freq_axis) * (fft_freq_axis < 20)
+                # mask_ = (10 < fft_freq_axis) * (fft_freq_axis < 20)
+                mask_ = (11 <= fft_freq_axis)
                 peak_val, peak_idx = np.max(np.abs(fft_[mask_])), np.argmax(np.abs(fft_[mask_]))
 
                 gof = gof / np.sum(freq_mask)
-                print("Sub:", peak_val, self.options["eval_opt"]["shift_sub"],
-                      self.options["sample_properties"]["d"], gof)
-                """
-                plt.figure("TEST")
+                print("Sub:", peak_val, shift, d_sub, gof)
+
+                plt.figure("TESTFFT")
                 plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
-                """
 
                 fs = 1/np.mean(np.diff(self.freq_axis))
                 Q = 0.5  # quality factor: higher = narrower
@@ -359,18 +357,20 @@ class DatasetEval(DataSet):
                 # print(peak_freq, fs)
                 b, a = iirnotch(peak_freq / (fs / 2), Q)
 
-                n_opt.real = filtfilt(b, a, n_opt.real)
-                n_opt.imag = filtfilt(b, a, n_opt.imag)
+                #n_opt.real = filtfilt(b, a, n_opt.real)
+                #n_opt.imag = filtfilt(b, a, n_opt.imag)
 
                 # plt.figure("TEST2")
                 # plt.plot(n_imag[freq_mask], label="Before filter")
                 # plt.plot(n_opt.imag, label="After filter")
 
                 if peak_val < best_[1]:
-                    best_ = ((shift, d), peak_val)
+                    best_ = ((shift, d_sub), peak_val)
                     n_opt_best = n_opt
 
-        print(best_)
+        print("Best sub: ", best_)
+        self.options["sample_properties"]["d_1"] = best_[0][1]
+        self.options["eval_opt"]["shift_sub"] = best_[0][0]
 
         return n_opt_best
 
@@ -389,7 +389,6 @@ class DatasetEval(DataSet):
         return sigma_model_
 
     def phase_fit_(self, freq, phi):
-
         z = polyfit(freq, phi, 1)
         plt.figure("TEST")
         plt.plot(freq, z[0]*freq + z[1])
@@ -418,7 +417,7 @@ class DatasetEval(DataSet):
         self.options["pp_opt"]["window_opt"]["fig_label"] = "film"
         t_exp_2layer = self.transmission(meas_film, 1)
         self.options["pp_opt"]["window_opt"]["enabled"] = False
-        t_exp_2layer = np.abs(t_exp_2layer) * np.exp(-1j * (np.angle(t_exp_2layer) + 0.0420))
+        t_exp_2layer = np.abs(t_exp_2layer) * np.exp(-1j * (np.angle(t_exp_2layer)))
 
         n_film = self._fit_2layer(t_exp_2layer, n_sub)
         # self.plt_show()

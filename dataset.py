@@ -9,7 +9,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from numpy import array
 from pathlib import Path
 import numpy as np
-from functions import unwrap, window, local_minima_1d, check_dict_values, WindowTypes
+from functions import unwrap, window, local_minima_1d, check_dict_values, WindowTypes, butter_filt
 from measurements import MeasurementType, Measurement, Domain
 from mpl_settings import mpl_style_params
 import matplotlib as mpl
@@ -498,6 +498,9 @@ class DataSet:
 
         if pp_opt["window_opt"]["enabled"]:
             data_td = window(data_td, **pp_opt["window_opt"])
+
+        if pp_opt["filter_opt"]["enabled"]:
+            data_td = butter_filt(data_td, **pp_opt["filter_opt"])
 
         return data_td
 
@@ -1041,6 +1044,9 @@ class DataSet:
 
         self.options["pp_opt"]["window_opt"]["fig_label"] = "sam"
         sam_td, sam_fd = self._get_data(sam_meas, domain=Domain.Both)
+
+        shift_t = np.abs(np.argmax(ref_td[:, 1])-np.argmax(sam_td[:, 1]))
+        sam_td[:, 1] = np.roll(sam_td[:, 1], -shift_t)
 
         self.options["pp_opt"]["window_opt"]["en_plot"] = False
 

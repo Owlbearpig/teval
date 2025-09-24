@@ -9,6 +9,7 @@ from numpy.fft import irfft, rfft, rfftfreq
 from scipy import signal
 from enum import Enum
 from matplotlib._pylab_helpers import Gcf
+from scipy.signal import butter, filtfilt
 
 class WindowTypes(Enum):
     tukey = signal.windows.tukey
@@ -99,6 +100,28 @@ def zero_pad(data_td, length=100):
     new_y = np.concatenate((y, np.zeros(cnt)))
 
     return array([new_t, new_y]).T
+
+def butter_filt(data_td, **options):
+    f_range = options["f_range"]
+
+    def butter_bandpass(lowcut, highcut, fs, order=5):
+        nyq = 0.5 * fs
+        low = lowcut / nyq
+        high = highcut / nyq
+        b, a = butter(order, [low, high], btype='band')
+        return b, a
+
+    def butter_bandpass_filter(data, lowcut, highcut, fs, order=5):
+        b, a = butter_bandpass(lowcut, highcut, fs, order=order)
+        f = filtfilt(b, a, data)
+
+        return f
+
+    fs = 1 / np.mean(np.diff(data_td[:, 0]))
+    y = data_td[:, 1]
+    data_filtered = butter_bandpass_filter(y, *f_range, fs)
+
+    return np.array([data_td[:, 0], data_filtered]).T
 
 
 def window(data_td, win_width=None, win_start=None, shift=None, en_plot=False, slope=0.15, **k):
