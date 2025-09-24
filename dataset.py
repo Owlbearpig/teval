@@ -215,6 +215,7 @@ class DataSet:
                                "Absorption coefficient": False,
                                "Conductivity": False,
                            },
+                           "plot_opt": {"shift_sam2ref": False,}
                            }
         if "sample_properties" in options_:
             default_options["sample_properties"]["default_values"] = False
@@ -1045,8 +1046,9 @@ class DataSet:
         self.options["pp_opt"]["window_opt"]["fig_label"] = "sam"
         sam_td, sam_fd = self._get_data(sam_meas, domain=Domain.Both)
 
-        shift_t = np.abs(np.argmax(ref_td[:, 1])-np.argmax(sam_td[:, 1]))
-        sam_td[:, 1] = np.roll(sam_td[:, 1], -shift_t)
+        if self.options["plot_opt"]["shift_sam2ref"]:
+            shift_t = np.abs(np.argmax(ref_td[:, 1]) - np.argmax(sam_td[:, 1]))
+            sam_td[:, 1] = np.roll(sam_td[:, 1], -shift_t)
 
         self.options["pp_opt"]["window_opt"]["en_plot"] = False
 

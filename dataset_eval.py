@@ -63,6 +63,8 @@ class DatasetEval(DataSet):
     def _model_1layer(self, freqs, n3_):
         d = self.options["sample_properties"]["d_1"]
         shift_ = self.options["eval_opt"]["shift_sub"]
+        nfp = self.options["eval_opt"]["nfp"]
+
         n1 = 1
         w_ = 2 * np.pi * freqs
         t_as = 2 * n1 / (n1 + n3_)
@@ -72,8 +74,16 @@ class DatasetEval(DataSet):
 
         exp = np.exp(1j * (d * w_ / c_thz) * n3_)
 
-        e_sam = t_as * t_sa * exp / (1 + r_as * r_sa * exp ** 2)
+        if nfp == "inf":
+            fp_factor = 1 / (1 + r_as * r_sa * exp ** 2)
+        else:
+            fp_factor = 0
+            for fp_idx in range(0, nfp+1):
+                fp_factor += (r_as ** 2 * exp ** 2) ** fp_idx
+
+        e_sam = t_as * t_sa * exp * fp_factor
         e_ref = np.exp(1j * (d * w_ / c_thz))
+
         phase_shift = np.exp(1j * shift_ * 1e-3 * w_)
 
         t = phase_shift * e_sam / e_ref
@@ -295,7 +305,8 @@ class DatasetEval(DataSet):
         return n_opt_best
 
     def _fit_1layer(self, t_exp_):
-        bounds = [(3.05, 3.13), (0.0, 0.015)]
+        bounds = [(3.05, 3.13), (0.000, 0.015)]
+        #bounds = [(3.05, 3.13), (0.0025, 0.0050)]
         min_kwargs = {"method": "Nelder-Mead",
                       "options": {
                           #"maxev": np.inf,
@@ -313,7 +324,7 @@ class DatasetEval(DataSet):
         best_ = ((None, None), np.inf)
         n_opt_best = None
         for d_sub in [639]:#[*np.arange(640, 651, 1)]: # [645.4]: # 650 # 647
-            for shift in [0]:#[*np.arange(10, 25, 2)]:  # [15.6]: # 28 # 22
+            for shift in [-2]: # [15.6]: # 28 # 22
                 self.options["sample_properties"]["d_1"] = d_sub
                 self.options["eval_opt"]["shift_sub"] = shift
                 gof = 0
@@ -347,8 +358,8 @@ class DatasetEval(DataSet):
                 gof = gof / np.sum(freq_mask)
                 print("Sub:", peak_val, shift, d_sub, gof)
 
-                plt.figure("TESTFFT")
-                plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
+                #plt.figure("TESTFFT")
+                #plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
 
                 fs = 1/np.mean(np.diff(self.freq_axis))
                 Q = 0.5  # quality factor: higher = narrower
@@ -462,6 +473,11 @@ class DatasetEval(DataSet):
         plt.figure("Transmission fit abs sub")
         plt.plot(self.freq_axis[f_mask], np.abs(t_exp_1layer[f_mask]), label="Experiment")
         plt.plot(self.freq_axis[f_mask], np.abs(t_mod_sub[f_mask]), label="Model")
+
+        plt.figure("Transmission fit abs sub dev")
+        diff = (np.abs(t_exp_1layer[f_mask]) - np.abs(t_mod_sub[f_mask]))**2
+        plt.plot(self.freq_axis[f_mask], diff/np.max(diff), label="Squared difference")
+        plt.plot(self.freq_axis[f_mask], n_sub.imag[f_mask] / np.max(n_sub.imag[f_mask]), label="n_sub.imag")
 
         plt.figure("Transmission fit angle sub")
         plt.plot(self.freq_axis[f_mask], np.angle(t_exp_1layer[f_mask]), label="Experiment")

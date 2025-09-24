@@ -23,26 +23,23 @@ options = {
 "pixel_interpolation": PixelInterpolation.none,
 "dist_func": Dist.Time,
 "img_title": "",
-"sample_properties": {"d_1": 650,
-                      "d_2": 650,
-                      "d_film": 0.300,
-                      },
+"sample_properties": {"d_1": 650, "d_2": 650, "d_film": 0.300, },
 "pp_opt": {"window_opt": {"enabled": False,
                           "slope": 0.01, # 0.99
                           # "win_start": 0,
-                          "win_width": 10, #5*(15+0),
+                          "win_width": 120,#5*(12+0), # 5*15 # 36
                           "type": WindowTypes.tukey,
                           },
-           "filter_opt": {"enabled": 0,#True,
-                          "f_range": (0.3, 3.0),
-           }
+           "filter_opt": {"enabled": True, "f_range": (0.3, 3.0), },
            },
 "eval_opt": {"shift_sub": 0, # ref <-> sam pulse shift in fs
              "shift_film": 0,
              "sub_pnt": (31, 5),
              "fit_range_film": (0.65, 3.2),
              "fit_range_sub": (0.5, 1.5),
+             "nfp": 4, # number of fp pulses contained in window ("inf" or 0, 1, ..., N)
              },
+"plot_opt": {"shift_sam2ref": False,},
 "shown_plots": {
     "Window": True,
     "Time domain": True,
@@ -56,11 +53,11 @@ options = {
     "Conductivity": True,
 },
 }
-sam_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
-sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
+#sam_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
+#sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
 
-#sam_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
-#sub_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
+sam_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
+sub_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
 
 dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
 
