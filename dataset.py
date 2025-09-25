@@ -635,7 +635,7 @@ class DataSet:
         if freq_range_ is not None:
             t = sam_fd[:, 1] / ref_fd[:, 1]
         else:
-            freq_idx = f_axis_idx_map(ref_fd[:, 0].real, self.selected_freq)
+            freq_idx = f_axis_idx_map(self.freq_axis, self.selected_freq)
             t = sam_fd[freq_idx, 1] / ref_fd[freq_idx, 1]
 
         return t
@@ -874,19 +874,26 @@ class DataSet:
 
         return closest_ref
 
-    def get_ref_data(self, domain=Domain.Time, point=None):
+    def get_ref_data(self, domain=Domain.Time, point=None, ref_idx=None, ret_meas=False):
         if point is not None:
             closest_sam = self.get_measurement(*point)
             chosen_ref = self.find_nearest_ref(closest_sam)
         else:
-            chosen_ref = self.measurements["refs"][-1]
+            if ref_idx is None:
+                ref_idx = -1
+            chosen_ref = self.measurements["refs"][ref_idx]
 
         # chosen_ref = np.random.choice(self.measurements["refs"])
 
         if domain in [Domain.Time, Domain.Frequency]:
-            return self._get_data(chosen_ref, domain=domain)
+            ret = self._get_data(chosen_ref, domain=domain)
         else:
-            return self._get_data(chosen_ref, domain=Domain.Both)
+            ret = self._get_data(chosen_ref, domain=Domain.Both)
+
+        if ret_meas:
+            return ret, chosen_ref
+        else:
+            return ret
 
     def get_ref_sam_meas(self, point):
         sam_meas = self.get_measurement(*point)

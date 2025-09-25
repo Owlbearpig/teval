@@ -1,4 +1,4 @@
-from dataset import DataSet
+from dataset import DataSet, Domain
 from functions import window
 from scipy.optimize import shgo
 from functools import partial
@@ -305,7 +305,7 @@ class DatasetEval(DataSet):
         return n_opt_best
 
     def _fit_1layer(self, t_exp_):
-        bounds = [(3.05, 3.13), (0.000, 0.015)]
+        bounds = [(3.00, 3.13), (0.000, 0.015)]
         #bounds = [(3.05, 3.13), (0.0025, 0.0050)]
         min_kwargs = {"method": "Nelder-Mead",
                       "options": {
@@ -323,8 +323,8 @@ class DatasetEval(DataSet):
         shift = 15.3 # 15.3  # 30
         best_ = ((None, None), np.inf)
         n_opt_best = None
-        for d_sub in [639]:#[*np.arange(640, 651, 1)]: # [645.4]: # 650 # 647
-            for shift in [-4]: # [15.6]: # 28 # 22
+        for d_sub in [650]:#[*np.arange(640, 651, 1)]: # 639 (Teralyzer)
+            for shift in [35]: # [15.6]: # 28 # 22
                 self.options["sample_properties"]["d_1"] = d_sub
                 self.options["eval_opt"]["shift_sub"] = shift
                 gof = 0
@@ -358,8 +358,8 @@ class DatasetEval(DataSet):
                 gof = gof / np.sum(freq_mask)
                 print("Sub:", peak_val, shift, d_sub, gof)
 
-                #plt.figure("TESTFFT")
-                #plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
+                plt.figure("TESTFFT")
+                plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
 
                 fs = 1/np.mean(np.diff(self.freq_axis))
                 Q = 0.5  # quality factor: higher = narrower
@@ -405,6 +405,78 @@ class DatasetEval(DataSet):
         plt.plot(freq, z[0]*freq + z[1])
         print(z)
 
+    def transmission_sim(self):
+        if not self.options["sim_opt"]["enabled"]:
+            exit("BB")
+
+        self.options["eval_opt"]["shift_sub"] = self.options["sim_opt"]["shift_sim"]
+        n_sub = self.options["sim_opt"]["n_sub"]
+        nfp_og = self.options["eval_opt"]["nfp"]
+
+        self.options["eval_opt"]["nfp"] = nfp_og
+        t_sim = np.zeros_like(self.freq_axis, dtype=complex)
+        for f_idx, freq in enumerate(self.freq_axis):
+            t_sim[f_idx] = self._model_1layer(freq, n_sub)
+        t_sim = np.abs(t_sim) * np.exp(-1j * np.angle(t_sim))
+
+        self.options["eval_opt"]["nfp"] = nfp_og
+
+        return t_sim
+
+    def ref_std(self, en_plot=False):
+        all_refs = self.measurements["refs"]
+        ref_data = np.zeros((len(all_refs), len(self.freq_axis)), dtype=complex)
+        for ref_idx, ref_meas in enumerate(all_refs):
+            ref_fd = self._get_data(ref_meas, domain=Domain.Frequency)
+            ref_data[ref_idx] = ref_fd[:, 1]
+
+        freq_range = (0.35 < self.freq_axis)*(self.freq_axis < 4.0)
+        amp_argmin = np.argmin(np.abs(ref_data[:, freq_range]))
+        amp_argmin = np.unravel_index(amp_argmin, ref_data[:, freq_range].shape)[0]
+        amp_min = ref_data[amp_argmin]
+
+        amp_argmax = np.argmax(np.abs(ref_data[:, freq_range]))
+        amp_argmax = np.unravel_index(amp_argmax, ref_data[:, freq_range].shape)[0]
+        amp_max = ref_data[amp_argmax]
+
+        amp_mean, amp_std = np.mean(np.abs(ref_data), axis=0), np.std(np.abs(ref_data), axis=0)
+        phi_mean, phi_std = np.mean(np.angle(ref_data), axis=0), np.std(np.angle(ref_data), axis=0)
+
+        def dB(y):
+            return 20*np.log10(y)
+
+        if en_plot:
+            plt.figure("Ref Standard deviation")
+            #plt.plot(self.freq_axis, dB(np.abs(amp_min)), label="Min")
+            #plt.plot(self.freq_axis, dB(amp_mean), label="Mean")
+            #plt.plot(self.freq_axis, dB(np.abs(amp_max)), label="Max")
+            plt.plot(self.freq_axis, amp_std, label="Std")
+            plt.xlabel("Frequency (THz)")
+            plt.ylabel("Amplitude (dB)")
+
+        return amp_std
+
+    def meas_sim(self):
+        t_sim = self.transmission_sim()
+
+        ref1_fd, ref1_meas = self.get_ref_data(Domain.Frequency, ref_idx=20, ret_meas=True)
+        ref2_fd, ref2_meas = self.get_ref_data(Domain.Frequency, ref_idx=21, ret_meas=True)
+
+        meas_time_diff = (ref1_meas.meas_time - ref2_meas.meas_time).total_seconds()
+        print("ref1 - ref2 measurement time difference (seconds): ", np.round(meas_time_diff, 2))
+
+        ref_amp_std = self.ref_std(en_plot=False)
+
+        # t_sim_meas = t_sim * ref1_fd[:, 1] / ref2_fd[:, 1]
+
+        ref_amp = np.abs(ref1_fd[:, 1])
+        ref_phi = np.angle(ref1_fd[:, 1])
+        t_sim_meas = t_sim * ref_amp * np.exp(1j * ref_phi) / ref1_fd[:, 1]
+
+        return t_sim_meas
+
+
+
     def eval_point(self, pnt):
         f_axis = self.freq_axis
         plot_range = self.options["plot_range"]
@@ -414,10 +486,15 @@ class DatasetEval(DataSet):
         sigma_exp = self._conductivity(meas_film)
         sigma_model = self.conductivity_model(sigma_exp)
 
+        t_exp_1layer = self.meas_sim()
+
         self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = True
         self.sub_dataset.options["pp_opt"]["window_opt"]["en_plot"] = True
         self.sub_dataset.options["pp_opt"]["window_opt"]["fig_label"] = "sub"
-        t_exp_1layer = self.sub_dataset.transmission(meas_sub, 1)
+
+        # t_exp_1layer = self.sub_dataset.transmission(meas_sub, 1)
+        # t_exp_1layer = self.transmission_sim()
+
         self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = False
         t_exp_1layer = np.abs(t_exp_1layer) * np.exp(-1j * np.angle(t_exp_1layer))
 

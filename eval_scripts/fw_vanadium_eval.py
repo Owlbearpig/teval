@@ -30,7 +30,7 @@ options = {
                           "win_width": 8*(15+0), # 5*15 # 36
                           "type": WindowTypes.tukey,
                           },
-           "filter_opt": {"enabled": True, "f_range": (0.3, 3.0), },
+           "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
            "remove_dc": True,
            },
 "eval_opt": {"shift_sub": 0, # ref <-> sam pulse shift in fs
@@ -38,8 +38,12 @@ options = {
              "sub_pnt": (30, 10),
              "fit_range_film": (0.65, 3.2),
              "fit_range_sub": (0.5, 1.5),
-             "nfp": 4, # number of fp pulses contained in window ("inf" or 0, 1, ..., N)
+             "nfp": "inf", # number of fp pulses contained in window ("inf" or 0, 1, ..., N)
              },
+"sim_opt": {"enabled": True,
+            "n_sub": 3.05 + 0.005j,
+            "shift_sim": 35,
+},
 "plot_opt": {"shift_sam2ref": False,},
 "shown_plots": {
     "Window": True,
@@ -54,11 +58,11 @@ options = {
     "Conductivity": True,
 },
 }
-#sam_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
-#sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
+sam_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
+sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
 
-sam_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
-sub_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
+#sam_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
+#sub_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
 
 dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
 
