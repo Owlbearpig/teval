@@ -323,8 +323,8 @@ class DatasetEval(DataSet):
         shift = 15.3 # 15.3  # 30
         best_ = ((None, None), np.inf)
         n_opt_best = None
-        for d_sub in [650]:#[*np.arange(640, 651, 1)]: # 639 (Teralyzer)
-            for shift in [35]: # [15.6]: # 28 # 22
+        for d_sub in [*np.arange(640, 645.5, 0.5)]:#[*np.arange(640, 651, 1)]: # 639 (Teralyzer)
+            for shift in [*np.arange(7.5, 16.5, 0.5)]: # [15.6]: # 28 # 22
                 self.options["sample_properties"]["d_1"] = d_sub
                 self.options["eval_opt"]["shift_sub"] = shift
                 gof = 0
@@ -358,8 +358,8 @@ class DatasetEval(DataSet):
                 gof = gof / np.sum(freq_mask)
                 print("Sub:", peak_val, shift, d_sub, gof)
 
-                plt.figure("TESTFFT")
-                plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
+                #plt.figure("TESTFFT")
+                #plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
 
                 fs = 1/np.mean(np.diff(self.freq_axis))
                 Q = 0.5  # quality factor: higher = narrower
@@ -413,7 +413,7 @@ class DatasetEval(DataSet):
         n_sub = self.options["sim_opt"]["n_sub"]
         nfp_og = self.options["eval_opt"]["nfp"]
 
-        self.options["eval_opt"]["nfp"] = nfp_og
+        self.options["eval_opt"]["nfp"] = self.options["sim_opt"]["nfp_sim"]
         t_sim = np.zeros_like(self.freq_axis, dtype=complex)
         for f_idx, freq in enumerate(self.freq_axis):
             t_sim[f_idx] = self._model_1layer(freq, n_sub)
@@ -440,7 +440,8 @@ class DatasetEval(DataSet):
         amp_max = ref_data[amp_argmax]
 
         amp_mean, amp_std = np.mean(np.abs(ref_data), axis=0), np.std(np.abs(ref_data), axis=0)
-        phi_mean, phi_std = np.mean(np.angle(ref_data), axis=0), np.std(np.angle(ref_data), axis=0)
+        phi = np.unwrap(np.angle(ref_data))
+        phi_mean, phi_std = np.mean(phi, axis=0), np.std(phi, axis=0)
 
         def dB(y):
             return 20*np.log10(y)
@@ -450,11 +451,13 @@ class DatasetEval(DataSet):
             #plt.plot(self.freq_axis, dB(np.abs(amp_min)), label="Min")
             #plt.plot(self.freq_axis, dB(amp_mean), label="Mean")
             #plt.plot(self.freq_axis, dB(np.abs(amp_max)), label="Max")
-            plt.plot(self.freq_axis, amp_std, label="Std")
+            plt.plot(self.freq_axis, phi[123]-phi[127], label="123-127")
+            # plt.plot(self.freq_axis, phi[124], label="124")
+            # plt.plot(self.freq_axis, phi_std, label="Std")
             plt.xlabel("Frequency (THz)")
             plt.ylabel("Amplitude (dB)")
 
-        return amp_std
+        return phi[123]-phi[127]
 
     def meas_sim(self):
         t_sim = self.transmission_sim()
@@ -465,17 +468,15 @@ class DatasetEval(DataSet):
         meas_time_diff = (ref1_meas.meas_time - ref2_meas.meas_time).total_seconds()
         print("ref1 - ref2 measurement time difference (seconds): ", np.round(meas_time_diff, 2))
 
-        ref_amp_std = self.ref_std(en_plot=False)
+        # ref_phi_diff = self.ref_std(en_plot=True)
 
         # t_sim_meas = t_sim * ref1_fd[:, 1] / ref2_fd[:, 1]
 
         ref_amp = np.abs(ref1_fd[:, 1])
-        ref_phi = np.angle(ref1_fd[:, 1])
+        ref_phi = np.angle(ref1_fd[:, 1]) # + 0.5*ref_phi_diff
         t_sim_meas = t_sim * ref_amp * np.exp(1j * ref_phi) / ref1_fd[:, 1]
 
         return t_sim_meas
-
-
 
     def eval_point(self, pnt):
         f_axis = self.freq_axis
@@ -492,11 +493,11 @@ class DatasetEval(DataSet):
         self.sub_dataset.options["pp_opt"]["window_opt"]["en_plot"] = True
         self.sub_dataset.options["pp_opt"]["window_opt"]["fig_label"] = "sub"
 
-        # t_exp_1layer = self.sub_dataset.transmission(meas_sub, 1)
+        t_exp_1layer = self.sub_dataset.transmission(meas_sub, 1)
+        t_exp_1layer = np.abs(t_exp_1layer) * np.exp(-1j * np.angle(t_exp_1layer))
         # t_exp_1layer = self.transmission_sim()
 
         self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = False
-        t_exp_1layer = np.abs(t_exp_1layer) * np.exp(-1j * np.angle(t_exp_1layer))
 
         n_sub = self._fit_1layer(t_exp_1layer)
 

@@ -25,9 +25,9 @@ options = {
 "img_title": "",
 "sample_properties": {"d_1": 650, "d_2": 650, "d_film": 0.300, },
 "pp_opt": {"window_opt": {"enabled": False,
-                          "slope": 0.50, # 0.99
+                          "slope": 0.05, # 0.99
                           # "win_start": 0,
-                          "win_width": 8*(15+0), # 5*15 # 36
+                          "win_width": 2 * 40, # 5*15 # 36
                           "type": WindowTypes.tukey,
                           },
            "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
@@ -37,20 +37,21 @@ options = {
              "shift_film": 0,
              "sub_pnt": (30, 10),
              "fit_range_film": (0.65, 3.2),
-             "fit_range_sub": (0.5, 1.5),
-             "nfp": "inf", # number of fp pulses contained in window ("inf" or 0, 1, ..., N)
+             "fit_range_sub": (0.5, 2.5),
+             "nfp": 2, # assumed number of fp pulses contained in the window ("inf" or 0, 1, ..., N)
              },
 "sim_opt": {"enabled": True,
             "n_sub": 3.05 + 0.005j,
             "shift_sim": 35,
+            "nfp_sim": 2,
 },
 "plot_opt": {"shift_sam2ref": False,},
 "shown_plots": {
     "Window": True,
     "Time domain": True,
     "Spectrum": True,
-    "Phase": True,
-    "Phase slope": True,
+    "Phase": False,
+    "Phase slope": False,
     "Amplitude transmission": False,
     "Absorbance": False,
     "Refractive index": False,
@@ -58,11 +59,11 @@ options = {
     "Conductivity": True,
 },
 }
-sam_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
-sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
+#sam_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
+#sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
 
-#sam_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
-#sub_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
+sam_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
+sub_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
 
 dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
 
