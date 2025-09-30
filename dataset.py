@@ -510,6 +510,10 @@ class DataSet:
             domain = Domain.Time
 
         data_td = self._pre_process(meas)
+        amp_shift = np.random.random()
+        data_td[:, 1] += amp_shift
+        # data_td[:, 1] *= amp_shift
+        print(f"!!!!!!!!!!!{amp_shift}!!!!!!!!!!")
 
         if domain == Domain.Time:
             return data_td
@@ -864,6 +868,8 @@ class DataSet:
             if np.abs(dist_val) < np.abs(best_fit_val):
                 best_fit_val = dist_val
                 closest_ref = ref_meas
+        from random import choice
+        # closest_ref = choice(self.measurements["refs"])
 
         logging.debug(f"Sam: {meas_})")
         logging.debug(f"Ref: {closest_ref})")
@@ -1016,6 +1022,7 @@ class DataSet:
         return ret
 
     def meas_time_diff(self, m1, m2):
+        # meas time difference in hours
         return (m2.meas_time - m1.meas_time).total_seconds() / 3600
 
     def plot_point(self, point=None, en_td_plot=True, **kwargs_):
@@ -1163,8 +1170,10 @@ class DataSet:
         first_meas = self.measurements["all"][0]
         if all([first_meas.position == meas.position for meas in self.measurements["all"]]):
             meas_set = self.measurements["all"]
+            logging.info("Using the full dataset")
         else:
             meas_set = self.measurements["refs"]
+            logging.info("Using reference set")
 
         selected_freq_ = self.selected_freq
         if isinstance(selected_freq_, tuple):
@@ -1194,18 +1203,20 @@ class DataSet:
         # correction
         # ref_angle_arr -= 2*np.pi*self.freq_axis[f_idx]*(ref_zero_crossing/1000)
 
-        max_diff_0x = np.max(np.diff(ref_zero_crossing))
-        logging.info(f"Largest jump: {np.round(max_diff_0x, 2)} fs")
+        abs_p_shifts = np.abs(np.diff(ref_zero_crossing))
+        logging.info(f"Mean pulse shift: {np.round(np.mean(abs_p_shifts), 2)} fs")
+        max_diff_0x, min_diff_0x = np.max(abs_p_shifts), np.min(abs_p_shifts)
+        logging.info(f"Largest/smallest shift: {np.round(max_diff_0x, 2)}/{np.round(min_diff_0x, 2)} fs")
         max_diff = np.max(np.diff(ref_angle_arr))
-        logging.info(f"Largest phase jump: {np.round(max_diff, 2)} rad")
+        logging.info(f"Largest phase jump: {np.round(max_diff, 2)} rad (at {selected_freq_} THz)")
 
         avg_amp_change = np.mean(np.abs(np.diff(ref_ampl_arr)))
         max_amp_change = np.max(np.diff(ref_ampl_arr))
 
         logging.info(f"Largest amplitude change: {np.round(max_amp_change, 2)} (Arb. u.)")
         logging.info(f"Mean absolute amplitude change: {np.round(avg_amp_change, 2)} (Arb. u.)")
-        logging.info(f"Measurement interval: {np.round(meas_interval * 60, 2)} min.")
-        logging.info(f"Period: {np.round(period, 2)}±{np.round(period_std, 2)} min.")
+        logging.info(f"Mean measurement interval: {np.round(meas_interval*3600, 2)} sec.")
+        logging.info(f"Period (estimation): {np.round(period, 2)}±{np.round(period_std, 2)} min.")
 
         plt.figure("fft")
         phi_fft = np.fft.rfft(ref_angle_arr)
@@ -1225,8 +1236,16 @@ class DataSet:
             mt_unit = "hours"
 
         plt.figure("Reference zero crossing")
-        plt.title(f"Reference zero crossing change")
+        plt.title(f"Reference zero crossing\n(relative to first measurement)")
         plt.plot(meas_times, ref_zero_crossing, label=t0)
+        plt.xlabel(f"Measurement time ({mt_unit})")
+        plt.ylabel("Time (fs)")
+
+        plt.figure("Reference zero crossing change")
+        plt.title(f"Reference zero crossing change")
+        plt.plot(meas_times[1:], abs_p_shifts, label=t0)
+        phase_change = np.abs(np.diff(ref_angle_arr))
+        # plt.plot(meas_times[1:], 1e3*phase_change/(2*3.1415*selected_freq_), label=t0)
         plt.xlabel(f"Measurement time ({mt_unit})")
         plt.ylabel("Time (fs)")
 
@@ -1241,6 +1260,12 @@ class DataSet:
         plt.plot(meas_times, ref_angle_arr, label=t0)
         plt.xlabel(f"Measurement time ({mt_unit})")
         plt.ylabel("Phase (rad)")
+
+        plt.figure("Time between reference measurements")
+        plt.title(f"Time between reference measurements")
+        plt.plot(meas_times[1:], np.diff(meas_times)*3600)
+        plt.ylabel("Time difference (s)")
+        plt.xlabel("Time since first measurement (h)")
 
         if plt.fignum_exists(self.img_properties["fig_num"]):
             self.plot_refs()

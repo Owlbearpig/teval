@@ -63,17 +63,18 @@ def phase_correction(freq_axis_, phi, disable=False, fit_range=None, en_plot=Fal
         return phi
 
     if fit_range is None:
-        fit_range = [0.5, 1.50]
+        fit_range = [0.6, 1.2]
 
     fit_slice = (freq_axis_ >= fit_range[0]) * (freq_axis_ <= fit_range[1])
     p = np.polyfit(freq_axis_[fit_slice], phi[fit_slice], 1)
-
+    print(f"Phase offset: {np.round(p[1].real, 5)}")
     phi_corrected = phi - p[1].real
 
     if en_plot:
         plt.figure("phase_correction")
         plt.plot(freq_axis_, phi, label="Unwrapped phase")
         plt.plot(freq_axis_, phi_corrected, label="Shifted phase")
+        plt.plot(freq_axis_, freq_axis_*p[0]+p[1], label="PolyFit deg=1")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad)")
         plt.legend()

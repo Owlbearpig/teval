@@ -8,8 +8,9 @@ import matplotlib.pyplot as plt
 import logging
 from scipy.signal import iirnotch, filtfilt
 from numpy import polyfit
+from functions import phase_correction
 
-logging.basicConfig(level=logging.WARNING)
+# logging.basicConfig(level=logging.WARNING)
 
 class DatasetEval(DataSet):
 
@@ -305,7 +306,7 @@ class DatasetEval(DataSet):
         return n_opt_best
 
     def _fit_1layer(self, t_exp_):
-        bounds = [(3.00, 3.13), (0.000, 0.015)]
+        bounds = [(3.05, 3.12), (0.000, 0.015)]
         #bounds = [(3.05, 3.13), (0.0025, 0.0050)]
         min_kwargs = {"method": "Nelder-Mead",
                       "options": {
@@ -317,14 +318,17 @@ class DatasetEval(DataSet):
                       }
                       }
 
+        #t_exp_phi_ = phase_correction(self.freq_axis, np.unwrap(np.angle(t_exp_)), en_plot=True)
+        #t_exp_ = np.abs(t_exp_) * np.exp(1j * t_exp_phi_)
+
         f0, f1 = self.options["eval_opt"]["fit_range_sub"]
         freq_mask = (f0 <= self.freq_axis) * (self.freq_axis <= f1)
 
         shift = 15.3 # 15.3  # 30
         best_ = ((None, None), np.inf)
         n_opt_best = None
-        for d_sub in [650]:#[*np.arange(640, 651, 1)]: # 639 (Teralyzer)
-            for shift in [35]: # [15.6]: # 28 # 22
+        for d_sub in [639.5]:#[639.5]:#[*np.arange(639, 640, 0.5)]:# [*np.arange(637, 643, 1)]:#[*np.arange(639.5, 640, 0.1)]: # 639 (Teralyzer)
+            for shift in [-3]:#[-3]:#[*np.arange(-5, 5, 1)]:#[*np.arange(-3, 3, 1)]:#[*np.arange(-5, 4, 1)]: # [15.6]: # 28 # 22
                 self.options["sample_properties"]["d_1"] = d_sub
                 self.options["eval_opt"]["shift_sub"] = shift
                 gof = 0
@@ -354,9 +358,9 @@ class DatasetEval(DataSet):
                 # mask_ = (10 < fft_freq_axis) * (fft_freq_axis < 20)
                 mask_ = (11 <= fft_freq_axis)
                 peak_val, peak_idx = np.max(np.abs(fft_[mask_])), np.argmax(np.abs(fft_[mask_]))
-
+                sum_val = np.sum(np.abs(fft_))
                 gof = gof / np.sum(freq_mask)
-                print("Sub:", peak_val, shift, d_sub, gof)
+                print("Sub:", sum_val, peak_val, shift, d_sub, gof)
 
                 plt.figure("TESTFFT")
                 plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
@@ -375,8 +379,13 @@ class DatasetEval(DataSet):
                 # plt.plot(n_imag[freq_mask], label="Before filter")
                 # plt.plot(n_opt.imag, label="After filter")
 
-                if peak_val < best_[1]:
-                    best_ = ((shift, d_sub), peak_val)
+                plt.figure("n_sub")
+                plt.plot(self.freq_axis, n_opt.real, label=shift)
+                plt.plot(self.freq_axis, n_opt.imag, label=shift)
+
+                opt_val = peak_val
+                if opt_val < best_[1]:
+                    best_ = ((shift, d_sub), opt_val)
                     n_opt_best = n_opt
 
         print("Best sub: ", best_)
@@ -459,18 +468,18 @@ class DatasetEval(DataSet):
     def meas_sim(self):
         t_sim = self.transmission_sim()
 
-        ref1_fd, ref1_meas = self.get_ref_data(Domain.Frequency, ref_idx=20, ret_meas=True)
-        ref2_fd, ref2_meas = self.get_ref_data(Domain.Frequency, ref_idx=21, ret_meas=True)
+        ref1_fd, ref1_meas = self.get_ref_data(Domain.Frequency, ref_idx=10, ret_meas=True)
+        ref2_fd, ref2_meas = self.get_ref_data(Domain.Frequency, ref_idx=10, ret_meas=True)
 
         meas_time_diff = (ref1_meas.meas_time - ref2_meas.meas_time).total_seconds()
         print("ref1 - ref2 measurement time difference (seconds): ", np.round(meas_time_diff, 2))
 
         ref_amp_std = self.ref_std(en_plot=False)
 
-        # t_sim_meas = t_sim * ref1_fd[:, 1] / ref2_fd[:, 1]
+        t_sim_meas = t_sim * ref1_fd[:, 1] / ref2_fd[:, 1]
 
-        ref_amp = np.abs(ref1_fd[:, 1])
-        ref_phi = np.angle(ref1_fd[:, 1])
+        ref_amp = np.abs(ref2_fd[:, 1])
+        ref_phi = np.angle(ref2_fd[:, 1])
         t_sim_meas = t_sim * ref_amp * np.exp(1j * ref_phi) / ref1_fd[:, 1]
 
         return t_sim_meas
@@ -486,17 +495,21 @@ class DatasetEval(DataSet):
         sigma_exp = self._conductivity(meas_film)
         sigma_model = self.conductivity_model(sigma_exp)
 
-        t_exp_1layer = self.meas_sim()
+        # t_exp_1layer = self.meas_sim()
 
         self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = True
         self.sub_dataset.options["pp_opt"]["window_opt"]["en_plot"] = True
         self.sub_dataset.options["pp_opt"]["window_opt"]["fig_label"] = "sub"
 
-        # t_exp_1layer = self.sub_dataset.transmission(meas_sub, 1)
+        # single_layer_eval = self.sub_dataset.single_layer_eval(meas_sub, (0, 10))
+        t_exp_1layer = self.sub_dataset.transmission(meas_sub, 1)
         # t_exp_1layer = self.transmission_sim()
 
         self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = False
-        t_exp_1layer = np.abs(t_exp_1layer) * np.exp(-1j * np.angle(t_exp_1layer))
+        phi = -np.unwrap(np.angle(t_exp_1layer))
+        phi = phase_correction(self.freq_axis, phi, en_plot=True, fit_range=(0.3, 0.6))
+        # phi -= 0.03
+        t_exp_1layer = np.abs(t_exp_1layer) * np.exp(1j * phi)
 
         n_sub = self._fit_1layer(t_exp_1layer)
 
@@ -519,6 +532,7 @@ class DatasetEval(DataSet):
         f0, f1 = self.options["eval_opt"]["fit_range_sub"]
         f_mask = (f0 < self.freq_axis)*(self.freq_axis < f1)
 
+
         plt.figure("Conductivity(fit)")
         plt.plot(self.freq_axis, sigma.real, label="Real part")
         plt.plot(self.freq_axis, sigma.imag, label="Imaginary part")
@@ -526,18 +540,30 @@ class DatasetEval(DataSet):
         plt.figure("n_sub")
         plt.plot(self.freq_axis, n_sub.real, label="Real part")
         plt.plot(self.freq_axis, n_sub.imag, label="Imaginary part")
+        # plt.plot(self.freq_axis, single_layer_eval["refr_idx"].imag, label="Imaginary part (1 layer eval)")
+        plt.ylim((0, 0.012))
+        plt.xlim(self.options["eval_opt"]["fit_range_sub"])
+        plt.xlabel("Frequency (THz)")
+
+        plt.figure("absorption coefficient")
+        plt.plot(self.freq_axis, 4*np.pi*n_sub.imag*self.freq_axis/0.03)
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("Absorption coefficient (1/cm)")
 
         plt.figure("n_film")
         plt.plot(self.freq_axis, n_film.real, label="real")
         plt.plot(self.freq_axis, n_film.imag, label="imag")
+        plt.xlabel("Frequency (THz)")
 
         plt.figure("Transmission fit abs film")
         plt.plot(self.freq_axis[f_mask], np.abs(t_exp_2layer[f_mask]), label="Experiment")
         plt.plot(self.freq_axis[f_mask], np.abs(t_mod_film[f_mask]), label="Model")
+        plt.xlabel("Frequency (THz)")
 
         plt.figure("Transmission fit angle film")
         plt.plot(self.freq_axis[f_mask], np.angle(t_exp_2layer[f_mask]), label="Experiment")
         plt.plot(self.freq_axis[f_mask], np.angle(t_mod_film[f_mask]), label="Model")
+        plt.xlabel("Frequency (THz)")
 
         plt.figure("TEST2")
         phi_1l =  np.unwrap(np.angle(t_exp_1layer[f_mask]))
@@ -548,13 +574,13 @@ class DatasetEval(DataSet):
         # self.phase_fit_(self.freq_axis[f_mask], phi_2l)
 
         plt.figure("Transmission fit abs sub")
-        plt.plot(self.freq_axis[f_mask], np.abs(t_exp_1layer[f_mask]), label="Experiment")
-        plt.plot(self.freq_axis[f_mask], np.abs(t_mod_sub[f_mask]), label="Model")
+        plt.plot(self.freq_axis[f_mask], np.log10(np.abs(t_exp_1layer[f_mask])), label="Experiment")
+        plt.plot(self.freq_axis[f_mask], np.log10(np.abs(t_mod_sub[f_mask])), label="Model")
 
         plt.figure("Transmission fit abs sub dev")
         diff = (np.abs(t_exp_1layer[f_mask]) - np.abs(t_mod_sub[f_mask]))**2
-        plt.plot(self.freq_axis[f_mask], diff/np.max(diff), label="Squared difference")
-        plt.plot(self.freq_axis[f_mask], n_sub.imag[f_mask] / np.max(n_sub.imag[f_mask]), label="n_sub.imag")
+        plt.plot(self.freq_axis[f_mask], np.log10(diff), label="Log squared difference")
+        # plt.plot(self.freq_axis[f_mask], n_sub.imag[f_mask] / np.max(n_sub.imag[f_mask]), label="n_sub.imag")
 
         plt.figure("Transmission fit angle sub")
         plt.plot(self.freq_axis[f_mask], np.angle(t_exp_1layer[f_mask]), label="Experiment")

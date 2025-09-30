@@ -24,10 +24,10 @@ options = {
 "dist_func": Dist.Time,
 "img_title": "",
 "sample_properties": {"d_1": 650, "d_2": 650, "d_film": 0.300, },
-"pp_opt": {"window_opt": {"enabled": False,
-                          "slope": 0.50, # 0.99
+"pp_opt": {"window_opt": {"enabled": True,
+                          "slope": 0.05, # 0.999, # 0.99
                           # "win_start": 0,
-                          "win_width": 8*(15+0), # 5*15 # 36
+                          "win_width": 18,# 18,#2*32,# 38*2, # 5*15 # 36
                           "type": WindowTypes.tukey,
                           },
            "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
@@ -35,14 +35,14 @@ options = {
            },
 "eval_opt": {"shift_sub": 0, # ref <-> sam pulse shift in fs
              "shift_film": 0,
-             "sub_pnt": (30, 10),
+             "sub_pnt": (32, 5),
              "fit_range_film": (0.65, 3.2),
-             "fit_range_sub": (0.5, 1.5),
-             "nfp": "inf", # number of fp pulses contained in window ("inf" or 0, 1, ..., N)
+             "fit_range_sub": (0.10, 3.0),
+             "nfp": 0, # number of fp pulses contained in window ("inf" or 0, 1, ..., N)
              },
 "sim_opt": {"enabled": True,
-            "n_sub": 3.05 + 0.005j,
-            "shift_sim": 35,
+            "n_sub": 3.05 + 0.002j,
+            "shift_sim": 0,
 },
 "plot_opt": {"shift_sam2ref": False,},
 "shown_plots": {
@@ -66,7 +66,8 @@ sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
 
 dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
 
-dataset_eval.select_freq((2.00, 2.10))
+# dataset_eval.select_freq((2.00, 2.10))
+dataset_eval.select_freq(0.5)
 dataset_eval.select_quantity(QuantityEnum.Power)
 
 # dataset_eval.plot_system_stability()
@@ -87,7 +88,8 @@ dataset_eval.select_quantity(QuantityEnum.Power)
 # dataset_eval.plot_point((82, 10))
 
 # img12
-pnt = (61, -3)
+# pnt = (30, 10)
+pnt = options["eval_opt"]["sub_pnt"]
 # pnt = (73, 3)
 dataset_eval.plot_point(pnt)
 dataset_eval.eval_point(pnt)
