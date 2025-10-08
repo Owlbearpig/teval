@@ -454,7 +454,7 @@ class DatasetEval(DataSet):
         n_sub = self.options["sim_opt"]["n_sub"]
         nfp_og = self.options["eval_opt"]["nfp"]
 
-        self.options["eval_opt"]["nfp"] = nfp_og
+        self.options["eval_opt"]["nfp"] = self.options["sim_opt"]["nfp_sim"]
         t_sim = np.zeros_like(self.freq_axis, dtype=complex)
         for f_idx, freq in enumerate(self.freq_axis):
             t_sim[f_idx] = self._model_1layer(freq, n_sub)
@@ -481,7 +481,8 @@ class DatasetEval(DataSet):
         amp_max = ref_data[amp_argmax]
 
         amp_mean, amp_std = np.mean(np.abs(ref_data), axis=0), np.std(np.abs(ref_data), axis=0)
-        phi_mean, phi_std = np.mean(np.angle(ref_data), axis=0), np.std(np.angle(ref_data), axis=0)
+        phi = np.unwrap(np.angle(ref_data))
+        phi_mean, phi_std = np.mean(phi, axis=0), np.std(phi, axis=0)
 
         def dB(y):
             return 20*np.log10(y)

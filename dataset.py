@@ -1331,7 +1331,7 @@ class DataSet:
             y_label = "Temperature (°C)"
         else:
             quant = humidity
-            y_label = "Humidity (\%)"
+            y_label = "Humidity (\\%)"
 
         stability_figs = ["Reference zero crossing", "Stability amplitude", "Stability phase"]
         for fig_label in stability_figs:
