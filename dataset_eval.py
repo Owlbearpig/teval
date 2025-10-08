@@ -9,6 +9,7 @@ import logging
 from scipy.signal import iirnotch, filtfilt
 from numpy import polyfit
 from functions import phase_correction
+from tmm_impl import coh_tmm
 
 # logging.basicConfig(level=logging.WARNING)
 
@@ -60,6 +61,25 @@ class DatasetEval(DataSet):
         model_ = sig_cc + sigma_l
 
         return model_.real + 1j * model_.imag
+
+    def _tmm_model_1layer(self, freq, n3_):
+        d = self.options["sample_properties"]["d_1"]
+        shift_ = self.options["eval_opt"]["shift_sub"]
+        pol = "s"
+        n_list = [1, n3_, 1]
+        d_list = [np.inf, d, np.inf]
+        th_0 = 0 * np.pi / 180
+        lam_vac = c_thz / freq
+        w_ = 2 * np.pi * freq
+
+        phase_shift = np.exp(1j * shift_ * 1e-3 * w_)
+
+        e_sam = coh_tmm(pol, n_list, d_list, th_0, lam_vac)
+        e_ref = np.exp(1j * (d * w_ / c_thz))
+
+        t = phase_shift * e_sam / e_ref
+
+        return np.nan_to_num(t)
 
     def _model_1layer(self, freqs, n3_):
         d = self.options["sample_properties"]["d_1"]
@@ -179,6 +199,7 @@ class DatasetEval(DataSet):
 
         n = x_[0] + 1j * x_[1]
         t_mod = self._model_1layer(freq_, n)
+        # t_mod = self._tmm_model_1layer(freq_, n)
 
         abs_loss = (np.abs(t_mod) - np.abs(t_exp_)) ** 2
         ang_loss = (np.angle(t_mod) - np.angle(t_exp_)) ** 2
@@ -306,6 +327,7 @@ class DatasetEval(DataSet):
         return n_opt_best
 
     def _fit_1layer(self, t_exp_):
+        pnt = self.options["eval_opt"]["sub_pnt"]
         bounds = [(3.05, 3.12), (0.000, 0.015)]
         #bounds = [(3.05, 3.13), (0.0025, 0.0050)]
         min_kwargs = {"method": "Nelder-Mead",
@@ -327,14 +349,13 @@ class DatasetEval(DataSet):
         shift = 15.3 # 15.3  # 30
         best_ = ((None, None), np.inf)
         n_opt_best = None
-        for d_sub in [639.5]:#[639.5]:#[*np.arange(639, 640, 0.5)]:# [*np.arange(637, 643, 1)]:#[*np.arange(639.5, 640, 0.1)]: # 639 (Teralyzer)
-            for shift in [-3]:#[-3]:#[*np.arange(-5, 5, 1)]:#[*np.arange(-3, 3, 1)]:#[*np.arange(-5, 4, 1)]: # [15.6]: # 28 # 22
+        for d_sub in [*np.arange(638, 643, 1.0)]:#[639.5]:#[*np.arange(639, 640, 0.5)]: # 639 / 640 (Teralyzer)
+            for shift in [*np.arange(-10, 10, 1)]:# 28, 22, -3
                 self.options["sample_properties"]["d_1"] = d_sub
                 self.options["eval_opt"]["shift_sub"] = shift
                 gof = 0
                 n_opt = np.zeros_like(self.freq_axis, dtype=complex)
                 for f_idx in np.arange(len(self.freq_axis))[freq_mask]:
-
                     cost = partial(self._opt_fun_1layer,
                                    freq_=self.freq_axis[f_idx],
                                    t_exp_=t_exp_[f_idx],
@@ -358,19 +379,19 @@ class DatasetEval(DataSet):
                 # mask_ = (10 < fft_freq_axis) * (fft_freq_axis < 20)
                 mask_ = (11 <= fft_freq_axis)
                 peak_val, peak_idx = np.max(np.abs(fft_[mask_])), np.argmax(np.abs(fft_[mask_]))
-                sum_val = np.sum(np.abs(fft_))
+                sum_val = np.sum(np.abs(fft_[7 <= fft_freq_axis]))
                 gof = gof / np.sum(freq_mask)
                 print("Sub:", sum_val, peak_val, shift, d_sub, gof)
 
-                plt.figure("TESTFFT")
-                plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
+                #plt.figure("TESTFFT")
+                #plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
 
-                fs = 1/np.mean(np.diff(self.freq_axis))
-                Q = 0.5  # quality factor: higher = narrower
+                # fs = 1/np.mean(np.diff(self.freq_axis))
+                # Q = 0.5  # quality factor: higher = narrower
 
-                peak_freq = fft_freq_axis[mask_][peak_idx]
+                # peak_freq = fft_freq_axis[mask_][peak_idx]
                 # print(peak_freq, fs)
-                b, a = iirnotch(peak_freq / (fs / 2), Q)
+                # b, a = iirnotch(peak_freq / (fs / 2), Q)
 
                 #n_opt.real = filtfilt(b, a, n_opt.real)
                 #n_opt.imag = filtfilt(b, a, n_opt.imag)
@@ -379,18 +400,29 @@ class DatasetEval(DataSet):
                 # plt.plot(n_imag[freq_mask], label="Before filter")
                 # plt.plot(n_opt.imag, label="After filter")
 
-                plt.figure("n_sub")
-                plt.plot(self.freq_axis, n_opt.real, label=shift)
-                plt.plot(self.freq_axis, n_opt.imag, label=shift)
+                #plt.figure("n_sub")
+                #plt.plot(self.freq_axis, n_opt.real, label=shift)
+                #plt.plot(self.freq_axis, n_opt.imag, label=shift)
 
-                opt_val = peak_val
-                if opt_val < best_[1]:
-                    best_ = ((shift, d_sub), opt_val)
+                res = ((shift, d_sub), peak_val, sum_val)
+                if peak_val < best_[1]:
+                    best_ = res
                     n_opt_best = n_opt
 
-        print("Best sub: ", best_)
+                with open("debug_out", "a") as f:
+                    res_line = f"{pnt} {str(res)}\n"
+                    f.write(res_line)
+
+        print(f"Best sub: {best_} @{pnt}")
         self.options["sample_properties"]["d_1"] = best_[0][1]
         self.options["eval_opt"]["shift_sub"] = best_[0][0]
+
+        with open("result_out", "a") as f:
+            res_line = f"{pnt} {str(best_)}\n"
+            f.write(res_line)
+
+        with open("debug_out", "a") as f:
+            f.write("\n")
 
         return n_opt_best
 
@@ -487,34 +519,33 @@ class DatasetEval(DataSet):
 
 
     def eval_point(self, pnt):
-        f_axis = self.freq_axis
-        plot_range = self.options["plot_range"]
-
         meas_sub = self.get_measurement(*self.options["eval_opt"]["sub_pnt"])
-        meas_film = self.get_measurement(*pnt)
-        sigma_exp = self._conductivity(meas_film)
-        sigma_model = self.conductivity_model(sigma_exp)
 
         # t_exp_1layer = self.meas_sim()
 
-        self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = True
-        self.sub_dataset.options["pp_opt"]["window_opt"]["en_plot"] = True
+        #self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = True
+        self.sub_dataset.options["pp_opt"]["window_opt"]["en_plot"] = False
         self.sub_dataset.options["pp_opt"]["window_opt"]["fig_label"] = "sub"
 
-        # single_layer_eval = self.sub_dataset.single_layer_eval(meas_sub, (0, 10))
         t_exp_1layer = self.sub_dataset.transmission(meas_sub, 1)
         # t_exp_1layer = self.transmission_sim()
 
-        self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = False
+        #self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = False
+
         phi = -np.unwrap(np.angle(t_exp_1layer))
-        phi = phase_correction(self.freq_axis, phi, en_plot=True, fit_range=(0.3, 0.6))
+        # phi = phase_correction(self.freq_axis, phi, en_plot=True, fit_range=(0.3, 0.6))
         # phi -= 0.03
         t_exp_1layer = np.abs(t_exp_1layer) * np.exp(1j * phi)
 
         n_sub = self._fit_1layer(t_exp_1layer)
 
+        if self.options["eval_opt"]["area_fit"]:
+            return
+
+        meas_film = self.get_measurement(*pnt)
+
         self.options["pp_opt"]["window_opt"]["enabled"] = True
-        self.options["pp_opt"]["window_opt"]["en_plot"] = True
+        self.options["pp_opt"]["window_opt"]["en_plot"] = False
         self.options["pp_opt"]["window_opt"]["fig_label"] = "film"
         t_exp_2layer = self.transmission(meas_film, 1)
         self.options["pp_opt"]["window_opt"]["enabled"] = False
@@ -526,12 +557,16 @@ class DatasetEval(DataSet):
         w = 2 * np.pi * np.array(self.freq_axis)
         sigma = 1e4 * 2 * eps0_thz * n_film ** 2 * w / (1 + 1j)  # S/cm
 
+        sigma_exp = self._conductivity(meas_film)
+        sigma_model = self.conductivity_model(sigma_exp)
+
         t_mod_sub = self._model_1layer(self.freq_axis, n_sub)
         t_mod_film = self._model_2layer(self.freq_axis, n_sub=n_sub, n_film=n_film)
 
+        single_layer_eval = self.sub_dataset.single_layer_eval(meas_sub, (0, 10))
+
         f0, f1 = self.options["eval_opt"]["fit_range_sub"]
         f_mask = (f0 < self.freq_axis)*(self.freq_axis < f1)
-
 
         plt.figure("Conductivity(fit)")
         plt.plot(self.freq_axis, sigma.real, label="Real part")
@@ -540,13 +575,14 @@ class DatasetEval(DataSet):
         plt.figure("n_sub")
         plt.plot(self.freq_axis, n_sub.real, label="Real part")
         plt.plot(self.freq_axis, n_sub.imag, label="Imaginary part")
-        # plt.plot(self.freq_axis, single_layer_eval["refr_idx"].imag, label="Imaginary part (1 layer eval)")
+        plt.plot(self.freq_axis, single_layer_eval["refr_idx"].imag, label="Imaginary part (1 layer eval)")
         plt.ylim((0, 0.012))
         plt.xlim(self.options["eval_opt"]["fit_range_sub"])
         plt.xlabel("Frequency (THz)")
 
         plt.figure("absorption coefficient")
-        plt.plot(self.freq_axis, 4*np.pi*n_sub.imag*self.freq_axis/0.03)
+        plt.plot(self.freq_axis, 4*np.pi*n_sub.imag*self.freq_axis/0.03, label="fit")
+        plt.plot(self.freq_axis, single_layer_eval["alpha"], label="single layer eval")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Absorption coefficient (1/cm)")
 

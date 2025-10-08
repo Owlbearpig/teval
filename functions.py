@@ -67,7 +67,7 @@ def phase_correction(freq_axis_, phi, disable=False, fit_range=None, en_plot=Fal
 
     fit_slice = (freq_axis_ >= fit_range[0]) * (freq_axis_ <= fit_range[1])
     p = np.polyfit(freq_axis_[fit_slice], phi[fit_slice], 1)
-    print(f"Phase offset: {np.round(p[1].real, 5)}")
+
     phi_corrected = phi - p[1].real
 
     if en_plot:

@@ -1,6 +1,7 @@
 import itertools
 import os
 import random
+from copy import deepcopy
 from functools import partial
 import consts
 import matplotlib.pyplot as plt
@@ -510,10 +511,6 @@ class DataSet:
             domain = Domain.Time
 
         data_td = self._pre_process(meas)
-        amp_shift = np.random.random()
-        data_td[:, 1] += amp_shift
-        # data_td[:, 1] *= amp_shift
-        print(f"!!!!!!!!!!!{amp_shift}!!!!!!!!!!")
 
         if domain == Domain.Time:
             return data_td
@@ -667,8 +664,17 @@ class DataSet:
             logging.warning(f"Using default sample properties: {self.options['sample_properties']}")
 
         d = self.options["sample_properties"]["d"]
+
+        og_win_setting = deepcopy(self.options["pp_opt"]["window_opt"])
+
+        self.options["pp_opt"]["window_opt"]["enabled"] = True
+        self.options["pp_opt"]["window_opt"]["win_width"] = 10
+        self.options["pp_opt"]["window_opt"]["en_plot"] = False
+
         ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Frequency)
         sam_fd = self._get_data(meas_, Domain.Frequency)
+
+        self.options["pp_opt"]["window_opt"] = og_win_setting
 
         freq_axis = ref_fd[:, 0].real
 
@@ -695,10 +701,11 @@ class DataSet:
         n = 1 + phi_corrected * c_thz / (omega * d)
         n[n < 0] = 1
         kap = -c_thz * np.log(np.abs(sam_fd[freq_idx, 1] / ref_fd[freq_idx, 1]) * (1 + n) ** 2 / (4 * n)) / (omega * d)
+        alpha = 1e4 * 2 * omega * kap / c_thz
         # kap = -c_thz * np.log(np.abs(sam_fd[freq_idx, 1] / ref_fd[freq_idx, 1])) / (omega * d)
 
         ret = {"freq_axis": freq_axis,
-               "refr_idx": n + 1j * kap,
+               "refr_idx": n + 1j * kap, "alpha": alpha,
                "phi_ref": phi_ref, "phi_sam": phi_sam, "phi": phi, "phi_corrected": phi_corrected,
                }
 
@@ -1051,6 +1058,7 @@ class DataSet:
         logging.info(f"Sample measurement: {sam_meas}")
 
         # TODO redo window plotting
+        show_win_plot = deepcopy(self.options["pp_opt"]["window_opt"]["en_plot"])
         if self.options["shown_plots"]["Window"]:
             self.options["pp_opt"]["window_opt"]["en_plot"] = True
 
@@ -1064,7 +1072,7 @@ class DataSet:
             shift_t = np.abs(np.argmax(ref_td[:, 1]) - np.argmax(sam_td[:, 1]))
             sam_td[:, 1] = np.roll(sam_td[:, 1], -shift_t)
 
-        self.options["pp_opt"]["window_opt"]["en_plot"] = False
+        self.options["pp_opt"]["window_opt"]["en_plot"] = show_win_plot
 
         if remove_t_offset:
             ref_td[:, 0] -= ref_td[0, 0]
