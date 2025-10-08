@@ -10,8 +10,14 @@ from scipy.signal import iirnotch, filtfilt
 from numpy import polyfit
 from functions import phase_correction
 from tmm_impl import coh_tmm
+from enum import Enum
 
 # logging.basicConfig(level=logging.WARNING)
+
+class DataSetType(Enum):
+    Main = "main"
+    Sub = "sub"
+    Other = "other"
 
 class DatasetEval(DataSet):
 
@@ -24,6 +30,21 @@ class DatasetEval(DataSet):
             return
         sub_dataset = DataSet(sub_dataset_path, self.options)
         self.link_sub_dataset(sub_dataset)
+
+    def _get_dataset(self, which=DataSetType.Main):
+        if which == DataSetType.Main:
+            return self
+        elif which == DataSetType.Sub:
+            if self.sub_dataset is None:
+                raise ValueError("No sub-dataset linked.")
+            return self.sub_dataset
+        else:
+            return self, self.sub_dataset
+    """
+    def plot_point(self, *args, **kwargs):
+        ds = self._get_dataset(which)
+        ds.plot_point(*args, **kwargs)
+    """
 
     def _drude(self, freq_, tau, sig0):
         scale = 1
@@ -429,7 +450,6 @@ class DatasetEval(DataSet):
     def conductivity_model(self, sigma_exp):
         opt_res = self._fit_conductivity_model(sigma_exp)
         x = opt_res.x # x = [tau, sig0, wp, eps_inf, eps_s]
-        print(x)
         # x = [1, 100, 4*np.pi, 10, 20]
         # x = [1, 100, 2, 16.8, 20] # ulatowski plot
         # x = [-1.588e-02,  5.044e+01,  920.8,  40.55, -43.13] # fit result
