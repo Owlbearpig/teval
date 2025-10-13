@@ -42,13 +42,14 @@ options = {
              "sub_pnt": (30, 5),#(32, 5),
              "fit_range_film": (0.65, 3.2),
              "fit_range_sub": (0.5, 1.5), # (0.10, 3.0)
-             "nfp": 2, # number of fp pulses contained in window ("inf" or 0, 1, ..., N),
+             "nfp": 0, # number of fp pulses contained in window ("inf" or 0, 1, ..., N),
              "area_fit": False,
+             "sub_bounds": [(3.05, 3.12), (0.000, 0.015)],
              },
 "sim_opt": {"enabled": True,
             "n_sub": 3.05 + 0.005j,
-            "shift_sim": 35,
-            "nfp_sim": 2,
+            "shift_sim": 0,
+            "nfp_sim": 0,
 },
 "plot_opt": {"shift_sam2ref": False,},
 "shown_plots": {

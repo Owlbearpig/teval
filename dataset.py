@@ -1243,6 +1243,24 @@ class DataSet:
         else:
             mt_unit = "hours"
 
+        from random import choice
+        idx = choice(range(len(meas_set)))
+        ref0, ref1 =  meas_set[idx], meas_set[idx+1]
+        ref0_fd, ref1_fd = self._get_data(ref0, domain=Domain.Frequency), self._get_data(ref1, domain=Domain.Frequency)
+        phi0, phi1 = np.angle(ref0_fd[:, 1]), np.angle(ref1_fd[:, 1])
+        amp0, amp1 = np.abs(ref0_fd[:, 1]), np.abs(ref1_fd[:, 1])
+        w = 2*np.pi*self.freq_axis
+
+        plt.figure("Pulse shift")
+        plt.plot(self.freq_axis, 1e3*(phi0-phi1)/w, label=idx)
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("Time (fs)")
+
+        plt.figure("Amp change")
+        plt.plot(self.freq_axis, amp0-amp1)
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("Amplitude change (Arb. u.)")
+
         plt.figure("Reference zero crossing")
         plt.title(f"Reference zero crossing\n(relative to first measurement)")
         plt.plot(meas_times, ref_zero_crossing, label=t0)
@@ -1274,9 +1292,6 @@ class DataSet:
         plt.plot(meas_times[1:], np.diff(meas_times)*3600)
         plt.ylabel("Time difference (s)")
         plt.xlabel("Time since first measurement (h)")
-
-        if plt.fignum_exists(self.img_properties["fig_num"]):
-            self.plot_refs()
 
     def plot_frequency_noise(self):
         ref_meas_set = self.measurements["refs"]

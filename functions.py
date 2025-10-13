@@ -34,10 +34,14 @@ def do_fft(data_td):
     return array([freqs, data_fd]).T
 
 
-def do_ifft(data_fd, out_len=None):
+def do_ifft(data_fd, out_len=None, conj=True):
     f_axis, y_fd = data_fd[:, 0].real, data_fd[:, 1]
 
-    y_td = irfft(np.conj(y_fd), n=out_len)
+    if conj:
+        y_td = irfft(np.conj(y_fd), n=out_len)
+    else:
+        y_td = irfft(y_fd, n=out_len)
+
     df = np.mean(np.diff(f_axis))
     n = len(y_td)
     t = np.arange(0, n) / (n * df)
