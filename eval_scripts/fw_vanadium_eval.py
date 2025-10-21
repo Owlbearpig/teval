@@ -16,7 +16,7 @@ options = {
 # "cbar_lim": (0.65, 0.70), # img8 1.5 THz
 # "cbar_lim": (0.330, 0.390), # img12
 
-"plot_range": slice(10, 1000),
+"plot_range": slice(0, 750),
 
 # "ref_pos": (30, None), # img8
 "ref_pos": (30, None), # img9
@@ -45,6 +45,7 @@ options = {
              "nfp": 0, # number of fp pulses contained in window ("inf" or 0, 1, ..., N),
              "area_fit": False,
              "sub_bounds": [(3.05, 3.12), (0.000, 0.015)],
+             "film_bounds": [(1, 25), (0, 25)],
              },
 "sim_opt": {"enabled": True,
             "n_sub": 3.05 + 0.005j,
@@ -56,7 +57,7 @@ options = {
     "Window": True,
     "Time domain": True,
     "Spectrum": True,
-    "Phase": False,
+    "Phase": True,
     "Phase slope": False,
     "Amplitude transmission": False,
     "Absorbance": False,
@@ -64,6 +65,7 @@ options = {
     "Absorption coefficient": False,
     "Conductivity": True,
 },
+"cbar_lim": (0.530, 0.570),
 }
 sam_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
 sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
@@ -73,13 +75,17 @@ sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
 
 dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
 
-# dataset_eval.select_freq((2.00, 2.10))
-dataset_eval.select_freq(0.5)
-dataset_eval.select_quantity(QuantityEnum.P2P)
+dataset_eval.select_freq((0.50, 1.00))
+# dataset_eval.select_freq(0.5)
+dataset_eval.select_quantity(QuantityEnum.Power)
+sub_pnt, sam_pnt = (35, 10), (75, 10)
+dataset_eval.plot_point(sub_pnt, label="Substrate")
+dataset_eval.plot_point(sam_pnt, label="Sample")
+dataset_eval.plot_meas_phi_diff(sub_pnt, sam_pnt, label="Substrate - sample")
 
 # dataset_eval.plot_system_stability()
 
-# dataset_eval.plot_image()
+dataset_eval.plot_image()
 #dataset_eval.plot_refs()
 # dataset_eval.plot_line(line_coords=10.0, direction=Direction.Horizontal)
 
@@ -102,7 +108,7 @@ dataset_eval.select_quantity(QuantityEnum.P2P)
 # dataset_eval.plot_point(pnt)
 # dataset_eval.eval_point(pnt)
 # dataset_eval.ref_difference_plot()
-
+"""
 x_coords = np.arange(23.5, 50.0, 0.5)
 y_coords = np.arange(-4.5, 12.5, 0.5)
 for x in x_coords:
@@ -115,6 +121,6 @@ for x in x_coords:
         dataset_eval.plt_show()
         del dataset_eval
         gc.collect()
-
-# dataset_eval.plt_show()
+"""
+dataset_eval.plt_show()
 

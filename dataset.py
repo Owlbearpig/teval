@@ -198,7 +198,7 @@ class DataSet:
                                               "type": WindowTypes.tukey},
                                "remove_dc": True,
                                "dt": 0,
-                                      },
+                           },
                            "sample_properties": {"d": 1000, "layers": 1, "default_values": True},
                            "eval_opt": {"dt": 0,  # dt in fs
                                         "sub_pnt": (0, 0),
@@ -667,7 +667,7 @@ class DataSet:
 
         og_win_setting = deepcopy(self.options["pp_opt"]["window_opt"])
 
-        self.options["pp_opt"]["window_opt"]["enabled"] = True
+        self.options["pp_opt"]["window_opt"]["enabled"] = False
         self.options["pp_opt"]["window_opt"]["win_width"] = 10
         self.options["pp_opt"]["window_opt"]["en_plot"] = False
 
@@ -1110,7 +1110,7 @@ class DataSet:
             self.plotted_ref = True
 
         if not label:
-            label += f" (x,y)=({point[0]}, {point[1]}) mm"
+            label = f"(x,y)=({point[0]}, {point[1]}) mm"
 
         freq_axis = sam_fd[:, 0].real
         noise_floor = np.mean(20 * np.log10(np.abs(sam_fd[sam_fd[:, 0] > 6.0, 1]))) * sub_noise_floor
@@ -1120,8 +1120,8 @@ class DataSet:
         plt.plot(freq_axis[plot_range], y_db, label=label)
 
         plt.figure("Phase")
-        plt.plot(freq_axis[plot_range], phi, label="Original", ls="dashed")
-        plt.plot(freq_axis[plot_range], phi_corrected, label="Corrected")
+        plt.plot(freq_axis[plot_range], phi, label=label + " (Original)", ls="dashed")
+        plt.plot(freq_axis[plot_range], phi_corrected, label=label + " (Corrected)")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad)")
 
@@ -1173,6 +1173,28 @@ class DataSet:
             plt.ylabel("Conductivity (S/cm)")
 
         return ret
+
+    def plot_meas_phi_diff(self, pnt0, pnt1, label=""):
+        plot_range = self.options["plot_range"]
+
+        sam_meas0 = self.get_measurement(*pnt0)
+        ref_meas0 = self.find_nearest_ref(sam_meas0)
+
+        sam_meas1 = self.get_measurement(*pnt1)
+
+        ref_fd = self._get_data(ref_meas0, domain=Domain.Frequency)
+        freq_axis = ref_fd[:, 0].real
+
+        f_min, f_max = freq_axis[plot_range][0], freq_axis[plot_range][-1]
+        simple_eval_res0 = self.single_layer_eval(sam_meas0, (f_min, f_max))
+        simple_eval_res1 = self.single_layer_eval(sam_meas1, (f_min, f_max))
+        phi0 = simple_eval_res0["phi_corrected"]
+        phi1 = simple_eval_res1["phi_corrected"]
+
+        plt.figure("Phi difference")
+        plt.plot(freq_axis[plot_range], phi0-phi1, label=label)
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("Phase difference (rad)")
 
     def plot_system_stability(self):
         first_meas = self.measurements["all"][0]

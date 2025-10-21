@@ -88,6 +88,8 @@ class DatasetEval(DataSet):
 
         return model_.real + 1j * model_.imag
 
+
+
     def _tmm_model_1layer(self, freq, n3_):
         d = self.options["sample_properties"]["d_1"]
         shift_ = self.options["eval_opt"]["shift_sub"]
@@ -166,24 +168,25 @@ class DatasetEval(DataSet):
 
         return np.nan_to_num(t)
 
-    def _opt_fun(self, x_, sigma_):
+    def _opt_fun(self, p_, y_meas_):
         # if any([p < 0 for p in x_]):
         #    return np.inf
 
         freq = self.freq_axis
-        model = self._total_response
+        model = self.selected_model
         # model = partial(self._drude2, eps_inf=9)
         # model = drude_smith
         f0, f1 = self.options["eval_opt"]["fit_range"]
         mask = (f0 <= freq) * (freq < f1)  # 2.2
 
-        real_part = (model(freq, *x_).real - sigma_.real) ** 2
-        imag_part = (model(freq, *x_).imag - sigma_.imag) ** 2
+        real_part = (model(freq, *p_).real - y_meas_.real) ** 2
+        imag_part = (model(freq, *p_).imag - y_meas_.imag) ** 2
 
         return np.sum(real_part[mask] + imag_part[mask]) / (len(freq[mask]) * 1000)
 
-    def _fit_conductivity_model(self, sigma_exp_):
-        cost = partial(self._opt_fun, sigma_=sigma_exp_)
+    def _fit_freq_model(self, y_meas):
+        self.selected_model = self._total_response
+        cost = partial(self._opt_fun, y_meas_=y_meas)
 
         min_kwargs = {"method": "Nelder-Mead",
                       "options": {
@@ -435,7 +438,7 @@ class DatasetEval(DataSet):
         return n_opt_best
 
     def conductivity_model(self, sigma_exp):
-        opt_res = self._fit_conductivity_model(sigma_exp)
+        opt_res = self._fit_freq_model(sigma_exp)
         x = opt_res.x # x = [tau, sig0, wp, eps_inf, eps_s]
         # x = [1, 100, 4*np.pi, 10, 20]
         # x = [1, 100, 2, 16.8, 20] # ulatowski plot
