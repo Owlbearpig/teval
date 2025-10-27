@@ -341,7 +341,7 @@ class DatasetEval(DataSet):
                 self.options["eval_opt"]["shift_film"] = shift
 
                 gof = 0
-                n_opt = np.zeros((len(self.freq_axis), bounds_.shape), dtype=complex)
+                n_opt = np.zeros((len(self.freq_axis), len(bounds_)), dtype=complex)
                 for f_idx in np.arange(len(self.freq_axis))[freq_mask]:
                     args_ = (self.freq_axis[f_idx], n_sub_[f_idx], t_exp_[f_idx])
 
@@ -352,11 +352,12 @@ class DatasetEval(DataSet):
                                     args=args_,
                                     iters=2,
                                     )
-                    n_opt[f_idx] = opt_res_
+                    n_opt[f_idx] = opt_res_.x
                     # print(self.freq_axis[f_idx], n_opt[f_idx])
                     gof += opt_res_.fun
 
-                n_imag = n_opt[:, 1]
+                n_opt = n_opt[:, 0] + 1j * n_opt[:, 1]
+                n_imag = n_opt.imag
 
                 peak_val, sum_val, n_imag_filt_ = self._q_val(n_imag)
 
@@ -391,8 +392,8 @@ class DatasetEval(DataSet):
         best_ = ((None, None), np.inf)
         n_opt_best = None
         d_sub0 = self.options["sample_properties"]["d_1"]
-        for d_sub in [*np.arange(d_sub0, d_sub0+1, 1.0)]:#[639.5]:#[*np.arange(639, 640, 0.5)]: # 639 / 640 (Teralyzer)
-            for shift in [*np.arange(0, 1, 1.0)]:# 28, 22, -3
+        for d_sub in [643]:#[*np.arange(d_sub0-0, d_sub0+2, 1.0)]:#[639.5]:#[*np.arange(639, 640, 0.5)]: # 639 / 640 (Teralyzer)
+            for shift in [-4]:#[*np.arange(-5, -3, 1.0)]:# 28, 22, -3
                 self.options["sample_properties"]["d_1"] = d_sub
                 self.options["eval_opt"]["shift_sub"] = shift
                 gof = 0
@@ -554,7 +555,7 @@ class DatasetEval(DataSet):
         self.sub_dataset.options["pp_opt"]["window_opt"]["fig_label"] = "sub"
 
         t_exp_1layer = self.sub_dataset.transmission(meas_sub, 1)
-        # t_exp_1layer = self.transmission_sim()
+        # # t_exp_1layer = self.transmission_sim()
         # t_exp_1layer = self.sub_meas_sim()
 
         #self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = False
@@ -602,8 +603,8 @@ class DatasetEval(DataSet):
         plt.figure("n_sub")
         plt.plot(self.freq_axis, n_sub.real, label="Real part")
         plt.plot(self.freq_axis, n_sub.imag, label="Imaginary part")
-        plt.plot(self.freq_axis, single_layer_eval["refr_idx"].imag, label="Imaginary part (1 layer eval)")
-        # plt.ylim((0, 0.012))
+        # plt.plot(self.freq_axis, single_layer_eval["refr_idx"].imag, label="Imaginary part (1 layer eval)")
+        plt.ylim((-0.005, 0.020))
         plt.xlim(self.options["eval_opt"]["fit_range_sub"])
         plt.xlabel("Frequency (THz)")
 

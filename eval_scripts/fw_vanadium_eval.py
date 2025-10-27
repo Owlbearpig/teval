@@ -29,7 +29,7 @@ options = {
                       "d_2": 650,
                       "d_film": 0.300, },
 "pp_opt": {"window_opt": {"enabled": True,
-                          "slope": 0.05, # 0.999, # 0.99
+                          "slope": 0.01, # 0.999, # 0.99
                           # "win_start": 0,
                           "win_width": 70, # 18,#2*32,# 38*2, # 5*15 # 36
                           "type": WindowTypes.tukey,
@@ -39,12 +39,12 @@ options = {
            },
 "eval_opt": {"shift_sub": 0, # ref <-> sam pulse shift in fs
              "shift_film": 0,
-             "sub_pnt": (30, 5),#(32, 5),
+             "sub_pnt": (32, 5), #(35, 5) # (30, 5) # (32, 5)
              "fit_range_film": (0.65, 3.2),
-             "fit_range_sub": (0.5, 1.5), # (0.10, 3.0)
-             "nfp": 0, # number of fp pulses contained in window ("inf" or 0, 1, ..., N),
+             "fit_range_sub": (0.5, 3.5), # (0.10, 3.0)
+             "nfp": 2, # number of fp pulses contained in window ("inf" or 0=main pulse only, 1, ..., N),
              "area_fit": False,
-             "sub_bounds": [(3.05, 3.12), (0.000, 0.015)],
+             "sub_bounds": [(3.05, 3.14), (0.000, 0.0165)],
              "film_bounds": [(1, 25), (0, 25)],
              },
 "sim_opt": {"enabled": True,
@@ -77,36 +77,21 @@ dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
 
 dataset_eval.select_freq((0.50, 1.00))
 # dataset_eval.select_freq(0.5)
-dataset_eval.select_quantity(QuantityEnum.Power)
-sub_pnt, sam_pnt = (35, 10), (75, 10)
-dataset_eval.plot_point(sub_pnt, label="Substrate")
-dataset_eval.plot_point(sam_pnt, label="Sample")
-dataset_eval.plot_meas_phi_diff(sub_pnt, sam_pnt, label="Substrate - sample")
+dataset_eval.select_quantity(QuantityEnum.P2P)
+
+sub_pnt = options["eval_opt"]["sub_pnt"]
+sam_pnt = (75, 5)
+# dataset_eval.plot_point(sub_pnt, label="Substrate")
+# dataset_eval.plot_meas_phi_diff(sub_pnt, sam_pnt, label="Substrate - sample")
 
 # dataset_eval.plot_system_stability()
 
 dataset_eval.plot_image()
-#dataset_eval.plot_refs()
+# dataset_eval.plot_refs()
 # dataset_eval.plot_line(line_coords=10.0, direction=Direction.Horizontal)
 
-# img 8
-#dataset_eval.average_area((45, 5), (57, 19), label="Sub. 1")
-#dataset_eval.average_area((73, 5), (80, 19), label="2")
-#dataset_eval.plot_point((50, 10), apply_window=False)
-
-# img 9
-#dataset_eval.average_area((45, 5), (57, 19), label="Sub. 2")
-#dataset_eval.average_area((75, 5), (80, 19), label="9")
-# dataset_eval.plot_point((72, 10))
-# dataset_eval.plot_point((82, 10))
-
-# img12
-# pnt = (30, 10)
-
-# pnt = options["eval_opt"]["sub_pnt"]
-# pnt = (73, 3)
-# dataset_eval.plot_point(pnt)
-# dataset_eval.eval_point(pnt)
+dataset_eval.plot_point(sub_pnt)
+dataset_eval.eval_point(sam_pnt)
 # dataset_eval.ref_difference_plot()
 """
 x_coords = np.arange(23.5, 50.0, 0.5)

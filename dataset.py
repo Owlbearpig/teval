@@ -667,7 +667,7 @@ class DataSet:
 
         og_win_setting = deepcopy(self.options["pp_opt"]["window_opt"])
 
-        self.options["pp_opt"]["window_opt"]["enabled"] = False
+        self.options["pp_opt"]["window_opt"]["enabled"] = True
         self.options["pp_opt"]["window_opt"]["win_width"] = 10
         self.options["pp_opt"]["window_opt"]["en_plot"] = False
 
