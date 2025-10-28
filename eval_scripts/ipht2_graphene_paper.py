@@ -42,9 +42,9 @@ options = {
            },
 "eval_opt": {"shift_sub": 0, # ref <-> sam pulse shift in fs
              "shift_film": 0,
-             "sub_pnt": (50, 0),#(32, 5),
+             "sub_pnt": (50, 1),#(32, 5),
              "fit_range_film": (0.25, 3.2),
-             "fit_range_sub": (0.25, 2.5), # (0.10, 3.0)
+             "fit_range_sub": (0.25, 3.0), # (0.10, 3.0)
              "nfp": 0, # number of fp pulses contained in window ("inf" or 0, 1, ..., N),
              "area_fit": False,
              "sub_bounds": [(1.27, 1.37), (0.000, 0.1)],
@@ -70,11 +70,11 @@ options = {
 },
 }
 
-sub_dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0"
-sam_dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_coated\img0"
+# sub_dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0"
+# sam_dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_coated\img0"
 
-#sub_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0"
-#sam_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img0"
+sub_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0"
+sam_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img0"
 
 
 dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
