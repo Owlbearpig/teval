@@ -30,7 +30,8 @@ options = {
 "img_title": "",
 "sample_properties": {"d_1": 150,#650,
                       "d_2": 150,
-                      "d_film": 0.010, },
+                      "d_film": 0.010, # 0.010
+                      },
 "pp_opt": {"window_opt": {"enabled": True,
                           "slope": 0.05, # 0.999, # 0.99
                           # "win_start": 0,
@@ -43,12 +44,13 @@ options = {
 "eval_opt": {"shift_sub": 0, # ref <-> sam pulse shift in fs
              "shift_film": 0,
              "sub_pnt": (50, 1),#(32, 5),
-             "fit_range_film": (0.25, 3.2),
+             "fit_range_film": (0.5, 2.0),
              "fit_range_sub": (0.25, 3.0), # (0.10, 3.0)
              "nfp": 0, # number of fp pulses contained in window ("inf" or 0, 1, ..., N),
              "area_fit": False,
              "sub_bounds": [(1.27, 1.37), (0.000, 0.1)],
              "film_bounds": [(1, 15), (0, 15)],
+             "freq_model_bounds": [(10, 1e4)],
              },
 "sim_opt": {"enabled": True,
             "n_sub": 1.345 + 0.00j,
@@ -56,6 +58,7 @@ options = {
             "nfp_sim": 2,
 },
 "plot_opt": {"shift_sam2ref": False,},
+"only_shown_figures": ["Transmission fit abs film", "Peak_to_peak"],
 "shown_plots": {
     "Window": True,
     "Time domain": True,
@@ -76,7 +79,6 @@ options = {
 sub_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0"
 sam_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img0"
 
-
 dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
 
 # dataset_eval.select_freq((2.00, 2.10))
@@ -84,12 +86,17 @@ dataset_eval.select_freq(0.5)
 dataset_eval.select_quantity(QuantityEnum.P2P)
 
 sub_pnt = options["eval_opt"]["sub_pnt"]
+film_pnt = (55, 14)
+# film_pnt = (68, 7)
 
-dataset_eval.sub_dataset.plot_image()
-dataset_eval.sub_dataset.plot_refs()
+# dataset_eval.sub_dataset.plot_image()
+# dataset_eval.sub_dataset.plot_refs()
+# dataset_eval.plot_image()
+
 dataset_eval.sub_dataset.plot_point(sub_pnt)
+dataset_eval.plot_point(film_pnt)
 
-# dataset_eval.plot_system_stability()
+dataset_eval.eval_point_model_fit(film_pnt)
 
 # dataset_eval.plot_point((60, 10))
 # dataset_eval.plot_point((70, 10))
@@ -97,10 +104,7 @@ dataset_eval.sub_dataset.plot_point(sub_pnt)
 # dataset_eval.plot_point((65, 10))
 # dataset_eval.plot_point((64, 12), apply_window=False)
 
-# dataset_eval.plot_image()
-# dataset_eval.plot_refs()
-
 # dataset_eval.average_area((19, -2), (32, 5), label="2")
-dataset_eval.eval_point(sub_pnt)
+# dataset_eval.eval_point_model_fit(sub_pnt)
 
 dataset_eval.plt_show()

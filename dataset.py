@@ -34,13 +34,13 @@ TODOs:
 - freq_range variable in transmission function (and other functions?)
 
 New ideas: add teralyzer evaluation (time consuming)
-- Add plt_show here (done, needs testing)
-- Add point in image to show where .plot_point()
-- interactive imshow plots
+- Add plt_show here (done)
+- Possibly add marker in image to show where .plot_point() is
+- interactive imshow plots -> maybe connect to .plot_point()
 
 # units:
-[l] = um, [t] = ps, [alpha] = 1/cm (absorption coeff.), [sigma] = S/cm, [eps0] = Siemens * ps,
-[f] = THz (1/ps)
+[l] = µm, [t] = ps, [alpha] = 1/cm (absorption coe.), [sigma] = S/cm, [eps0] = Siemens * ps,
+[f] = THz (1/ps), [c_thz] = µm/ps
 """
 
 
@@ -135,11 +135,13 @@ class DataSet:
         self.options = {}
         self.img_properties = {}
         self.selected_freq = None
+        self.selected_freq_idx = None
         self.selected_quantity = None
         self.grid_func = None
         self.grid_vals = None
         self.measurements = {"refs": None, "sams": None, "all": None}
         self.sub_dataset = None
+        self._is_sub_dataset = False
 
         self.data_path = Path(data_path)
         self._check_path()
@@ -204,6 +206,7 @@ class DataSet:
                                         "sub_pnt": (0, 0),
                                         "fit_range": (0.50, 2.20),
                                         },
+                           "only_shown_figures": [],
                            "shown_plots": {
                                "Window": True,
                                "Time domain": True,
@@ -478,16 +481,18 @@ class DataSet:
             fig_num += en_freq_label * f" {int(self.selected_freq * 1e3)}GHz"
         fig_num = fig_num.replace(" ", "_")
 
-        self.img_properties["fig_num"] = fig_num
+        self.img_properties["fig_num"] = fig_num + self._is_sub_dataset * "_subset"
 
     def select_freq(self, freq):
         self.selected_freq = freq
+        self.selected_freq_idx = self._selected_freq_idx()
         self._update_fig_num()
 
     def _selected_freq_idx(self):
-        meas0_fd = self._get_data(self.measurements["all"][0], domain=Domain.Frequency)
+        if self.selected_freq_idx is None:
+            self.selected_freq_idx = np.argmin(np.abs(self.freq_axis - self.selected_freq))
 
-        return np.argmin(np.abs(meas0_fd[:, 0] - self.selected_freq))
+        return self.selected_freq_idx
 
     def _pre_process(self, meas_):
         pp_opt = self.options["pp_opt"]
@@ -582,7 +587,7 @@ class DataSet:
 
     def _phase(self, meas_):
         y_fd = self._get_data(meas_, domain=Domain.Frequency)
-        return np.angle(y_fd[self._selected_freq_idx(), 1])
+        return np.angle(y_fd[self.selected_freq_idx, 1])
 
     def _power(self, meas_):
         if not isinstance(self.selected_freq, tuple):
@@ -628,7 +633,7 @@ class DataSet:
 
         return len(peaks_idx)
 
-    def transmission(self, meas_, freq_range_=None):
+    def transmission(self, meas_, freq_range_=None, phase_sign=1):
         ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Frequency)
 
         sam_fd = self._get_data(meas_, Domain.Frequency)
@@ -638,6 +643,10 @@ class DataSet:
         else:
             freq_idx = f_axis_idx_map(self.freq_axis, self.selected_freq)
             t = sam_fd[freq_idx, 1] / ref_fd[freq_idx, 1]
+
+        if phase_sign != 1:
+            phi = np.unwrap(np.angle(t))
+            t = np.abs(t) * np.exp(phase_sign * 1j * phi)
 
         return t
 
@@ -746,8 +755,8 @@ class DataSet:
         t_sub = sub_res["t_sub"]
         d_film = self.options["sample_properties"]["d_film"]
 
-        # [eps0_thz] = ps * Siemens / um, [c_thz] = um / ps, [1/d_film] = 1/um -> conversion: 1e4 (S/cm)
-        # 1 / um = 1 / (1e-6 m) = 1 / (1e-6 * 1e2 cm) = 1 / (1e-4 cm) = 1e4 * 1 / cm
+        # [eps0_thz] = ps * Siemens / µm, [c_thz] = µm / ps, [1/d_film] = 1/um -> conversion: 1e4 (S/cm)
+        # 1 / µm = 1 / (1e-6 m) = 1 / (1e-6 * 1e2 cm) = 1 / (1e-4 cm) = 1e4 * 1 / cm
         sigma = 1e4 * (1/d_film) * eps0_thz * c_thz * (1 + n_sub) * (t_sub/t_sam - 1)
 
         # phase correction, [dt] = fs
@@ -1393,6 +1402,7 @@ class DataSet:
             ax1.set_ylabel(y_label)
 
     def plot_image(self, img_extent=None):
+        self._update_fig_num()
         info = self.img_properties
         if img_extent is None:
             w0, w1, h0, h1 = [0, info["w"], 0, info["h"]]
@@ -1584,6 +1594,7 @@ class DataSet:
         return opt_res
 
     def link_sub_dataset(self, dataset_):
+        dataset_._is_sub_dataset = True
         self.sub_dataset = dataset_
 
     def _is_figure_open(self, num):
@@ -1618,12 +1629,11 @@ class DataSet:
 
     def plt_show(self):
 
-        fig_labels = [plt.figure(fig_num).get_label() for fig_num in plt.get_fignums()]
-        if "TEST" in fig_labels:
-            only_show_test = True
-            logging.warning("Only showing TEST figure")
-        else:
-            only_show_test = False
+        # fig_labels = [plt.figure(fig_num).get_label() for fig_num in plt.get_fignums()]
+        only_shown_fig_nums = []
+        if self.options["only_shown_figures"]:
+            only_shown_fig_nums = self.options["only_shown_figures"]
+            logging.warning(f"Only showing figures {self.options['only_shown_figures']}")
 
         not_shown = []
         for fig_num in plt.get_fignums():
@@ -1637,7 +1647,7 @@ class DataSet:
             if self.options["save_plots"]:
                 self.save_fig(fig_num)
 
-            if only_show_test and fig_label != "TEST":
+            if only_shown_fig_nums and fig_label not in only_shown_fig_nums:
                 not_shown.append(fig_label)
                 plt.close(fig_num)
                 continue
@@ -1682,8 +1692,8 @@ class DataSet:
 
         mark_x = [self.meas_time_diff(self.measurements["refs"][0], ref1),
                   self.meas_time_diff(self.measurements["refs"][0], ref2)]
-        mark_y = [phi1[self._selected_freq_idx()],
-                  phi2[self._selected_freq_idx()]]
+        mark_y = [phi1[self._selected_freq_idx],
+                  phi2[self._selected_freq_idx]]
 
         plt.figure("Stability phase")
         plt.scatter(mark_x, mark_y, color="red", s=30, zorder=99)

@@ -91,8 +91,9 @@ dataset_eval.plot_image()
 # dataset_eval.plot_line(line_coords=10.0, direction=Direction.Horizontal)
 
 dataset_eval.plot_point(sub_pnt)
-dataset_eval.eval_point(sam_pnt)
+dataset_eval.eval_point_n_fit(sam_pnt)
 # dataset_eval.ref_difference_plot()
+
 """
 x_coords = np.arange(23.5, 50.0, 0.5)
 y_coords = np.arange(-4.5, 12.5, 0.5)
