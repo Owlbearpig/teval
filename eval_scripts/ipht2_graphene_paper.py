@@ -43,16 +43,16 @@ options = {
            },
 "eval_opt": {"shift_sub": 0, # ref <-> sam pulse shift in fs
              "shift_film": 0,
-             "sub_pnt": (50, 1),#(32, 5),
+             "sub_pnt": (40, 0),#(32, 5),
              "fit_range_film": (0.5, 2.0),
              "fit_range_sub": (0.25, 3.0), # (0.10, 3.0)
              "nfp": 0, # number of fp pulses contained in window ("inf" or 0, 1, ..., N),
              "area_fit": False,
              "sub_bounds": [(1.27, 1.37), (0.000, 0.1)],
              "film_bounds": [(1, 15), (0, 15)],
-             "freq_model_bounds": [(10, 1e4)],
+             "freq_model_bounds": [(1e4, 1e5), (1e3, 1e5)],
              },
-"sim_opt": {"enabled": True,
+"sim_opt": {"enabled": False,
             "n_sub": 1.345 + 0.00j,
             "shift_sim": 0,
             "nfp_sim": 2,
@@ -86,7 +86,7 @@ dataset_eval.select_freq(0.5)
 dataset_eval.select_quantity(QuantityEnum.P2P)
 
 sub_pnt = options["eval_opt"]["sub_pnt"]
-film_pnt = (55, 14)
+film_pnt = (50, 10)
 # film_pnt = (68, 7)
 
 # dataset_eval.sub_dataset.plot_image()
