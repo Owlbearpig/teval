@@ -64,7 +64,6 @@ class DatasetEval(DataSet):
         sig0 *= scale
 
         w = 2 * np.pi * freq_
-        print(w, tau)
         return sig0 / (1 - 1j * tau * w)
 
     def _drude2(self, freq_, sig0, tau, wp, eps_inf):
@@ -82,7 +81,7 @@ class DatasetEval(DataSet):
 
         w = 2 * np.pi * freq_
 
-        eps_l = eps_inf - (eps_s - eps_inf) * wp ** 2 / (w ** 2 - wp ** 2 - 1j * w / tau)
+        eps_l = eps_inf - ((eps_s - eps_inf) * wp ** 2) / (w ** 2 - wp ** 2 + 1j * w / tau)
 
         return eps_l
 
@@ -98,20 +97,35 @@ class DatasetEval(DataSet):
         # sig_cc = drude_smith(freq, tau, sig0, c1)
         eps_l = self._lattice_contrib(freq, tau, wp, eps_s, eps_inf)
 
-        n_ = np.sqrt(eps_l + 1j*sig_cc/(w*(eps0_thz * 1e-4)))
+        sig_tot = self._n_to_sigma(self.freq_axis, np.sqrt(eps_l)) + sig_cc
+
+        n_ = self._sigma_to_n(self.freq_axis, sig_tot)
+
+        # n_ = np.sqrt(eps_l + 1j*sig_cc/(w*(eps0_thz * 1e-4)))
 
         return n_.real + 1j * n_.imag
 
     def _sigma_to_n(self, freq_, sig_):
+        # [eps0_thz] = ps * S / µm
         # sig_ in S/cm -> S/µm ( 1/(1e6 µm) = 1/m = 1/(1e2 cm) => 1e-4/µm = 1/cm)
         sig_ *= 1e-4
 
-        eps_inf = self._opt_consts["eps_inf"]
         w = 2*np.pi*freq_
 
-        n_ = np.sqrt(eps_inf + 1j * sig_ / (eps0_thz * w))
+        n_ = np.sqrt(1 + 1j * sig_ / (eps0_thz * w))
 
         return n_
+
+    def _n_to_sigma(self, freq_, n_):
+        # [eps0_thz] = ps * S / µm
+        # sig_ in S/cm -> S/µm ( 1/(1e6 µm) = 1/m = 1/(1e2 cm) => 1e-4/µm = 1/cm)
+
+        w = 2 * np.pi * freq_
+
+        sig_ = -1j*(n_**2 - 1) * w * eps0_thz
+        sig_ *= 1e4
+
+        return sig_
 
     def _t_cond_model(self, freq_, p_):
         n_sub_ = self._opt_consts["n_sub"]
@@ -252,7 +266,7 @@ class DatasetEval(DataSet):
         }
         opt_res_ = shgo(self._opt_fun_freq_model,
                         bounds=bounds_,
-                        # n=1, iters=200,
+                        n=2, iters=200,
                         minimizer_kwargs=min_kwargs,
                         options=shgo_options,
                         )
@@ -477,7 +491,7 @@ class DatasetEval(DataSet):
         # p = [-1.588e-02,  5.044e+01,  920.8,  40.55, -43.13] # fit result
         # p = [-0.01588,  50.44,  920.8,  40.55, -43.13]
         # p = [40, 3, 50, 9]
-        sigma_model_ = self._total_response(self.freq_axis, *p)
+        sigma_model_ = self._total_response(self.freq_axis, *p) # TODO _total_response returns n
 
         return sigma_model_
 
@@ -658,11 +672,16 @@ class DatasetEval(DataSet):
         p_opt = freq_fit_res.x
         print(freq_fit_res)
         res["t_mod_film"] = self._t_cond_model(self.freq_axis, p_opt)
-
-        p_opt = [100, 1000, 2, 20, 16.8] # sig0, tau, wp, eps_s, eps_inf
+        # best res: [ 2.720e+04 -1.130e+03  9.979e-01 -2.997e+03  4.591e+04]
+        p_opt = [100, 1000, 2, 20, 0.025*16.8] # sig0, tau, wp, eps_s, eps_inf = 16.8 # 0.025*16.8
         sig_cc = self._drude(self.freq_axis, p_opt[0], p_opt[1])
         eps_l = self._lattice_contrib(self.freq_axis, *p_opt[1:])
-        sig_tot = self._total_response(self.freq_axis, *p_opt)
+        n_film = self._total_response(self.freq_axis, *p_opt)
+        sig_tot = self._n_to_sigma(self.freq_axis, n_film) + sig_cc
+
+        # res["t_mod_film"] = self._t_cond_model(self.freq_axis, p_opt)
+
+        # n_film = self._sigma_to_n(self.freq_axis, sig_tot)
 
         plt.figure("_drude_cc_part")
         plt.title("Ulatowski check (publication values) drude part")
@@ -683,7 +702,7 @@ class DatasetEval(DataSet):
         plt.plot(self.freq_axis, sig_tot.real, label="real part")
         plt.plot(self.freq_axis, sig_tot.imag, label="imag part")
         plt.xlabel("Frequency (THz)")
-        plt.ylabel("Sigma_tot (S/cm)")
+        plt.ylabel("sig_tot (S/cm)")
 
         """
         plt.figure("Transmission fit abs film")

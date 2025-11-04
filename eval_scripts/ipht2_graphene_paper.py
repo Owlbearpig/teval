@@ -50,7 +50,7 @@ options = {
              "area_fit": False,
              "sub_bounds": [(1.27, 1.37), (0.000, 0.1)],
              "film_bounds": [(1, 15), (0, 15)],
-             "freq_model_bounds": [(1e4, 1e5), (1e3, 1e5), (1, 50)],
+             "freq_model_bounds": [(1e4, 1e5), (1e2, 1e6), (1, 50), (1, 50), (0, 50)],
              },
 "sim_opt": {"enabled": False,
             "n_sub": 1.345 + 0.00j,
@@ -59,7 +59,7 @@ options = {
 },
 "plot_opt": {"shift_sam2ref": False,},
 "only_shown_figures": ["Transmission fit abs film",
-                       "Peak_to_peak",
+                       #"Peak_to_peak",
                        "_total_response",
                        "_drude_cc_part",
                        "_drude_l_part",
@@ -78,11 +78,11 @@ options = {
 },
 }
 
-# sub_dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0"
-# sam_dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_coated\img0"
+sub_dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0"
+sam_dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_coated\img0"
 
-sub_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0"
-sam_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img0"
+#sub_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0"
+#sam_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img0"
 
 dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
 

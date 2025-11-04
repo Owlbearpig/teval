@@ -17,5 +17,5 @@ else:
 
 # physical constants
 THz = 1e12
-c_thz = c0 * 1e-6  # um / ps -> 1e6 / 1e-12 = 1e-6
-eps0_thz = eps0 * 1e6 # F / m = S / (Hz * m) = Siemens * s / m = 1e12 ps * S / m = 1e6 ps * S / um
+c_thz = c0 * 1e-6  # µm / ps -> 1e6 / 1e-12 = 1e-6
+eps0_thz = eps0 * 1e6 # F / m = S / (Hz * m) = Siemens * s / m = 1e12 ps * S / m = 1e6 ps * S / µm
