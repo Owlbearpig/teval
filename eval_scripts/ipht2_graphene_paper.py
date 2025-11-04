@@ -28,8 +28,8 @@ options = {
 "pixel_interpolation": PixelInterpolation.none,
 "dist_func": Dist.Time,
 "img_title": "",
-"sample_properties": {"d_1": 150,#650,
-                      "d_2": 150,
+"sample_properties": {"d_1": 100,#650,
+                      "d_2": 100,
                       "d_film": 0.010, # 0.010
                       },
 "pp_opt": {"window_opt": {"enabled": True,
