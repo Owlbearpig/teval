@@ -64,7 +64,7 @@ class DatasetEval(DataSet):
         sig0 *= scale
 
         w = 2 * np.pi * freq_
-        return sig0 / (1 - 1j * tau * w)
+        return sig0 / (1 + 1j * tau * w)
 
     def _drude2(self, freq_, sig0, tau, wp, eps_inf):
         tau *= 1e-3
@@ -97,11 +97,11 @@ class DatasetEval(DataSet):
         # sig_cc = drude_smith(freq, tau, sig0, c1)
         eps_l = self._lattice_contrib(freq, tau, wp, eps_s, eps_inf)
 
-        sig_tot = self._n_to_sigma(self.freq_axis, np.sqrt(eps_l)) + sig_cc
+        # sig_tot = self._n_to_sigma(self.freq_axis, np.sqrt(eps_l)) + sig_cc
 
-        n_ = self._sigma_to_n(self.freq_axis, sig_tot)
+        # n_ = self._sigma_to_n(self.freq_axis, sig_tot)
 
-        # n_ = np.sqrt(eps_l + 1j*sig_cc/(w*(eps0_thz * 1e-4)))
+        n_ = np.sqrt(eps_l + 1j*sig_cc/(w*(eps0_thz * 1e4))) # eps0_thz * 1e-4
 
         return n_.real + 1j * n_.imag
 
@@ -127,10 +127,17 @@ class DatasetEval(DataSet):
 
         return sig_
 
+    def _sigma_dc(self, freq, sig0):
+        w = 2 * np.pi * freq
+        sig0 *= 1e-4
+        n_ = (1 + 1j) * np.sqrt(sig0/(2*w*eps0_thz))
+
+        return n_
+
     def _t_cond_model(self, freq_, p_):
         n_sub_ = self._opt_consts["n_sub"]
         # tau = self._opt_consts["tau"]
-        n_film_ = self.selected_model(freq_, *p_)
+        n_film_ = self.selected_n_model(freq_, *p_)
 
         # n_film_ = self._sigma_to_n(freq_, sig_model_)
         t_mod_ = self._t_model_2layer(freq_, n_sub_, n_film_)
@@ -171,12 +178,13 @@ class DatasetEval(DataSet):
 
         exp = np.exp(1j * (d * w_ / c_thz) * n3_)
 
+        r_geo = r_as * r_sa * exp ** 2 # r in geometric series
         if nfp == "inf":
-            fp_factor = 1 / (1 + r_as * r_sa * exp ** 2)
+            fp_factor = 1 / (1 + r_geo)
         else:
             fp_factor = 0
             for fp_idx in range(0, nfp+1):
-                fp_factor += (r_as ** 2 * exp ** 2) ** fp_idx
+                fp_factor += r_geo ** fp_idx
 
         e_sam = t_as * t_sa * exp * fp_factor
         e_ref = np.exp(1j * (d * w_ / c_thz))
@@ -193,6 +201,7 @@ class DatasetEval(DataSet):
         d = self.options["sample_properties"]["d_2"]
         h = self.options["sample_properties"]["d_film"]
         shift_ = self.options["eval_opt"]["shift_film"]
+        nfp = self.options["eval_opt"]["nfp"]
 
         w_ = 2 * np.pi * freq
         t12 = 2 * n1 / (n1 + n_film)
@@ -206,9 +215,16 @@ class DatasetEval(DataSet):
         exp1 = np.exp(1j * (h * w_ / c_thz) * n_film)
         exp2 = np.exp(1j * (d * w_ / c_thz) * n_sub)
 
-        e_sam_num = t12 * t23 * t34 * exp1 * exp2
-        e_sam_den = 1 + r12 * r23 * exp1 ** 2 + r23 * r34 * exp2 ** 2 + r12 * r34 * exp1 ** 2 * exp2 ** 2
-        e_sam = e_sam_num / e_sam_den
+        # r in geometric series
+        r_geo = r12 * r23 * exp1 ** 2 + r23 * r34 * exp2 ** 2 + r12 * r34 * exp1 ** 2 * exp2 ** 2
+        if nfp == "inf":
+            fp_factor = 1 / (1 + r_geo)
+        else:
+            fp_factor = 0
+            for fp_idx in range(0, nfp+1):
+                fp_factor += r_geo ** fp_idx
+        
+        e_sam = t12 * t23 * t34 * exp1 * exp2 * fp_factor
 
         e_ref = np.exp(1j * ((d + h) * w_ / c_thz))
         phase_shift = np.exp(1j * shift_ * 1e-3 * w_)  # 6, 16
@@ -237,11 +253,12 @@ class DatasetEval(DataSet):
         y_meas_ = self._opt_consts["y_meas"]
         abs_diff = (np.abs(y_mod_) - np.abs(y_meas_)) ** 2
 
+
         return np.sum(abs_diff[mask]) / len(self.freq_axis[mask])
 
     def _fit_freq_model(self):
-        # model should return model of same quantity as y_meas
-        self.selected_model = self._total_response
+        self.selected_n_model = self._total_response
+        # self.selected_n_model = self._sigma_dc
 
         bounds_ = self.options["eval_opt"]["freq_model_bounds"]
 
@@ -662,10 +679,12 @@ class DatasetEval(DataSet):
 
         res["t_exp_2layer"] = self.transmission(meas_film, 1, phase_sign=-1)
 
+        # n_sub.imag = 0.023*self.freq_axis
+
         self._opt_consts["y_meas"] = res["t_exp_2layer"]
         self._opt_consts["n_sub"] = n_sub
-        self._opt_consts["eps_inf"] = 10
-        self._opt_consts["eps_s"] = 1
+        self._opt_consts["eps_s"] = 5
+        self._opt_consts["eps_inf"] = 50
         # self._opt_consts["tau"] = 100 * 10
 
         freq_fit_res = self._fit_freq_model()
@@ -673,7 +692,9 @@ class DatasetEval(DataSet):
         print(freq_fit_res)
         res["t_mod_film"] = self._t_cond_model(self.freq_axis, p_opt)
         # best res: [ 2.720e+04 -1.130e+03  9.979e-01 -2.997e+03  4.591e+04] or [ 3.714e+04  4.980e+02  1.801e+00  5.587e+04  1.945e+00]
-        p_opt = [100, 1000, 2, 20, 0.025*16.8] # sig0, tau, wp, eps_s, eps_inf = 16.8 # 0.025*16.8
+        # p_opt = [100, 1000, 2, 20, 0.025*16.8] # sig0, tau, wp, eps_s, eps_inf = 16.8 # 0.025*16.8
+        # p_opt = [ 3.714e+04,  4.980e+02,  1.801e+00, 5.587e+04,  1.945e+00]
+        p_opt = [*p_opt, self._opt_consts["eps_s"], self._opt_consts["eps_inf"]]
         sig_cc = self._drude(self.freq_axis, p_opt[0], p_opt[1])
         eps_l = self._lattice_contrib(self.freq_axis, *p_opt[1:])
         n_film = self._total_response(self.freq_axis, *p_opt)

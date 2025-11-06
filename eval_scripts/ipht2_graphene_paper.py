@@ -1,5 +1,6 @@
 from dataset import DataSet, Dist, QuantityEnum, PixelInterpolation, WindowTypes
 from dataset_eval import DatasetEval, DataSetType
+import os
 
 options = {
 # filter paper
@@ -20,7 +21,7 @@ options = {
 #"cbar_lim": (0.005, 0.02), # 1.00 - 1.20 THz
 #"cbar_lim": (0.003, 0.013), # 1.00 - 1.20 THz img2
 
-"plot_range": slice(10, 1000),
+"plot_range": slice(0, 1000),
 
 "ref_pos": (20, None), # img9
 
@@ -28,9 +29,9 @@ options = {
 "pixel_interpolation": PixelInterpolation.none,
 "dist_func": Dist.Time,
 "img_title": "",
-"sample_properties": {"d_1": 100,#650,
-                      "d_2": 100,
-                      "d_film": 0.010, # 0.010
+"sample_properties": {"d_1": 150, #150,
+                      "d_2": 150, #150,
+                      "d_film": 0.010, # 0.010,
                       },
 "pp_opt": {"window_opt": {"enabled": True,
                           "slope": 0.05, # 0.999, # 0.99
@@ -43,14 +44,15 @@ options = {
            },
 "eval_opt": {"shift_sub": 0, # ref <-> sam pulse shift in fs
              "shift_film": 0,
-             "sub_pnt": (40, 0),#(32, 5),
+             "sub_pnt": (41, 0),#(32, 5),
              "fit_range_film": (0.5, 2.0),
-             "fit_range_sub": (0.25, 3.0), # (0.10, 3.0)
+             "fit_range_sub": (0.5, 3.0), # (0.10, 3.0)
              "nfp": 0, # number of fp pulses contained in window ("inf" or 0, 1, ..., N),
              "area_fit": False,
              "sub_bounds": [(1.27, 1.37), (0.000, 0.1)],
              "film_bounds": [(1, 15), (0, 15)],
-             "freq_model_bounds": [(1e4, 1e5), (1e2, 1e6), (1, 50), (1, 50), (0, 50)],
+             # "freq_model_bounds": [(1e4, 1e5), (1e2, 1e6), (1, 50), (1, 50), (0, 50)],
+             "freq_model_bounds": [(1e4, 1e5), (1e2, 1e6), (0.1, 50)],
              },
 "sim_opt": {"enabled": False,
             "n_sub": 1.345 + 0.00j,
@@ -63,14 +65,16 @@ options = {
                        "_total_response",
                        "_drude_cc_part",
                        "_drude_l_part",
+                       "n_sub",
                        ],
+# "only_shown_figures": [],
 "shown_plots": {
     "Window": True,
     "Time domain": True,
     "Spectrum": True,
     "Phase": False,
     "Phase slope": False,
-    "Amplitude transmission": False,
+    "Amplitude transmission": True,
     "Absorbance": False,
     "Refractive index": False,
     "Absorption coefficient": False,
@@ -78,11 +82,12 @@ options = {
 },
 }
 
-sub_dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0"
-sam_dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_coated\img0"
-
-#sub_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0"
-#sam_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img0"
+if 'nt' in os.name:
+    sub_dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0"
+    sam_dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_coated\img0"
+else:
+    sub_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0"
+    sam_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img0"
 
 dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
 
