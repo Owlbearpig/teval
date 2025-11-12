@@ -1,5 +1,6 @@
 from dataset import DataSet, Domain
 from functions import window, do_ifft
+from _shgo import shgo
 from scipy.optimize import shgo
 from functools import partial
 import numpy as np
@@ -11,7 +12,6 @@ from numpy import polyfit
 from functions import phase_correction
 from tmm_impl import coh_tmm
 from enum import Enum
-
 # logging.basicConfig(level=logging.WARNING)
 
 class DataSetType(Enum):
@@ -56,7 +56,8 @@ class DatasetEval(DataSet):
     """
 
     def _drude(self, freq_, sig0, tau):
-        # [tau] = fs, [sig0] = S/cm
+        # [tau] = fs, [sig0] = S/cm,
+        # => [sig_cc_] = S/cm
         tau *= 1e-3  # fs = 1e-3 ps
         tau /= 2 * np.pi
 
@@ -64,7 +65,9 @@ class DatasetEval(DataSet):
         sig0 *= scale
 
         w = 2 * np.pi * freq_
-        return sig0 / (1 + 1j * tau * w)
+        sig_cc_ = sig0 / (1 - 1j * tau * w)
+
+        return sig_cc_
 
     def _drude2(self, freq_, sig0, tau, wp, eps_inf):
         tau *= 1e-3
@@ -91,6 +94,7 @@ class DatasetEval(DataSet):
             eps_s = self._opt_consts["eps_s"]
         if eps_inf is None:
             eps_inf = self._opt_consts["eps_inf"]
+
         w = 2 * np.pi * freq
 
         sig_cc = self._drude(freq, sig0, tau)
@@ -112,6 +116,7 @@ class DatasetEval(DataSet):
 
         w = 2*np.pi*freq_
 
+        sig_ *= 1e-4 # S/cm -> S/µm
         n_ = np.sqrt(1 + 1j * sig_ / (eps0_thz * w))
 
         return n_
@@ -122,14 +127,15 @@ class DatasetEval(DataSet):
 
         w = 2 * np.pi * freq_
 
-        sig_ = -1j*(n_**2 - 1) * w * eps0_thz
-        sig_ *= 1e4
+        sig_ = -1j*(n_ ** 2 - 1) * w * eps0_thz
+        sig_ *= 1e4 # S/µm -> S/cm
 
         return sig_
 
     def _sigma_dc(self, freq, sig0):
         w = 2 * np.pi * freq
-        sig0 *= 1e-4
+
+        sig0 *= 1e-4 # S/cm -> S/µm
         n_ = (1 + 1j) * np.sqrt(sig0/(2*w*eps0_thz))
 
         return n_
@@ -243,8 +249,9 @@ class DatasetEval(DataSet):
         # model = drude_smith
 
         y_mod = model(freq, p_)
+        cost_fun = self._combined_cost_fun
 
-        return self._abs_cost_fun(y_mod)
+        return cost_fun(y_mod)
 
     def _abs_cost_fun(self, y_mod_):
         f0, f1 = self.options["eval_opt"]["fit_range"]
@@ -253,8 +260,19 @@ class DatasetEval(DataSet):
         y_meas_ = self._opt_consts["y_meas"]
         abs_diff = (np.abs(y_mod_) - np.abs(y_meas_)) ** 2
 
-
         return np.sum(abs_diff[mask]) / len(self.freq_axis[mask])
+
+    def _phi_cost_fun(self, y_mod_):
+        f0, f1 = self.options["eval_opt"]["fit_range"]
+        mask = (f0 <= self.freq_axis) * (self.freq_axis < f1)  # 2.2
+
+        y_meas_ = self._opt_consts["y_meas"]
+        phi_diff = (np.angle(y_mod_) - np.angle(y_meas_)) ** 2
+
+        return np.sum(phi_diff[mask]) / len(self.freq_axis[mask])
+
+    def _combined_cost_fun(self, y_mod_):
+        return self._abs_cost_fun(y_mod_) + self._phi_cost_fun(y_mod_)
 
     def _fit_freq_model(self):
         self.selected_n_model = self._total_response
@@ -264,15 +282,16 @@ class DatasetEval(DataSet):
 
         min_kwargs = {"method": "Nelder-Mead",
                       "options": {
-                          "maxev": np.inf,
-                          "maxiter": 40000,
+                          "maxfev": 200,
+                          "maxev": 200,
+                          "maxiter": 200,
                           "tol": 1e-13,
                           "fatol": 1e-13,
                           "xatol": 1e-13,
                       },
                       }
         shgo_options = {
-            # "maxfev": np.inf,
+            "maxfev": 1500,
             # "f_tol": 1e-12,
             # "maxiter": 4000,
             # "ftol": 1e-12,
@@ -281,9 +300,12 @@ class DatasetEval(DataSet):
             # "minimize_every_iter": True,
             # "disp": True
         }
+        shgo_n = 2
+        shgo_iters = 100
         opt_res_ = shgo(self._opt_fun_freq_model,
                         bounds=bounds_,
-                        n=2, iters=200,
+                        n=shgo_n,
+                        iters=shgo_iters,
                         minimizer_kwargs=min_kwargs,
                         options=shgo_options,
                         )
@@ -371,15 +393,16 @@ class DatasetEval(DataSet):
 
         min_kwargs = {"method": "Nelder-Mead",
                       "options": {
-                          # "maxev": np.inf,
-                          "maxiter": 400,
-                          "tol": 1e-6,
-                          "fatol": 1e-6,
-                          "xatol": 1e-6,
+                          "maxfev": 1500,
+                          "maxiter": 2000,
+                          "tol": 1e-10,
+                          "fatol": 1e-10,
+                          "xatol": 1e-10,
                       }
                       }
         shgo_options = {
-            # "maxfev": np.inf,
+            "maxfev": 1650,
+            "maxiter": 2000,
             # "f_tol": 1e-12,
             # "maxiter": 50,
             # "ftol": 1e-12,
@@ -388,6 +411,8 @@ class DatasetEval(DataSet):
             # "minimize_every_iter": True,
             "disp": False,
         }
+        shgo_iters = 2
+        shgo_n = 200
 
         f0, f1 = self.options["eval_opt"]["fit_range_film"]
         freq_mask = (f0 <= self.freq_axis) * (self.freq_axis <= f1)
@@ -411,7 +436,8 @@ class DatasetEval(DataSet):
                                     minimizer_kwargs=min_kwargs,
                                     options=shgo_options,
                                     args=args_,
-                                    iters=2,
+                                    iters=shgo_iters,
+                                    n=shgo_n
                                     )
                     n_opt[f_idx] = opt_res_.x
                     # print(self.freq_axis[f_idx], n_opt[f_idx])
@@ -435,13 +461,14 @@ class DatasetEval(DataSet):
         #bounds = [(3.05, 3.13), (0.0025, 0.0050)]
         min_kwargs = {"method": "Nelder-Mead",
                       "options": {
-                          #"maxev": np.inf,
+                          "maxfev": 120,
                           # "maxiter": 20,
                           "tol": 1e-12,
                           "fatol": 1e-12,
                           "xatol": 1e-12,
                       }
                       }
+        shgo_iters = 3
 
         #t_exp_phi_ = phase_correction(self.freq_axis, np.unwrap(np.angle(t_exp_)), en_plot=True)
         #t_exp_ = np.abs(t_exp_) * np.exp(1j * t_exp_phi_)
@@ -466,7 +493,10 @@ class DatasetEval(DataSet):
                                    t_exp_=t_exp_[f_idx],
                                    bounds_=bounds)
 
-                    opt_res_ = shgo(cost, bounds, minimizer_kwargs=min_kwargs, iters=3)
+                    opt_res_ = shgo(cost,
+                                    bounds,
+                                    minimizer_kwargs=min_kwargs,
+                                    iters=shgo_iters)
                     n_opt[f_idx] = opt_res_.x[0] + opt_res_.x[1] * 1j
                     gof += opt_res_.fun
 
@@ -694,7 +724,8 @@ class DatasetEval(DataSet):
         # best res: [ 2.720e+04 -1.130e+03  9.979e-01 -2.997e+03  4.591e+04] or [ 3.714e+04  4.980e+02  1.801e+00  5.587e+04  1.945e+00]
         # p_opt = [100, 1000, 2, 20, 0.025*16.8] # sig0, tau, wp, eps_s, eps_inf = 16.8 # 0.025*16.8
         # p_opt = [ 3.714e+04,  4.980e+02,  1.801e+00, 5.587e+04,  1.945e+00]
-        p_opt = [*p_opt, self._opt_consts["eps_s"], self._opt_consts["eps_inf"]]
+        # p_opt = [*p_opt, self._opt_consts["eps_s"], self._opt_consts["eps_inf"]]
+
         sig_cc = self._drude(self.freq_axis, p_opt[0], p_opt[1])
         eps_l = self._lattice_contrib(self.freq_axis, *p_opt[1:])
         n_film = self._total_response(self.freq_axis, *p_opt)
@@ -705,21 +736,21 @@ class DatasetEval(DataSet):
         # n_film = self._sigma_to_n(self.freq_axis, sig_tot)
 
         plt.figure("_drude_cc_part")
-        plt.title("Ulatowski check (publication values) drude part")
+        plt.title("Charge carrier part")
         plt.plot(self.freq_axis, sig_cc.real, label="real part")
         plt.plot(self.freq_axis, sig_cc.imag, label="imag part")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Sigma_cc (S/cm)")
 
         plt.figure("_drude_l_part")
-        plt.title("Ulatowski check (publication values) lattice part")
+        plt.title("Lattice part")
         plt.plot(self.freq_axis, eps_l.real, label="real part")
         plt.plot(self.freq_axis, eps_l.imag, label="imag part")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("eps_l")
 
         plt.figure("_total_response")
-        plt.title("Ulatowski check (publication values) total response")
+        plt.title("Total response")
         plt.plot(self.freq_axis, sig_tot.real, label="real part")
         plt.plot(self.freq_axis, sig_tot.imag, label="imag part")
         plt.xlabel("Frequency (THz)")
