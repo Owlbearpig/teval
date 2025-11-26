@@ -68,7 +68,7 @@ options = {
                        "_drude_l_part",
                        "n_sub",
                        ],
-# "only_shown_figures": [],
+"only_shown_figures": [],
 "shown_plots": {
     "Window": True,
     "Time domain": True,
@@ -104,10 +104,10 @@ film_pnt = (50, 10)
 # dataset_eval.sub_dataset.plot_refs()
 # dataset_eval.plot_image()
 
-dataset_eval.sub_dataset.plot_point(sub_pnt)
-dataset_eval.plot_point(film_pnt)
+dataset_eval.sub_dataset.plot_point(sub_pnt, en_td_plot=False)
+# dataset_eval.plot_point(film_pnt)
 
-dataset_eval.eval_point_model_fit(film_pnt)
+# dataset_eval.eval_point_model_fit(film_pnt)
 
 # dataset_eval.plot_point((60, 10))
 # dataset_eval.plot_point((70, 10))

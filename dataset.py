@@ -14,7 +14,7 @@ from functions import unwrap, window, local_minima_1d, check_dict_values, Window
 from measurements import MeasurementType, Measurement, Domain
 from mpl_settings import mpl_style_params
 import matplotlib as mpl
-from functions import phase_correction, do_fft, f_axis_idx_map, remove_offset
+from functions import phase_correction, do_fft, do_ifft, f_axis_idx_map, remove_offset
 from consts import c_thz, eps0_thz
 from scipy.optimize import shgo
 from scipy.special import erfc
@@ -1074,6 +1074,8 @@ class DataSet:
         self.options["pp_opt"]["window_opt"]["fig_label"] = "ref"
         ref_td, ref_fd = self._get_data(ref_meas, domain=Domain.Both)
 
+        #ref_fd[:, 1] = np.abs(ref_fd[:, 1]) * np.exp(-1j*np.angle(ref_fd[:, 1]))
+        #ref_td = do_ifft(ref_fd, conj=False)
         self.options["pp_opt"]["window_opt"]["fig_label"] = "sam"
         sam_td, sam_fd = self._get_data(sam_meas, domain=Domain.Both)
 
