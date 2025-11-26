@@ -198,6 +198,7 @@ class DataSet:
                                "window_opt": {"enabled": False, "win_width": None, "win_start": None,
                                               "shift": None, "slope": 0.15, "en_plot": False,
                                               "type": WindowTypes.tukey},
+                               "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
                                "remove_dc": True,
                                "dt": 0,
                            },
@@ -1207,7 +1208,7 @@ class DataSet:
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase difference (rad)")
 
-    def plot_system_stability(self):
+    def plot_system_stability(self, climate_log_file=None):
         first_meas = self.measurements["all"][0]
         if all([first_meas.position == meas.position for meas in self.measurements["all"]]):
             meas_set = self.measurements["all"]
@@ -1326,6 +1327,9 @@ class DataSet:
         plt.ylabel("Time difference (s)")
         plt.xlabel("Time since first measurement (h)")
 
+        if climate_log_file is not None:
+            self.plot_climate(climate_log_file)
+
     def plot_frequency_noise(self):
         ref_meas_set = self.measurements["refs"]
         freq_axis = self.freq_axis
@@ -1353,8 +1357,8 @@ class DataSet:
             with open(log_file_) as file:
                 meas_time_, temp_, humidity_ = [], [], []
                 for i, line in enumerate(file):
-                    if i % 250:
-                        pass
+                    if i % 250: # Sampling time: 2 sec (= 0.5 Hz) -> 250 * 2 = 500 sec
+                        continue
                     try:
                         res = read_line(line)
                         meas_time_.append(res[0])
@@ -1389,10 +1393,11 @@ class DataSet:
                 ax1 = ax_list[0]
                 ax1.tick_params(axis="y", colors="blue")
                 ax1.set_ylabel(ax1.get_ylabel(), c="blue")
-                ax1.grid(c="blue")
+                # ax1.grid(c="blue")
+                ax1.grid(False)
 
                 ax2 = ax1.twinx()
-                ax2.scatter(meas_time_diff, quant, c="red")
+                ax2.plot(meas_time_diff, quant, c="red")
                 ax2.set_ylabel(y_label, c="red")
                 ax2.tick_params(axis="y", colors="red")
                 ax2.grid(False)
