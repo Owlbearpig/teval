@@ -1227,12 +1227,23 @@ class DataSet:
 
         meas_times = np.array([self.meas_time_diff(meas_set[0], m) for m in meas_set])
 
+        if meas_times.max() < 5 / 60:
+            meas_times *= 3600
+            mt_unit = "seconds"
+        elif 5 / 60 <= meas_times.max() < 0.5:
+            meas_times *= 60
+            mt_unit = "minutes"
+        else:
+            mt_unit = "hours"
+
         for i, ref in enumerate(meas_set):
             ref_td, ref_fd = self._get_data(ref, domain=Domain.Both)
 
             ref_zero_crossing[i] = self._get_zero_crossing(ref)
             ref_ampl_arr[i] = np.sum(np.abs(ref_fd[f_idx, 1]))
-            ref_angle_arr[i] = np.angle(ref_fd[f_idx, 1])
+            ref_angle_arr[i] = -np.angle(ref_fd[f_idx, 1])
+
+        ref_ampl_arr = 100 * (ref_ampl_arr[0] - ref_ampl_arr) / ref_ampl_arr[0]
 
         meas_interval = np.mean(np.diff(meas_times))
         ref_angle_arr = np.unwrap(ref_angle_arr)
@@ -1249,8 +1260,12 @@ class DataSet:
         logging.info(f"Mean pulse shift: {np.round(np.mean(abs_p_shifts), 2)} fs")
         max_diff_0x, min_diff_0x = np.max(abs_p_shifts), np.min(abs_p_shifts)
         logging.info(f"Largest/smallest shift: {np.round(max_diff_0x, 2)}/{np.round(min_diff_0x, 2)} fs")
-        max_diff = np.max(np.diff(ref_angle_arr))
-        logging.info(f"Largest phase jump: {np.round(max_diff, 2)} rad (at {selected_freq_} THz)")
+
+        max_diff, argmax_diff = np.max(np.diff(ref_angle_arr)), np.argmax(np.diff(ref_angle_arr))
+        phase_str = f"Largest phase jump: {np.round(max_diff, 2)} rad"
+        phase_str += f" (time: {np.round(meas_times[argmax_diff], 2)} {mt_unit})"
+        phase_str += f" (at {selected_freq_} THz)"
+        logging.info(phase_str)
 
         avg_amp_change = np.mean(np.abs(np.diff(ref_ampl_arr)))
         max_amp_change = np.max(np.diff(ref_ampl_arr))
@@ -1267,15 +1282,6 @@ class DataSet:
         plt.plot(phi_fft_f[1:], np.abs(phi_fft)[1:])
         plt.xlabel("Frequency (1/hour)")
         plt.ylabel("Magnitude")
-
-        if meas_times.max() < 5 / 60:
-            meas_times *= 3600
-            mt_unit = "seconds"
-        elif 5 / 60 <= meas_times.max() < 0.5:
-            meas_times *= 60
-            mt_unit = "minutes"
-        else:
-            mt_unit = "hours"
 
         from random import choice
         idx = choice(range(len(meas_set)))
@@ -1311,13 +1317,13 @@ class DataSet:
 
         plt.figure("Stability amplitude")
         plt.title(f"Amplitude of reference measurement at {selected_freq_} THz")
-        plt.plot(meas_times, ref_ampl_arr, label=t0)
+        plt.plot(meas_times, ref_ampl_arr)
         plt.xlabel(f"Measurement time ({mt_unit})")
-        plt.ylabel("Amplitude (Arb. u.)")
+        plt.ylabel("Relative amplitude change (%)")
 
         plt.figure("Stability phase")
         plt.title(f"Phase of reference measurement at {selected_freq_} THz")
-        plt.plot(meas_times, ref_angle_arr, label=t0)
+        plt.plot(meas_times, ref_angle_arr)
         plt.xlabel(f"Measurement time ({mt_unit})")
         plt.ylabel("Phase (rad)")
 
@@ -1357,7 +1363,7 @@ class DataSet:
             with open(log_file_) as file:
                 meas_time_, temp_, humidity_ = [], [], []
                 for i, line in enumerate(file):
-                    if i % 250: # Sampling time: 2 sec (= 0.5 Hz) -> 250 * 2 = 500 sec
+                    if i % 150: # Sampling time: 2 sec (= 0.5 Hz) -> 300 * 2 = 600 sec
                         continue
                     try:
                         res = read_line(line)
@@ -1373,8 +1379,11 @@ class DataSet:
 
         if self.measurements["refs"] is not None:
             t0 = self.measurements["refs"][0].meas_time
+            tf = self.measurements["refs"][-1].meas_time
+            tf_idx = np.argmin(np.abs([(tf - t).total_seconds() for t in meas_time]))
         else:
             t0 = meas_time[0]
+            tf_idx = len(meas_time)
 
         meas_time_diff = [(t - t0).total_seconds() / 3600 for t in meas_time]
 
@@ -1384,6 +1393,9 @@ class DataSet:
         else:
             quant = humidity
             y_label = "Humidity (\\%)"
+
+        meas_time_diff = meas_time_diff[:tf_idx]
+        quant = quant[:tf_idx]
 
         stability_figs = ["Reference zero crossing", "Stability amplitude", "Stability phase"]
         for fig_label in stability_figs:

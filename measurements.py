@@ -44,11 +44,10 @@ class Measurement:
 
         matches = re.findall(r"(-?\d+\.\d+|-?\d+) mm", fp_stem)
         positions = [0.000 if np.isclose(float(val), 0) else float(val) for val in matches]
-        positions = tuple(positions)
-
         l_diff = 2 - len(positions)
         if l_diff > 0:
             positions.extend(l_diff * [0.0])
+        positions = tuple(positions)
 
         return positions
 
