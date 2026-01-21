@@ -28,6 +28,7 @@ class Measurement:
     window_applied = False
     offset_corrected = False
     identifier = None
+    is_avg_meas = False
 
     def __init__(self, filepath=None):
         self.filepath = filepath

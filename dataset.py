@@ -483,6 +483,17 @@ class DataSet:
 
         self.img_properties["fig_num"] = fig_num + self._is_sub_dataset * "_subset"
 
+        self._update_quantity_label()
+
+    def _update_quantity_label(self):
+        en_freq_label = Domain.Frequency == self.selected_quantity.domain
+        if isinstance(self.selected_freq, tuple):
+            freq_label = f"({self.selected_freq[0]}-{self.selected_freq[1]} THz)"
+        else:
+            freq_label = f"({self.selected_freq} THz)"
+
+        self.img_properties["quantity_label"] = " ".join([str(self.selected_quantity), freq_label * en_freq_label])
+
     def select_freq(self, freq):
         self.selected_freq = freq
         self.selected_freq_idx = self._selected_freq_idx()
@@ -1456,13 +1467,9 @@ class DataSet:
         ax.set_xlabel("x (mm)")
         ax.set_ylabel("y (mm)")
 
-        en_freq_label = Domain.Frequency == self.selected_quantity.domain
-        if isinstance(self.selected_freq, tuple):
-            freq_label = f"({self.selected_freq[0]}-{self.selected_freq[1]} THz)"
-        else:
-            freq_label = f"({self.selected_freq} THz)"
+        self._update_quantity_label()
+        quantity_label = self.img_properties["quantity_label"]
 
-        quantity_label = " ".join([str(self.selected_quantity), freq_label * en_freq_label])
         img_title_option = str(self.options["img_title"])
         ax.set_title(" ".join([quantity_label, img_title_option]))
 
@@ -1476,7 +1483,6 @@ class DataSet:
             cbar.set_label(quantity_label, rotation=270, labelpad=30)
 
         self.img_properties["img_ax"] = ax
-        self.img_properties["quantity_label"] = quantity_label
         self.img_properties["plotted_image"] = True
 
     def _plot_meas_on_image(self, measurements):

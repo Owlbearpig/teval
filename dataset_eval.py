@@ -64,7 +64,7 @@ class DatasetEval(DataSet):
         sig0 *= scale
 
         w = 2 * np.pi * freq_
-        return sig0 / (1 + 1j * tau * w)
+        return sig0 / (1 - 1j * tau * w)
 
     def _drude2(self, freq_, sig0, tau, wp, eps_inf):
         tau *= 1e-3
@@ -72,6 +72,17 @@ class DatasetEval(DataSet):
         w = 2 * np.pi * freq_
 
         return sig0 * wp**2 / (tau - 1j * w) - 1j * eps0_thz * w * (eps_inf - 1)
+
+    def _drude_smith(self, freq_, wp, tau, eps_inf, c1=-0.99):
+        w = 2 * np.pi * freq_
+        #tau *= 1e-3
+        #tau /= 2 * np.pi
+        wt = 1 / tau
+        f1 = wp**2 / (w**2 + 1j * w * wt)
+
+        eps_ds = eps_inf - f1 * (1 + c1 * wt / (wt - 1j*w))
+
+        return np.sqrt(eps_ds)
 
     def _lattice_contrib(self, freq_, tau, wp, eps_s, eps_inf):
         tau *= 1e-3 # fs = 1e-3 ps
@@ -97,11 +108,10 @@ class DatasetEval(DataSet):
         # sig_cc = drude_smith(freq, tau, sig0, c1)
         eps_l = self._lattice_contrib(freq, tau, wp, eps_s, eps_inf)
 
-        # sig_tot = self._n_to_sigma(self.freq_axis, np.sqrt(eps_l)) + sig_cc
+        sig_tot = self._n_to_sigma(self.freq_axis, np.sqrt(eps_l)) + sig_cc
+        n_ = self._sigma_to_n(self.freq_axis, sig_tot)
 
-        # n_ = self._sigma_to_n(self.freq_axis, sig_tot)
-
-        n_ = np.sqrt(eps_l + 1j*sig_cc/(w*(eps0_thz * 1e4))) # eps0_thz * 1e-4
+        # n_ = np.sqrt(eps_l + 1j*sig_cc/(w*(eps0_thz * 1e-4))) # eps0_thz * 1e-4
 
         return n_.real + 1j * n_.imag
 
@@ -234,7 +244,13 @@ class DatasetEval(DataSet):
         return np.nan_to_num(t)
 
     def _opt_fun_freq_model(self, p_):
-        # if any([p < 0 for p in x_]):
+        """
+        bounds_ = self.options["eval_opt"]["freq_model_bounds"]
+        for i in range(len(p_)):
+            if (p_[i] < bounds_[i][0]) or (p_[i] > bounds_[i][1]):
+                return np.inf
+        """
+        #if any([p < 0 for p in x_]):
         #    return np.inf
 
         freq = self.freq_axis
@@ -243,8 +259,22 @@ class DatasetEval(DataSet):
         # model = drude_smith
 
         y_mod = model(freq, p_)
+        cost = self._abs_phi_cost_fun
 
-        return self._abs_cost_fun(y_mod)
+        return cost(y_mod)
+
+    def _abs_phi_cost_fun(self, y_mod_):
+        f0, f1 = self.options["eval_opt"]["fit_range"]
+        mask = (f0 <= self.freq_axis) * (self.freq_axis < f1)  # 2.2
+
+        y_meas_ = self._opt_consts["y_meas"]
+
+        phi_diff = (np.angle(y_mod_) - np.angle(y_meas_)) ** 2
+        l_phi = np.sum(phi_diff[mask]) / len(self.freq_axis[mask])
+
+        l_abs = self._abs_cost_fun(y_mod_)
+
+        return l_abs + l_phi
 
     def _abs_cost_fun(self, y_mod_):
         f0, f1 = self.options["eval_opt"]["fit_range"]
@@ -252,12 +282,12 @@ class DatasetEval(DataSet):
 
         y_meas_ = self._opt_consts["y_meas"]
         abs_diff = (np.abs(y_mod_) - np.abs(y_meas_)) ** 2
+        l_abs = np.sum(abs_diff[mask]) / len(self.freq_axis[mask])
 
-
-        return np.sum(abs_diff[mask]) / len(self.freq_axis[mask])
+        return l_abs
 
     def _fit_freq_model(self):
-        self.selected_n_model = self._total_response
+        self.selected_n_model = self._drude_smith
         # self.selected_n_model = self._sigma_dc
 
         bounds_ = self.options["eval_opt"]["freq_model_bounds"]
@@ -691,10 +721,11 @@ class DatasetEval(DataSet):
         p_opt = freq_fit_res.x
         print(freq_fit_res)
         res["t_mod_film"] = self._t_cond_model(self.freq_axis, p_opt)
+        # [ 2.503e+03  6.897e+03 -4.208e+00  2.306e+03 -2.305e+03]
         # best res: [ 2.720e+04 -1.130e+03  9.979e-01 -2.997e+03  4.591e+04] or [ 3.714e+04  4.980e+02  1.801e+00  5.587e+04  1.945e+00]
         # p_opt = [100, 1000, 2, 20, 0.025*16.8] # sig0, tau, wp, eps_s, eps_inf = 16.8 # 0.025*16.8
-        # p_opt = [ 3.714e+04,  4.980e+02,  1.801e+00, 5.587e+04,  1.945e+00]
-        p_opt = [*p_opt, self._opt_consts["eps_s"], self._opt_consts["eps_inf"]]
+        p_opt = [ 3.714e+04,  4.980e+02,  1.801e+00, 5.587e+04,  1.945e+00]
+        # p_opt = [*p_opt, self._opt_consts["eps_s"], self._opt_consts["eps_inf"]]
         sig_cc = self._drude(self.freq_axis, p_opt[0], p_opt[1])
         eps_l = self._lattice_contrib(self.freq_axis, *p_opt[1:])
         n_film = self._total_response(self.freq_axis, *p_opt)
@@ -789,6 +820,12 @@ class DatasetEval(DataSet):
         plt.ylim((-0.05, 0.45))
         plt.xlabel("Frequency (THz)")
         plt.ylabel("|t|")
+
+        plt.figure("Transmission fit angle film")
+        plt.plot(self.freq_axis[f_mask], np.angle(t_exp_2layer[f_mask]), label="Experiment", ls="dashed")
+        plt.plot(self.freq_axis[f_mask], np.angle(t_mod_film[f_mask]), label="Model (fit)")
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("angle(t)")
 
         plt.figure("Transmission fit angle film")
         plt.plot(self.freq_axis[f_mask], np.angle(t_exp_2layer[f_mask]), label="Experiment")
