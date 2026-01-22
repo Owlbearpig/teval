@@ -28,7 +28,6 @@ class Measurement:
     window_applied = False
     offset_corrected = False
     identifier = None
-    is_avg_meas = False
 
     def __init__(self, filepath=None):
         self.filepath = filepath
@@ -98,3 +97,45 @@ class Measurement:
         self._data_fd = np.array([freqs, data_fd]).T
 
         return self._data_fd
+
+class AvgMeasurement(Measurement):
+    # TODO not tested. How do we handle caching? -> Probably avoid using caching
+    def __init__(self, measurements):
+        super().__init__(measurements[0])
+
+        self.measurements = measurements
+
+    def get_data_td(self):
+        if self._data_td is None:
+            self._data_td = self.measurements[0].get_data_td()
+
+            all_data = np.zeros((len(self.measurements), *self._data_td.shape), dtype=float)
+            for i, meas in enumerate(self.measurements):
+                all_data[i] = meas.get_data_td()
+
+            self._data_td[:, 1] = np.mean(all_data, axis=2)
+
+        return self._data_td
+
+    def get_data_fd(self, reversed_time=True):
+        return self._data_fd(self, reversed_time)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

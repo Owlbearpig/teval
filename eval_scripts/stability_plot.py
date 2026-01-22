@@ -11,5 +11,5 @@ dataset = DataSet(r"/home/ftpuser/ftp/Data/Stability/2023-03-21")
 dataset.select_freq(freq=1.2)
 
 dataset.plot_system_stability()
-dataset.plot_climate(climate_log_file)
+# dataset.plot_climate(climate_log_file)
 dataset.plt_show()

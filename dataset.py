@@ -874,7 +874,7 @@ class DataSet:
 
         return filtered_grid
 
-    def get_line(self, x=None, y=None):
+    def get_line(self, x=None, y=None, limits=None):
         if x is None and y is None:
             return None
 
@@ -882,9 +882,21 @@ class DataSet:
 
         # vertical direction / slice
         if x is not None:
-            return [self.get_measurement(x, y_) for y_ in y_coords], y_coords
+            ret = [self.get_measurement(x, y_) for y_ in y_coords], y_coords
         else:  # horizontal direction / slice
-            return [self.get_measurement(x_, y) for x_ in x_coords], x_coords
+            ret = [self.get_measurement(x_, y) for x_ in x_coords], x_coords
+
+        if limits is None:
+            return ret
+        else:
+            measurements, coords = ret
+            meas_in_limit_range = []
+            for i, coord in enumerate(coords):
+                if (limits[0] < coord) and (coord < limits[1]):
+                    meas_in_limit_range.append(measurements[i])
+
+            return meas_in_limit_range, coords
+
 
     def find_nearest_ref(self, meas_):
         dist_func = self.options["dist_func"]
@@ -1057,13 +1069,16 @@ class DataSet:
         kwargs = {"label": "",
                   "sub_noise_floor": False,
                   "td_scale": 1,
-                  "remove_t_offset": False, }
+                  "remove_t_offset": False,
+                  "err_bar_limits": None,
+                  }
         kwargs.update(kwargs_)
 
         label = kwargs["label"]
         sub_noise_floor = kwargs["sub_noise_floor"]
         td_scale = kwargs["td_scale"]
         remove_t_offset = kwargs["remove_t_offset"]
+        std_limits = kwargs["err_bar_limits"] # limits of spatial coordinates to average over, for the err_bars
 
         plot_range = self.options["plot_range"]
 
@@ -1100,6 +1115,17 @@ class DataSet:
         if remove_t_offset:
             ref_td[:, 0] -= ref_td[0, 0]
             sam_td[:, 0] -= sam_td[0, 0]
+
+        absorb_std = None
+        if std_limits:
+            meas_line, coords = self.get_line(y=0, limits=std_limits)
+
+            absorbance_arrs = []
+            for meas in meas_line:
+                sam_fd_line = self._get_data(meas, domain=Domain.Frequency)
+                t = sam_fd_line[:, 1] / ref_fd[:, 1]
+                absorbance_arrs.append(20*np.log10(np.abs(1/t)))
+            absorb_std = np.std(absorbance_arrs, axis=0)
 
         freq_axis = ref_fd[:, 0].real
 
@@ -1169,7 +1195,13 @@ class DataSet:
         plt.plot(freq_axis[plot_range], (1/absorb[plot_range]), label=label)
 
         plt.figure("Absorbance")
-        plt.plot(freq_axis[plot_range], 20 * np.log10(absorb[plot_range]), label=label)
+        y = 20*np.log10(absorb[plot_range])
+        plt.plot(freq_axis[plot_range], y, label=label)
+        if std_limits:
+            lower = y - absorb_std[plot_range]
+            upper = y + absorb_std[plot_range]
+            plt.fill_between(freq_axis[plot_range], lower, upper, alpha=0.3)
+
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Absorbance (dB)")
 
@@ -1254,8 +1286,6 @@ class DataSet:
             ref_ampl_arr[i] = np.sum(np.abs(ref_fd[f_idx, 1]))
             ref_angle_arr[i] = -np.angle(ref_fd[f_idx, 1])
 
-        ref_ampl_arr = 100 * (ref_ampl_arr[0] - ref_ampl_arr) / ref_ampl_arr[0]
-
         meas_interval = np.mean(np.diff(meas_times))
         ref_angle_arr = np.unwrap(ref_angle_arr)
 
@@ -1293,6 +1323,9 @@ class DataSet:
         plt.plot(phi_fft_f[1:], np.abs(phi_fft)[1:])
         plt.xlabel("Frequency (1/hour)")
         plt.ylabel("Magnitude")
+
+        ref_ampl_arr = 100 * (ref_ampl_arr[0] - ref_ampl_arr) / ref_ampl_arr[0]
+        ref_angle_arr = 100 * (ref_angle_arr[0] - ref_angle_arr) / ref_angle_arr[0]
 
         from random import choice
         idx = choice(range(len(meas_set)))
@@ -1336,7 +1369,7 @@ class DataSet:
         plt.title(f"Phase of reference measurement at {selected_freq_} THz")
         plt.plot(meas_times, ref_angle_arr)
         plt.xlabel(f"Measurement time ({mt_unit})")
-        plt.ylabel("Phase (rad)")
+        plt.ylabel("Relative phase change (%)")
 
         plt.figure("Time between reference measurements")
         plt.title(f"Time between reference measurements")
