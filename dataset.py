@@ -193,6 +193,7 @@ class DataSet:
                            "plot_range": slice(0, 900),
                            "ref_pos": (None, None),
                            "ref_threshold": 0.95,
+                           "fix_ref": False, # idx of reference measurement
                            "dist_func": Dist.Position,
                            "pp_opt": {
                                "window_opt": {"enabled": False, "win_width": None, "win_start": None,
@@ -921,7 +922,9 @@ class DataSet:
         return closest_ref
 
     def get_ref_data(self, domain=Domain.Time, point=None, ref_idx=None, ret_meas=False):
-        if point is not None:
+        if self.options["fix_ref"] is not False:
+            chosen_ref = self.measurements["refs"][self.options["fix_ref"]]
+        elif point is not None:
             closest_sam = self.get_measurement(*point)
             chosen_ref = self.find_nearest_ref(closest_sam)
         else:
@@ -1580,8 +1583,10 @@ class DataSet:
         for line_coord in line_coords:
             if horizontal:
                 measurements, coords = self.get_line(None, line_coord)
+                actual_const_coord = measurements[0].position[1]
             else:
                 measurements, coords = self.get_line(line_coord, None)
+                actual_const_coord = measurements[0].position[0]
 
             vals = []
             for i, measurement in enumerate(measurements):
@@ -1591,10 +1596,10 @@ class DataSet:
                 vals.append(self.grid_func(measurement))
 
             if horizontal:
-                plot_kwargs["label"] = f"y={line_coord} (mm)"
+                plot_kwargs["label"] = f"y={actual_const_coord} (mm)"
                 plt.plot(coords, vals, **plot_kwargs)
             else:
-                plot_kwargs["label"] = f"x={line_coord} (mm)"
+                plot_kwargs["label"] = f"x={actual_const_coord} (mm)"
                 plt.plot(coords, vals, **plot_kwargs)
 
         self._plot_meas_on_image(measurements)

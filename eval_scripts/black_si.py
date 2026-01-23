@@ -6,13 +6,13 @@ options = {
 
 "plot_range": slice(13, 230),
 
-"ref_pos": (20, None),
-
+"ref_pos": (0, None),
+"fix_ref": 0,
 "ref_threshold": 0.90,
 "pixel_interpolation": PixelInterpolation.none,
 "dist_func": Dist.Time,
 "img_title": "",
-
+"sample_properties": {"d": 534, "layers": 1, "default_values": True},
 "pp_opt": {"window_opt": {"enabled": True,
                           "slope": 0.05, # 0.999, # 0.99
                           # "win_start": 0,
@@ -24,45 +24,30 @@ options = {
            },
 
 "shown_plots": {
-    "Window": True,
+    "Window": False,
     "Time domain": True,
-    "Spectrum": True,
+    "Spectrum": False,
     "Phase": False,
     "Phase slope": False,
     "Amplitude transmission": False,
-    "Absorbance": True,
+    "Absorbance": False,
     "Refractive index": False,
     "Absorption coefficient": False,
     "Conductivity": False,
 },
 }
-"""
-HE_A1: 100, 0
-HE_A2: 74, 0
-HE_C: 90, 0
-LE_A: 80, 0
-LE_AP: 90, 0
-LE_C: 90, 0
-"""
 
-meas_dict = {# "HE_A1": (100, 0), #"HE_A2": (74, 0), "HE_C": (90, 0),
-             "LE_A": (80, 0), "LE_A-90": (90, 0), "LE_A-95": (95, 0),
-            #"LE_AP": (90, 0), "LE_C": (90, 0),
-}
+if 'nt' in os.name:
+    sam_dataset_path = fr"C:\Users\alexj\Data\Black_Si\NoPattern_Linescan2_NoNitrogen"
+else:
+    sam_dataset_path = fr"/home/ftpuser/ftp/Data/Black_Si/NoPattern_Linescan2_NoNitrogen"
 
-for meas_set in meas_dict:
-    if "-" in meas_set:
-        dir_name = meas_set.split("-")[0]
-    else:
-        dir_name = meas_set
-
-    if 'nt' in os.name:
-        sam_dataset_path = fr"C:\Users\alexj\Data\Pectin_wAg_Nanoparticles\{dir_name}"
-    else:
-        sam_dataset_path = fr"/home/ftpuser/ftp/Data/Pectin_wAg_Nanoparticles/{dir_name}"
-
-    dataset = DataSet(sam_dataset_path, options)
-    pos = meas_dict[meas_set]
-    dataset.plot_point(pos, label=meas_set, err_bar_limits=(70, 95))
+dataset = DataSet(sam_dataset_path, options)
+dataset.select_quantity(QuantityEnum.RefractiveIdx)
+dataset.plot_line(line_coords=16)
+# dataset.plot_point((10, 16))
+#dataset.plot_point((40, 16))
+#dataset.plot_point((50, 16))
+# dataset.plot_point((70, 16))
 
 dataset.plt_show()
