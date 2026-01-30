@@ -32,6 +32,7 @@ TODOs:
 - window function (fuctions.py): allow negative values (wrap around) + fix plot (clipping)
 - Logging is messy, also fix log levels and RuntimeWarnings
 - freq_range variable in transmission function (and other functions?)
+- combine the different reference select settings into one dict
 
 New ideas: add teralyzer evaluation (time consuming)
 - Add plt_show here (done)
@@ -115,7 +116,7 @@ class QuantityEnum(Enum):
     TransmissionAmp = Quantity("Amplitude transmission", domain=Domain.Frequency)
     TransmissionPhase = Quantity("Phase transmission", domain=Domain.Frequency)
     RefractiveIdx = Quantity("Refractive idx", domain=Domain.Frequency)
-    AbsorptionCoe = Quantity("Absorption coe", domain=Domain.Frequency)
+    AbsorptionCoe = Quantity("Absorption coe (1/cm)", domain=Domain.Frequency)
 
 
 class LogLevel(Enum):
@@ -1068,6 +1069,17 @@ class DataSet:
         # meas time difference in hours
         return (m2.meas_time - m1.meas_time).total_seconds() / 3600
 
+    def _print_ret(self, ret_):
+        f_idx = self._selected_freq_idx()
+        for quantity in ret_:
+            val = ret_[quantity][f_idx]
+            if quantity == "absorb":
+                val = 20 * np.log10(val)
+            msg = f" {quantity}: {np.round(val, 2)}"
+            if quantity == list(ret_.keys())[-1]:
+                msg += "\n"
+            logging.info(msg)
+
     def plot_point(self, point=None, en_td_plot=True, **kwargs_):
         kwargs = {"label": "",
                   "sub_noise_floor": False,
@@ -1094,7 +1106,7 @@ class DataSet:
 
         logging.info(f"Plotting point {point}")
         logging.info(f"Reference measurement: {ref_meas}")
-        logging.info(f"Sample measurement: {sam_meas}")
+        logging.info(f"Sample measurement: {sam_meas}\n")
 
         # TODO redo window plotting
         show_win_plot = deepcopy(self.options["pp_opt"]["window_opt"]["en_plot"])
@@ -1144,6 +1156,7 @@ class DataSet:
         alph = self._absorption_coef(sam_meas, (f_min, f_max))
 
         ret = {"freq_axis": freq_axis, "absorb": absorb, "t": t, "ref_fd": ref_fd, "sam_fd": sam_fd}
+        self._print_ret(ret)
 
         noise_floor = np.mean(20 * np.log10(np.abs(ref_fd[ref_fd[:, 0] > 6.0, 1]))) * sub_noise_floor
 
@@ -1559,7 +1572,7 @@ class DataSet:
     def plot_refs(self):
         self._plot_meas_on_image(self.measurements["refs"])
 
-    def plot_line(self, line_coords=None, direction=Direction.Horizontal, **plot_kwargs):
+    def plot_line(self, line_coords=None, direction=Direction.Horizontal, fig_num_=None, y_label=None, **plot_kwargs):
         if line_coords is None:
             line_coords = [0.0]
         if isinstance(line_coords, (int, float)):
@@ -1574,11 +1587,17 @@ class DataSet:
             fig_num = "y-slice"
             x_label = "y (mm)"
 
-        fig_num += "_" + self.img_properties["quantity_label"].replace(" ", "_")
-        plt.figure(fig_num)
+        if fig_num_ is None:
+            fig_num += "_" + self.img_properties["quantity_label"].replace(" ", "_")
+            plt.figure(fig_num)
+        else:
+            plt.figure(fig_num_)
         plt.title(f"Line scan ({direction.name})")
         plt.xlabel(x_label)
-        plt.ylabel(self.img_properties["quantity_label"])
+        if y_label is None:
+            plt.ylabel(self.img_properties["quantity_label"])
+        else:
+            plt.ylabel(y_label)
 
         for line_coord in line_coords:
             if horizontal:
@@ -1590,16 +1609,21 @@ class DataSet:
 
             vals = []
             for i, measurement in enumerate(measurements):
-                logging.info(f"{round(100 * i / len(measurements), 2)} % done. "
-                             f"(Measurement: {i}/{len(measurements)}, {measurement.position} mm)")
+                msg =  f"{round(100 * i / len(measurements), 2)} % done. "
+                msg += f"(Measurement: {i+1}/{len(measurements)}, {measurement.position} mm)"
+                if i == len(measurements) - 1:
+                    msg += "\n"
+                logging.info(msg)
 
                 vals.append(self.grid_func(measurement))
 
             if horizontal:
-                plot_kwargs["label"] = f"y={actual_const_coord} (mm)"
+                if not "label" in plot_kwargs:
+                    plot_kwargs["label"] = f"y={actual_const_coord} (mm)"
                 plt.plot(coords, vals, **plot_kwargs)
             else:
-                plot_kwargs["label"] = f"x={actual_const_coord} (mm)"
+                if not "label" in plot_kwargs:
+                    plot_kwargs["label"] = f"x={actual_const_coord} (mm)"
                 plt.plot(coords, vals, **plot_kwargs)
 
         self._plot_meas_on_image(measurements)

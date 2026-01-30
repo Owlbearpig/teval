@@ -7,13 +7,11 @@ from os import name as os_name
 
 ROOT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 
-project_ = "Conductivity"
 
 if 'posix' in os_name:
-    # result_dir = Path(r"/home/alex/MEGA/AG/Projects") / project_ / "IPHT_2" / "Results" / "Initial_characterization"
-    result_dir = Path(r"/home/alex/MEGA/AG/Projects") / project_ / "Furtwangen" / "Results" / "Vanadium"
+    result_dir = Path(r"/home/alex/MEGA/AG/Projects/Material characterization/Gi_MachbarkeitsStudie")
 else:
-    result_dir = Path(r"C:\Users\alexj\Mega\AG\Projects") / project_
+    result_dir = Path(r"C:\Users\alexj\Mega\AG\Projects")
 
 # physical constants
 THz = 1e12
