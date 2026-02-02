@@ -1086,6 +1086,7 @@ class DataSet:
                   "td_scale": 1,
                   "remove_t_offset": False,
                   "err_bar_limits": None,
+                  "ref_err_bars": False, # use first and last reference measurement to estimate uncertainty
                   }
         kwargs.update(kwargs_)
 
@@ -1140,6 +1141,24 @@ class DataSet:
                 sam_fd_line = self._get_data(meas, domain=Domain.Frequency)
                 t = sam_fd_line[:, 1] / ref_fd[:, 1]
                 absorbance_arrs.append(20*np.log10(np.abs(1/t)))
+            absorb_std = np.std(absorbance_arrs, axis=0)
+        if kwargs["ref_err_bars"]:
+            all_ref_meas = self.measurements["refs"]
+            ref_meas_first, ref_meas_last = all_ref_meas[0], all_ref_meas[-1]
+            ref_fd_first = self._get_data(ref_meas_first, domain=Domain.Frequency)
+            ref_fd_last = self._get_data(ref_meas_last, domain=Domain.Frequency)
+
+            if std_limits:
+                meas_line, coords = self.get_line(y=0, limits=std_limits)
+            else:
+                meas_line = [sam_meas]
+            absorbance_arrs = []
+            for meas in meas_line:
+                sam_fd_line = self._get_data(meas, domain=Domain.Frequency)
+                t_first = sam_fd_line[:, 1] / ref_fd_first[:, 1]
+                t_last = sam_fd_line[:, 1] / ref_fd_last[:, 1]
+                absorbance_arrs.append(20 * np.log10(np.abs(1 / t_first)))
+                absorbance_arrs.append(20 * np.log10(np.abs(1 / t_last)))
             absorb_std = np.std(absorbance_arrs, axis=0)
 
         freq_axis = ref_fd[:, 0].real
@@ -1714,7 +1733,7 @@ class DataSet:
         plt.subplots_adjust(wspace=0.3)
         plt.savefig(save_dir / (filename_s + ".pdf"), bbox_inches='tight', dpi=300, pad_inches=0, **kwargs)
 
-    def plt_show(self):
+    def plt_show(self, save_file_suffix=None, only_save_plots=False):
 
         # fig_labels = [plt.figure(fig_num).get_label() for fig_num in plt.get_fignums()]
         only_shown_fig_nums = []
@@ -1732,7 +1751,14 @@ class DataSet:
                     ax.legend()
 
             if self.options["save_plots"]:
-                self.save_fig(fig_num)
+                save_file=None
+                if save_file_suffix:
+                    save_file = str(fig_num) + "_" + save_file_suffix
+                self.save_fig(fig_num, filename=save_file)
+
+            if only_save_plots:
+                plt.close(fig_num)
+                continue
 
             if only_shown_fig_nums and fig_label not in only_shown_fig_nums:
                 not_shown.append(fig_label)
