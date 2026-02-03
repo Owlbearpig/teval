@@ -129,6 +129,14 @@ def butter_filt(data_td, **options):
     return np.array([data_td[:, 0], data_filtered]).T
 
 
+def flip_phase(data_fd):
+    freq_axis = data_fd[:, 0].real
+    y_amp_ = np.abs(data_fd[:, 1])
+    y_phi_ = np.unwrap(np.angle(data_fd[:, 1]))
+
+    return np.array([freq_axis, y_amp_ * np.exp(-1j*y_phi_)]).T
+
+
 def window(data_td, win_width=None, win_start=None, shift=None, en_plot=False, slope=0.15, **k):
     t, y = data_td[:, 0], data_td[:, 1]
     t -= t[0]
