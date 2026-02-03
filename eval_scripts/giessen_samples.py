@@ -5,7 +5,7 @@ import numpy as np
 
 options = {
 
-"plot_range": slice(13, 230),
+"plot_range": slice(10, 230),
 
 "ref_pos": (0, None),
 "fix_ref": 0,
@@ -44,12 +44,22 @@ samplesets = {"PA6": (65, 0), "PA_E73": (62, 0), "PBT_GF3D": (65,0), "PC": (68,0
               "Sikaflex_UHM": (51,0), "Sikaflex_UHM_Metall_fine": (72,0),
               }
 limits = {"PA6": (63, 69), "PA_E73": (58, 67), "PBT_GF3D": (62,69), "PC": (66,70), "PDT_GF3D": (59,68),
-          "PE_HD": (61.5,68), "PMMA": (62,88), "PMMA_fine": (71,73), "PP": (61,67), "PP_H": (61.5,67.5),
+          "PE_HD": (61.5,68), "PMMA": (62,68), "PMMA_fine": (71,73), "PP": (61,67), "PP_H": (61.5,67.5),
           "Sikaflex_521": (42,58), "Sikaflex_521_Metall_fine": (70,73),
           "Sikaflex_UHM": (42,57), "Sikaflex_UHM_Metall_fine": (71,77),}
 
+sample_grps = {1: ["PA6", "PA_E73", "PC", "PP"],
+               2: ["PP_H", "PE_HD", "PBT_GF3D", "PDT_GF3D", "PMMA"],
+               3: ["Sikaflex_521", "Sikaflex_521_Metall_fine",
+                   "Sikaflex_UHM", "Sikaflex_UHM_Metall_fine"],
+
+               }
+
 rets = []
 for sample_name, pos in samplesets.items():
+    if sample_name not in sample_grps[1]:
+        continue
+
     if 'nt' in os.name:
         sam_dataset_path = fr"C:\Users\alexj\Data\Gi_Machbarkeitsstudie_2\{sample_name}"
     else:
@@ -61,14 +71,11 @@ for sample_name, pos in samplesets.items():
     dataset.select_freq(1.00)
     # dataset.plot_line(line_coords=16, fig_num_=sample_name)
     label = sample_name.replace("_fine", "")
-    ret = dataset.plot_point(pos,
-                             label=label,
-                             err_bar_limits=limits[sample_name],
-                             ref_err_bars=True)
+    ret = dataset.plot_point(pos, label=label, err_bar_limits=limits[sample_name], ref_err_bars=True)
 
     rets.append((sample_name, 20*np.log10(ret["absorb"])[dataset._selected_freq_idx()]))
     # dataset.plt_show(save_file_suffix=sample_name, only_save_plots=True)
-    dataset.plt_show()
+dataset.plt_show()
 
 for ret in rets:
     print(ret)

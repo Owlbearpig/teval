@@ -1132,7 +1132,7 @@ class DataSet:
             ref_td[:, 0] -= ref_td[0, 0]
             sam_td[:, 0] -= sam_td[0, 0]
 
-        absorb_std = None
+        err_bar_range = None
         if std_limits:
             meas_line, coords = self.get_line(y=0, limits=std_limits)
 
@@ -1141,7 +1141,7 @@ class DataSet:
                 sam_fd_line = self._get_data(meas, domain=Domain.Frequency)
                 t = sam_fd_line[:, 1] / ref_fd[:, 1]
                 absorbance_arrs.append(20*np.log10(np.abs(1/t)))
-            absorb_std = np.std(absorbance_arrs, axis=0)
+            err_bar_range = np.std(absorbance_arrs, axis=0)
         if kwargs["ref_err_bars"]:
             all_ref_meas = self.measurements["refs"]
             ref_meas_first, ref_meas_last = all_ref_meas[0], all_ref_meas[-1]
@@ -1159,7 +1159,9 @@ class DataSet:
                 t_last = sam_fd_line[:, 1] / ref_fd_last[:, 1]
                 absorbance_arrs.append(20 * np.log10(np.abs(1 / t_first)))
                 absorbance_arrs.append(20 * np.log10(np.abs(1 / t_last)))
-            absorb_std = np.std(absorbance_arrs, axis=0)
+
+            err_bar_range = np.std(absorbance_arrs, axis=0)
+            err_bar_range = np.max(absorbance_arrs, axis=0) - np.min(absorbance_arrs, axis=0)
 
         freq_axis = ref_fd[:, 0].real
 
@@ -1233,8 +1235,8 @@ class DataSet:
         y = 20*np.log10(absorb[plot_range])
         plt.plot(freq_axis[plot_range], y, label=label)
         if std_limits:
-            lower = y - absorb_std[plot_range]
-            upper = y + absorb_std[plot_range]
+            lower = y - err_bar_range[plot_range]
+            upper = y + err_bar_range[plot_range]
             plt.fill_between(freq_axis[plot_range], lower, upper, alpha=0.3)
 
         plt.xlabel("Frequency (THz)")
