@@ -7,12 +7,18 @@ from functions import do_fft, do_ifft, window, flip_phase
 
 data_dir = Path(r"/home/ftpuser/ftp/Data/Black_Si/NoPattern_Linescan2_NoNitrogen/")
 ref_file = data_dir / r"2026-01-14T17-35-01.585294-BlackSi_NoPattern_NoN2_100avg-ref-X_132.000 mm-Y_16.000 mm.txt"
+sam_file = data_dir / r"2026-01-14T17-36-13.962303-BlackSi_NoPattern_NoN2_100avg-sample-X_11.000 mm-Y_16.000 mm.txt"
 
 ref_td = np.loadtxt(ref_file)
 ref_td = window(ref_td)
 
+real_sam_td = np.loadtxt(sam_file)
+# real_sam_td = window(real_sam_td)
+real_sam_td = np.array([real_sam_td[:, 0] - real_sam_td[0, 0], real_sam_td[:, 1]]).T
+
 ref_fd = do_fft(ref_td)
 ref_fd = flip_phase(ref_fd)
+sam_fd = do_fft(real_sam_td)
 
 #### Transmission coefficient sim
 
@@ -99,6 +105,7 @@ ax1.set_xlabel("Frequency (THz)")
 ax0.plot(ref_fd[:, 0], 20*np.log10(np.abs(ref_fd[:, 1])), label="Reference")
 ax1.plot(ref_fd[:, 0], np.unwrap(np.angle(ref_fd[:, 1])), label="Reference")
 ax2.plot(ref_td[:, 0], ref_td[:, 1], label="Reference")
+ax2.plot(real_sam_td[:, 0], real_sam_td[:, 1], label="BlackSi Measurement x=11,y=16")
 ax2.set_ylabel("Amplitude")
 ax2.set_xlabel("Time (ps)")
 

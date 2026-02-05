@@ -53,7 +53,7 @@ class Measurement:
 
     def _set_metadata(self):
         # set time
-        date_string = str(self.filepath.stem)[:25]
+        date_string = str(self.filepath.stem)[:26]
         self.meas_time = datetime.strptime(date_string, "%Y-%m-%dT%H-%M-%S.%f")
 
         # set sample name

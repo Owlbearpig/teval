@@ -289,6 +289,13 @@ class DataSet:
             key = "".join([f"{val:.3f}" for val in meas.position])
             self.raw_data_cache["coord_map"][key] = meas
 
+    def _timestamp2id(self, timestamp_str):
+        timestamp_dt = datetime.strptime(timestamp_str, "%Y-%m-%dT%H-%M-%S.%f")
+
+        id_ = int((timestamp_dt - datetime.min).total_seconds() * 1e6)
+
+        return id_
+
     def _parse_measurements(self):
         if not isinstance(self.data_path, Path):
             self.data_path = Path(self.data_path)
@@ -851,6 +858,14 @@ class DataSet:
 
         return closest_meas
 
+    def get_measurement_from_timestamp(self, timestamp_str):
+        meas_id_ = self._timestamp2id(timestamp_str)
+        for meas in self.measurements["all"]:
+            if meas.identifier == meas_id_:
+                return meas
+
+        return None
+
     def _is_excluded(self, idx_tuple):
         if self.options["excluded_areas"] is None:
             return False
@@ -1080,7 +1095,7 @@ class DataSet:
                 msg += "\n"
             logging.info(msg)
 
-    def plot_point(self, point=None, en_td_plot=True, **kwargs_):
+    def plot_point(self, point=None, timestamp=None, en_td_plot=True, **kwargs_):
         kwargs = {"label": "",
                   "sub_noise_floor": False,
                   "td_scale": 1,
@@ -1097,12 +1112,20 @@ class DataSet:
         std_limits = kwargs["err_bar_limits"] # limits of spatial coordinates to average over, for the err_bars
 
         plot_range = self.options["plot_range"]
+        if (point is not None) and (timestamp is not None):
+            logging.warning("either point or timestamp has to be None")
+            return None
 
-        if point is None:
+        if point is None and timestamp is None:
             sam_meas = self.measurements["all"][0]
             point = sam_meas.position
-        else:
+        elif point is not None:
             sam_meas = self.get_measurement(*point)
+        else:
+            sam_meas = self.get_measurement_from_timestamp(timestamp)
+            point = sam_meas.position
+
+        print(sam_meas)
         ref_meas = self.find_nearest_ref(sam_meas)
 
         logging.info(f"Plotting point {point}")
