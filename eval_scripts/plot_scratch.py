@@ -54,14 +54,16 @@ options = {
     "Absorption coefficient": False,
     "Conductivity": True,
 },
-"cbar_lim": (6.40, 6.80),
+"cbar_lim": (-1.5, -1.0),
 }
-dataset_path = r"C:\Users\alexj\Data\SemiconductorSamples\MarielenaData\2022_02_14\GaAs_Te 19073"
+# dataset_path = r"C:\Users\alexj\Data\SemiconductorSamples\MarielenaData\2022_02_14\GaAs_Te 19073"
+dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_coated\img2"
+
 
 dataset = DataSet(dataset_path, options)
 
 dataset.select_freq(0.5)
-dataset.select_quantity(QuantityEnum.P2P)
+dataset.select_quantity(QuantityEnum.TransmissionPhase)
 
 dataset.plot_image()
 
