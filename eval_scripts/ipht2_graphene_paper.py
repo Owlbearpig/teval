@@ -4,10 +4,10 @@ import os
 
 options = {
 # filter paper
-"cbar_lim": (6.5, 7.6), # filter paper uncoated p2p img0
+# "cbar_lim": (6.5, 7.6), # filter paper uncoated p2p img0
 # "cbar_lim": (1.15, 1.45), # filter paper uncoated p2p img0
 # "cbar_lim": (4.9, 5.9), # filter paper uncoated p2p img1
-# "cbar_lim": (0.8, 1.9), # filter paper coated p2p
+# "cbar_lim": (1.0, 1.9), # filter paper coated p2p
 # "cbar_lim": (0.75, 0.90), # 1.5 THz
 # "cbar_lim": (0.86, 0.96), # 1.0 THz
 # "cbar_lim": (0.80, 0.88), # 1.5 THz
@@ -15,7 +15,7 @@ options = {
 # "cbar_lim": (0.79, 0.86), # 1.0-1.2 THz
 
 # filter paper coated
-# "cbar_lim": (1.00, 1.7), # p2p
+"cbar_lim": (1.00, 1.7), # p2p
 #"cbar_lim": (0.05, 0.13), # 1.5 THz
 #"cbar_lim": (0.0045, 0.0100), # 1.45 - 1.55 THz
 #"cbar_lim": (0.005, 0.02), # 1.00 - 1.20 THz
@@ -61,12 +61,12 @@ options = {
 },
 "plot_opt": {"shift_sam2ref": False,},
 "only_shown_figures": ["Transmission fit abs film",
-                       "Transmission fit angle film",
+                       #"Transmission fit angle film",
                        #"Peak_to_peak",
-                       "_total_response",
-                       "_drude_cc_part",
-                       "_drude_l_part",
-                       "n_sub",
+                       #"_total_response",
+                       #"_drude_cc_part",
+                       #"_drude_l_part",
+                       #"n_sub",
                        ],
 "only_shown_figures": [],
 "shown_plots": {
@@ -79,7 +79,7 @@ options = {
     "Absorbance": False,
     "Refractive index": False,
     "Absorption coefficient": False,
-    "Conductivity": True,
+    "Conductivity": False,
 },
 }
 
@@ -88,7 +88,7 @@ if 'nt' in os.name:
     sam_dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_coated\img0"
 else:
     sub_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_uncoated/img0"
-    sam_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img0"
+    sam_dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img1"
 
 dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
 
@@ -102,9 +102,9 @@ film_pnt = (50, 10)
 
 # dataset_eval.sub_dataset.plot_image()
 # dataset_eval.sub_dataset.plot_refs()
-# dataset_eval.plot_image()
-
-dataset_eval.sub_dataset.plot_point(sub_pnt, en_td_plot=False)
+dataset_eval.plot_image()
+# dataset_eval.plot_system_stability()
+# dataset_eval.sub_dataset.plot_point(sub_pnt, en_td_plot=False)
 # dataset_eval.plot_point(film_pnt)
 
 # dataset_eval.eval_point_model_fit(film_pnt)
