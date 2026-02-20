@@ -36,13 +36,17 @@ options = {
     "Absorption coefficient": False,
     "Conductivity": False,
 },
+    # "cbar_lim": (-1.9, -1.4), # graphene phase at 0.5 THz
+    "cbar_lim": (1.7, 2.05),
+    # "cbar_lim": (0, 30),
 }
 
-sam_dataset_path = fr"/home/ftpuser/ftp/Data/SemiconductorSamples/GaAaTe_wafer_sam Remeasure"
+sam_dataset_path = fr"/home/ftpuser/ftp/Data/THzConductivity/MarielenaData/2022_02_14/GaAs_Te 19073"
 dataset = DataSet(sam_dataset_path, options)
-dataset.plot_system_stability()
-dataset.plot_point(timestamp="2024-09-30T20-44-50.373500")
-dataset.plot_point(timestamp="2024-09-30T21-06-17.935044")
+dataset.select_freq(0.5)
+dataset.select_quantity(QuantityEnum.Phase)
+# dataset.select_quantity(QuantityEnum.P2P)
 
-# dataset.plot_system_stability()
+dataset.plot_image()
+
 dataset.plt_show()

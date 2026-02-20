@@ -33,6 +33,7 @@ TODOs:
 - Logging is messy, also fix log levels and RuntimeWarnings
 - freq_range variable in transmission function (and other functions?)
 - combine the different reference select settings into one dict
+- Fix unit labeling
 
 New ideas: add teralyzer evaluation (time consuming)
 - Add plt_show here (done)
@@ -86,7 +87,7 @@ class Direction(Enum):
 class Quantity:
     func = None
 
-    def __init__(self, label="label", func=None, domain=None):
+    def __init__(self, label="label", func=None, domain=None, unit=""):
         self.label = label
         if domain is None:
             self.domain = Domain.Time
@@ -94,6 +95,8 @@ class Quantity:
             self.domain = domain
         if func is not None:
             self.func = func
+        self.unit = bool(unit)*" (" + unit + bool(unit)*")"
+
 
     def __repr__(self):
         return self.label
@@ -105,7 +108,7 @@ class Quantity:
 class QuantityEnum(Enum):
     P2P = Quantity("Peak to peak")
     Power = Quantity("Power", domain=Domain.Frequency)
-    Phase = Quantity("Phase", domain=Domain.Frequency)
+    Phase = Quantity("Phase", domain=Domain.Frequency, unit="Rad")
     MeasTimeDeltaRef2Sam = Quantity("Time delta Ref. to Sam.")
     RefAmp = Quantity("Ref. Amp", domain=Domain.Frequency)
     RefArgmax = Quantity("Ref. Argmax")
@@ -190,7 +193,7 @@ class DataSet:
                            "pixel_interpolation": PixelInterpolation.none,
                            "fig_label": "",
                            "img_title": "",
-                           "en_cbar_label": False,
+                           "en_cbar_label": True,
                            "plot_range": slice(0, 900),
                            "ref_pos": (None, None),
                            "ref_threshold": 0.95,
@@ -1592,7 +1595,8 @@ class DataSet:
         cbar.set_ticks(np.round(np.linspace(cbar_min, cbar_max, 4), 3))
 
         if self.options["en_cbar_label"]:
-            cbar.set_label(quantity_label, rotation=270, labelpad=30)
+            cbar_label = self.selected_quantity.label + self.selected_quantity.unit
+            cbar.set_label(cbar_label, rotation=270, labelpad=30)
 
         self.img_properties["img_ax"] = ax
         self.img_properties["plotted_image"] = True
