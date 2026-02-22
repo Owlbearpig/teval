@@ -7,10 +7,9 @@ import gc
 options = {
 "plot_range": slice(0, 750),
 
-# "ref_pos": (30, None), # img8
-"ref_pos": (30, None), # img9
+"ref_pos": (20, None),
 
-"ref_threshold": 0.90,
+# "ref_threshold": 0.90,
 "pixel_interpolation": PixelInterpolation.none,
 "dist_func": Dist.Time,
 "img_title": "",
@@ -54,18 +53,43 @@ options = {
     "Absorption coefficient": False,
     "Conductivity": True,
 },
-"cbar_lim": (-1.5, -1.0),
+# "cbar_lim": (-1.5, -1.0), # phase 0.5 THz
+# "cbar_lim": (-2.40, -2.0), # phase 2.0 THz
+# "cbar_lim": (-2.00, -1.7), # phase 2.0 THz
+# "cbar_lim": (6.8, 7.1),
+# "cbar_lim": (5.75, 5.95), # img0
+# "cbar_lim": (4.95, 5.15),
+# "cbar_lim": (0.10, 0.12),
+# "cbar_lim": (-2.0, -1.5),
+# "cbar_lim": (-2.10, -1.50),
+# "cbar_lim": (0.090, 0.120),
+#"cbar_lim": (-1.90, -1.45),
+#"cbar_lim": (4.3, 4.7),
+"cbar_lim": (0.70, 0.730),
 }
 # dataset_path = r"C:\Users\alexj\Data\SemiconductorSamples\MarielenaData\2022_02_14\GaAs_Te 19073"
-dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_coated\img2"
+# paper + graphene
+dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img8"
+# dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_coated/img0"
+# dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0"
 
+# quartz + Ag
+# dataset_path = r"C:\Users\alexj\Data\HHI_Aachen\remeasure_02_09_2024\sample3\img2"
+
+# smartT + ITO
+# dataset_path = r"C:\Users\alexj\Data\IPHT\uncoated\s4"
+# dataset_path = r"C:\Users\alexj\Data\IPHT\coated\s4"
 
 dataset = DataSet(dataset_path, options)
 
-dataset.select_freq(0.5)
-dataset.select_quantity(QuantityEnum.TransmissionPhase)
-
+dataset.select_freq(1.0)
+# dataset.select_quantity(QuantityEnum.TransmissionPhase)
+# dataset.select_quantity(QuantityEnum.P2P)
+dataset.select_quantity(QuantityEnum.TransmissionAmp)
+# dataset.select_quantity(QuantityEnum.Phase)
+# dataset.plot_point((50, 20))
 dataset.plot_image()
+# dataset.plot_system_stability()
 
 dataset.plt_show()
 

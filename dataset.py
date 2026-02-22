@@ -108,18 +108,18 @@ class Quantity:
 class QuantityEnum(Enum):
     P2P = Quantity("Peak to peak")
     Power = Quantity("Power", domain=Domain.Frequency)
-    Phase = Quantity("Phase", domain=Domain.Frequency, unit="Rad")
+    Phase = Quantity("Phase", domain=Domain.Frequency, unit="rad")
     MeasTimeDeltaRef2Sam = Quantity("Time delta Ref. to Sam.")
     RefAmp = Quantity("Ref. Amp", domain=Domain.Frequency)
     RefArgmax = Quantity("Ref. Argmax")
     RefPhase = Quantity("Ref. Phase", domain=Domain.Frequency)
     PeakCnt = Quantity("Peak Cnt")
-    ZeroCrossing = Quantity("Zero Crossing", domain=Domain.Time)
-    TimeOfFlight = Quantity("Time of Flight", domain=Domain.Time)
+    ZeroCrossing = Quantity("Zero Crossing", domain=Domain.Time, unit="ps")
+    TimeOfFlight = Quantity("Time of Flight", domain=Domain.Time, unit="ps")
     TransmissionAmp = Quantity("Amplitude transmission", domain=Domain.Frequency)
-    TransmissionPhase = Quantity("Phase transmission", domain=Domain.Frequency)
+    TransmissionPhase = Quantity("Phase transmission", domain=Domain.Frequency, unit="rad")
     RefractiveIdx = Quantity("Refractive idx", domain=Domain.Frequency)
-    AbsorptionCoe = Quantity("Absorption coe (1/cm)", domain=Domain.Frequency)
+    AbsorptionCoe = Quantity("Absorption coe", domain=Domain.Frequency, unit="1/cm")
 
 
 class LogLevel(Enum):
