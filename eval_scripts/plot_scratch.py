@@ -7,19 +7,19 @@ import gc
 options = {
 "plot_range": slice(0, 750),
 
-"ref_pos": (20, None),
+"ref_pos": (10, None),
 
 # "ref_threshold": 0.90,
 "pixel_interpolation": PixelInterpolation.none,
-"dist_func": Dist.Time,
+"dist_func": Dist.Position,
 "img_title": "",
 "sample_properties": {"d_1": 640,#650,
                       "d_2": 650,
                       "d_film": 0.300, },
 "pp_opt": {"window_opt": {"enabled": True,
-                          "slope": 0.01, # 0.999, # 0.99
+                          # "slope": 0.01, # 0.999, # 0.99
                           # "win_start": 0,
-                          "win_width": 70, # 18,#2*32,# 38*2, # 5*15 # 36
+                          # "win_width": 70, # 18,#2*32,# 38*2, # 5*15 # 36
                           "type": WindowTypes.tukey,
                           },
            "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
@@ -63,14 +63,18 @@ options = {
 # "cbar_lim": (-2.0, -1.5),
 # "cbar_lim": (-2.10, -1.50),
 # "cbar_lim": (0.090, 0.120),
-#"cbar_lim": (-1.90, -1.45),
+# "cbar_lim": (-1.90, -1.45),
 #"cbar_lim": (4.3, 4.7),
-"cbar_lim": (0.70, 0.730),
+# "cbar_lim": (0.70, 0.730),
+# "cbar_lim": (2.85, 3.05),
+# "cbar_lim": (7.4),
 }
 # dataset_path = r"C:\Users\alexj\Data\SemiconductorSamples\MarielenaData\2022_02_14\GaAs_Te 19073"
+
 # paper + graphene
-dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img8"
 # dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_coated/img0"
+# dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_coated/img3"
+# dataset_path = r"/home/ftpuser/ftp/Data/IPHT2/Filter_coated/img3"
 # dataset_path = r"C:\Users\alexj\Data\IPHT2\Filter_uncoated\img0"
 
 # quartz + Ag
@@ -79,6 +83,10 @@ dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img8"
 # smartT + ITO
 # dataset_path = r"C:\Users\alexj\Data\IPHT\uncoated\s4"
 # dataset_path = r"C:\Users\alexj\Data\IPHT\coated\s4"
+
+# Sapphire + Vanadium
+# dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img8"
+dataset_path = r"/media/storage/ArchivedData/Conductivity/Furtwangen/Vanadium Oxide/img5"
 
 dataset = DataSet(dataset_path, options)
 
