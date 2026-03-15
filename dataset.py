@@ -604,27 +604,21 @@ class DataSet:
         dt = t0[1] - t0[0]
         N = len(t0)
 
-        # Remove DC
         y0 = y0 - np.mean(y0)
         y1 = y1 - np.mean(y1)
 
-        # FFT
         Y0 = np.fft.fft(y0)
         Y1 = np.fft.fft(y1)
 
         # Y1 = (0.95*np.abs(Y1)) * np.exp(1j*np.angle(Y1))
 
-        # Frequency axis
         freqs = np.fft.fftfreq(N, dt)
         omega = 2 * np.pi * freqs
 
-        # Transfer function
         H = Y1 / Y0
 
-        # Phase difference
         phase = np.unwrap(np.angle(H))
 
-        # Use only positive frequencies
         mask = freqs > 0
 
         if freq_min is not None:
@@ -636,12 +630,10 @@ class DataSet:
         omega_fit = omega[mask]
         phase_fit = phase[mask]
 
-        # Linear fit
         p = np.polyfit(omega_fit, phase_fit, 1)
 
         slope = p[0]
 
-        # Delay
         tau = -slope
         # print(tau)
         return tau
