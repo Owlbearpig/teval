@@ -22,7 +22,7 @@ from enum import Enum
 import logging
 from datetime import datetime
 from tqdm import tqdm
-
+from scipy.signal import correlate
 
 """
 TODOs: 
@@ -34,6 +34,7 @@ TODOs:
 - freq_range variable in transmission function (and other functions?)
 - combine the different reference select settings into one dict
 - Fix unit labeling
+- Split dataset into smaller parts (e.g. a plotting class)
 
 New ideas: add teralyzer evaluation (time consuming)
 - Add plt_show here (done)
@@ -194,7 +195,6 @@ class DataSet:
                            "fig_label": "",
                            "img_title": "",
                            "en_cbar_label": True,
-                           "plot_range": slice(0, 900),
                            "ref_pos": (None, None),
                            "ref_threshold": 0.95,
                            "fix_ref": False, # idx of reference measurement
@@ -225,7 +225,17 @@ class DataSet:
                                "Absorption coefficient": False,
                                "Conductivity": False,
                            },
-                           "plot_opt": {"shift_sam2ref": False,}
+                           "plot_opt": {"plot_range": slice(0, 900),
+                                        "shift_sam2ref": False,
+                                        "label": "",
+                                        "sub_noise_floor": False,
+                                        "td_scale": 1,
+                                        "remove_t_offset": False,
+                                        "err_bar_limits": None,
+                                        "ref_err_bars": False,
+                                        "stability_plot_rel_change": False,
+                                          # use first and last reference measurement to estimate uncertainty
+                                        }
                            }
         if "sample_properties" in options_:
             default_options["sample_properties"]["default_values"] = False
@@ -584,16 +594,103 @@ class DataSet:
 
         return t[np.argmax(y)]
 
+    def _delay_from_phaseslope(self, meas_0, meas_1, freq_min=0.15, freq_max=0.85):
+        data_td_0 = self._get_data(meas_0)
+        t0, y0 = data_td_0[:, 0], data_td_0[:, 1]
+
+        data_td_1 = self._get_data(meas_1)
+        t1, y1 = data_td_1[:, 0], data_td_1[:, 1]
+
+        dt = t0[1] - t0[0]
+        N = len(t0)
+
+        # Remove DC
+        y0 = y0 - np.mean(y0)
+        y1 = y1 - np.mean(y1)
+
+        # FFT
+        Y0 = np.fft.fft(y0)
+        Y1 = np.fft.fft(y1)
+
+        # Y1 = (0.95*np.abs(Y1)) * np.exp(1j*np.angle(Y1))
+
+        # Frequency axis
+        freqs = np.fft.fftfreq(N, dt)
+        omega = 2 * np.pi * freqs
+
+        # Transfer function
+        H = Y1 / Y0
+
+        # Phase difference
+        phase = np.unwrap(np.angle(H))
+
+        # Use only positive frequencies
+        mask = freqs > 0
+
+        if freq_min is not None:
+            mask &= freqs > freq_min
+
+        if freq_max is not None:
+            mask &= freqs < freq_max
+
+        omega_fit = omega[mask]
+        phase_fit = phase[mask]
+
+        # Linear fit
+        p = np.polyfit(omega_fit, phase_fit, 1)
+
+        slope = p[0]
+
+        # Delay
+        tau = -slope
+        # print(tau)
+        return tau
+
+    def _get_cross_correlation_delay(self, meas_0, meas_1):
+        upsample = 10
+        data_td_0 = self._get_data(meas_0)
+        t0, y0 = data_td_0[:, 0], data_td_0[:, 1]
+
+        data_td_1 = self._get_data(meas_1)
+        t1, y1 = data_td_1[:, 0], data_td_1[:, 1]
+
+        dt = t0[1] - t0[0]
+
+        y0 = y0 - np.mean(y0)
+        y1 = y1 - np.mean(y1)
+
+        n = len(y0) + len(y1)
+
+        # FFT
+        Y0 = np.fft.fft(y0, n * upsample)
+        Y1 = np.fft.fft(y1, n * upsample)
+
+        corr = np.fft.ifft(Y1 * np.conj(Y0))
+        corr = np.abs(np.fft.fftshift(corr))
+
+        # lag axis
+        lags = np.arange(-len(corr) // 2, len(corr) // 2)
+
+        k = np.argmax(corr)
+
+        lag = lags[k] / upsample
+
+        delay = lag * dt
+        print(delay)
+        return delay
+
     def _get_zero_crossing(self, measurement_):
         data_td = self._get_data(measurement_)
         t, y = data_td[:, 0], data_td[:, 1]
-        a_max = np.argmax(y)
+        y_abs_max = np.argmax(np.abs(y))
+        # y_abs_max = np.argmax(y)
 
         zero_crossing_idx = 1
         for i in range(len(y)):
-            if i < a_max or i == len(y) - 1:
+            if i < y_abs_max or i == len(y) - 1:
                 continue
-            if y[i - 1] > 0 > y[i]:
+            if np.sign(y[i - 1]) * np.sign(y[i]) < 0: # sign change ++=+, --=+, +-=-, -+=-
+            # if y[i - 1] > 0 > y[i]:  # sign change ++=+, --=+, +-=-, -+=-
                 zero_crossing_idx = i
                 break
 
@@ -603,7 +700,9 @@ class DataSet:
         if np.isclose(y2-y1, 0):
             return 0
         else:
-            return (y1 * x2 - x1 * y2) / (y1 - y2)
+            zero_crossing_interp = (y1 * x2 - x1 * y2) / (y1 - y2)
+            # print(zero_crossing_interp)
+            return zero_crossing_interp
 
     def _p2p(self, meas_):
         y_td = self._get_data(meas_)
@@ -863,11 +962,16 @@ class DataSet:
 
     def get_measurement_from_timestamp(self, timestamp_str):
         meas_id_ = self._timestamp2id(timestamp_str)
+
+        found_meas = None
         for meas in self.measurements["all"]:
             if meas.identifier == meas_id_:
-                return meas
+                found_meas = meas
 
-        return None
+        if found_meas is None:
+            logging.warning(f"Measurement with timestamp: {timestamp_str} (id: {meas_id_}) not found in dataset")
+
+        return found_meas
 
     def _is_excluded(self, idx_tuple):
         if self.options["excluded_areas"] is None:
@@ -1098,14 +1202,57 @@ class DataSet:
                 msg += "\n"
             logging.info(msg)
 
-    def plot_point(self, point=None, timestamp=None, en_td_plot=True, **kwargs_):
-        kwargs = {"label": "",
-                  "sub_noise_floor": False,
-                  "td_scale": 1,
-                  "remove_t_offset": False,
-                  "err_bar_limits": None,
-                  "ref_err_bars": False, # use first and last reference measurement to estimate uncertainty
-                  }
+    def plot_ref(self, ref_meas_=None, timestamp=None, ref_idx=None, **kwargs_):
+        kwargs = {**self.options["plot_opt"]}
+        kwargs.update(kwargs_)
+
+        if (ref_meas_ is None) and (timestamp is None):
+            if isinstance(ref_idx, int):
+                ref_meas_ = self.measurements["refs"][ref_idx]
+                kwargs["label"] = f"Reference idx: {ref_idx}"
+            else:
+                ref_meas_ = self.measurements["refs"][0]
+                kwargs["label"] = "Reference idx: 0"
+        elif ref_meas_ is None:
+            ref_meas_ = self.get_measurement_from_timestamp(timestamp)
+            if ref_meas_ is None:
+                return
+
+        zero_crossing = self._get_zero_crossing(ref_meas_)
+        print(zero_crossing)
+        zx_simple = self._get_zero_crossing(ref_meas_) - self._get_zero_crossing(self.measurements["refs"][0])
+        zx_phase = self._delay_from_phaseslope(self.measurements["refs"][0], ref_meas_)
+        print(zx_simple*1e3, zx_phase*1e3)
+
+        ref_td, ref_fd = self._get_data(ref_meas_, domain=Domain.Both)
+        freq_axis = ref_fd[:, 0].real
+        plot_range = self.options["plot_opt"]["plot_range"]
+
+        if kwargs["remove_t_offset"]:
+            ref_td[:, 0] -= ref_td[0, 0]
+
+        if kwargs["label"]:
+            label = kwargs["label"]
+        else:
+            label = f"Reference ({ref_meas_.meas_time})"
+
+        noise_floor = np.mean(20 * np.log10(np.abs(ref_fd[ref_fd[:, 0] > 6.0, 1]))) * kwargs["sub_noise_floor"]
+
+        y_db = (20 * np.log10(np.abs(ref_fd[plot_range, 1])) - noise_floor).real
+        plt.figure("Spectrum")
+        plt.plot(freq_axis[plot_range], y_db, label=label)
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("Amplitude (dB)")
+
+        plt.figure("Time domain")
+        plt.plot(ref_td[:, 0], ref_td[:, 1], label=label)
+        plt.scatter(zero_crossing, 0, label="Zero-crossing", color="red")
+        # plt.plot(ref_td[1:, 0], np.diff(np.abs(ref_td[:, 1])), label=label)
+        plt.xlabel("Time (ps)")
+        plt.ylabel("Amplitude (Arb. u.)")
+
+    def plot_meas(self, point=None, timestamp=None, en_td_plot=True, **kwargs_):
+        kwargs = {**self.options["plot_opt"]}
         kwargs.update(kwargs_)
 
         label = kwargs["label"]
@@ -1114,26 +1261,26 @@ class DataSet:
         remove_t_offset = kwargs["remove_t_offset"]
         std_limits = kwargs["err_bar_limits"] # limits of spatial coordinates to average over, for the err_bars
 
-        plot_range = self.options["plot_range"]
+        plot_range = self.options["plot_opt"]["plot_range"]
         if (point is not None) and (timestamp is not None):
             logging.warning("either point or timestamp has to be None")
             return None
 
         if point is None and timestamp is None:
-            sam_meas = self.measurements["all"][0]
-            point = sam_meas.position
+            selected_meas = self.measurements["all"][0]
+            point = selected_meas.position
         elif point is not None:
-            sam_meas = self.get_measurement(*point)
+            selected_meas = self.get_measurement(*point)
         else:
-            sam_meas = self.get_measurement_from_timestamp(timestamp)
-            point = sam_meas.position
+            selected_meas = self.get_measurement_from_timestamp(timestamp)
+            point = selected_meas.position
 
-        print(sam_meas)
-        ref_meas = self.find_nearest_ref(sam_meas)
+        print(selected_meas)
+        ref_meas = self.find_nearest_ref(selected_meas)
 
         logging.info(f"Plotting point {point}")
         logging.info(f"Reference measurement: {ref_meas}")
-        logging.info(f"Sample measurement: {sam_meas}\n")
+        logging.info(f"Sample measurement: {selected_meas}\n")
 
         # TODO redo window plotting
         show_win_plot = deepcopy(self.options["pp_opt"]["window_opt"]["en_plot"])
@@ -1146,7 +1293,7 @@ class DataSet:
         #ref_fd[:, 1] = np.abs(ref_fd[:, 1]) * np.exp(-1j*np.angle(ref_fd[:, 1]))
         #ref_td = do_ifft(ref_fd, conj=False)
         self.options["pp_opt"]["window_opt"]["fig_label"] = "sam"
-        sam_td, sam_fd = self._get_data(sam_meas, domain=Domain.Both)
+        sam_td, sam_fd = self._get_data(selected_meas, domain=Domain.Both)
 
         if self.options["plot_opt"]["shift_sam2ref"]:
             shift_t = np.abs(np.argmax(ref_td[:, 1]) - np.argmax(sam_td[:, 1]))
@@ -1155,7 +1302,6 @@ class DataSet:
         self.options["pp_opt"]["window_opt"]["en_plot"] = show_win_plot
 
         if remove_t_offset:
-            ref_td[:, 0] -= ref_td[0, 0]
             sam_td[:, 0] -= sam_td[0, 0]
 
         err_bar_range = None
@@ -1177,7 +1323,7 @@ class DataSet:
             if std_limits:
                 meas_line, coords = self.get_line(y=0, limits=std_limits)
             else:
-                meas_line = [sam_meas]
+                meas_line = [selected_meas]
             absorbance_arrs = []
             for meas in meas_line:
                 sam_fd_line = self._get_data(meas, domain=Domain.Frequency)
@@ -1195,30 +1341,18 @@ class DataSet:
         absorb = np.abs(1/t)
 
         f_min, f_max = freq_axis[plot_range][0], freq_axis[plot_range][-1]
-        simple_eval_res = self.single_layer_eval(sam_meas, (f_min, f_max))
+        simple_eval_res = self.single_layer_eval(selected_meas, (f_min, f_max))
         phi = simple_eval_res["phi"]
         phi_corrected = simple_eval_res["phi_corrected"]
 
         refr_idx = simple_eval_res["refr_idx"]
-        alph = self._absorption_coef(sam_meas, (f_min, f_max))
+        alph = self._absorption_coef(selected_meas, (f_min, f_max))
 
         ret = {"freq_axis": freq_axis, "absorb": absorb, "t": t, "ref_fd": ref_fd, "sam_fd": sam_fd}
         self._print_ret(ret)
 
-        noise_floor = np.mean(20 * np.log10(np.abs(ref_fd[ref_fd[:, 0] > 6.0, 1]))) * sub_noise_floor
-
         if not self.plotted_ref:
-            y_db = (20 * np.log10(np.abs(ref_fd[plot_range, 1])) - noise_floor).real
-            plt.figure("Spectrum")
-            plt.plot(freq_axis[plot_range], y_db, label="Reference")
-            plt.xlabel("Frequency (THz)")
-            plt.ylabel("Amplitude (dB)")
-
-            plt.figure("Time domain")
-            plt.plot(ref_td[:, 0], ref_td[:, 1], label="Reference")
-            plt.xlabel("Time (ps)")
-            plt.ylabel("Amplitude (Arb. u.)")
-
+            self.plot_ref(ref_meas, **kwargs)
             self.plotted_ref = True
 
         if not label:
@@ -1280,7 +1414,7 @@ class DataSet:
         plt.ylabel("Absorption coefficient (1/cm)")
 
         if self.sub_dataset is not None:
-            sigma = self._conductivity(sam_meas)
+            sigma = self._conductivity(selected_meas)
             # plot_range = slice(30, 550)
             plt.figure("Conductivity")
             plt.title(label)
@@ -1293,7 +1427,7 @@ class DataSet:
         return ret
 
     def plot_meas_phi_diff(self, pnt0, pnt1, label=""):
-        plot_range = self.options["plot_range"]
+        plot_range = self.options["plot_opt"]["plot_range"]
 
         sam_meas0 = self.get_measurement(*pnt0)
         ref_meas0 = self.find_nearest_ref(sam_meas0)
@@ -1314,9 +1448,14 @@ class DataSet:
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase difference (rad)")
 
-    def plot_system_stability(self, climate_log_file=None):
-        first_meas = self.measurements["all"][0]
-        if all([first_meas.position == meas.position for meas in self.measurements["all"]]):
+    def plot_system_stability(self, climate_log_file=None, meas_set_kw=None):
+        if meas_set_kw is not None:
+            meas_set = []
+            for meas in self.measurements["all"]:
+                if meas_set_kw in meas.filepath.name:
+                    meas_set.append(meas)
+            logging.info(f"Using measurements containing keyword {meas_set_kw}")
+        elif all([self.measurements["all"][0].position == meas.position for meas in self.measurements["all"]]):
             meas_set = self.measurements["all"]
             logging.info("Using the full dataset")
         else:
@@ -1345,7 +1484,8 @@ class DataSet:
         for i, ref in enumerate(meas_set):
             ref_td, ref_fd = self._get_data(ref, domain=Domain.Both)
 
-            ref_zero_crossing[i] = self._get_zero_crossing(ref)
+            # ref_zero_crossing[i] = self._get_zero_crossing(ref)
+            ref_zero_crossing[i] = self._delay_from_phaseslope(meas_set[0], ref)
             ref_ampl_arr[i] = np.sum(np.abs(ref_fd[f_idx, 1]))
             ref_angle_arr[i] = -np.angle(ref_fd[f_idx, 1])
 
@@ -1387,8 +1527,11 @@ class DataSet:
         plt.xlabel("Frequency (1/hour)")
         plt.ylabel("Magnitude")
 
-        ref_ampl_arr = 100 * (ref_ampl_arr[0] - ref_ampl_arr) / ref_ampl_arr[0]
-        ref_angle_arr = 100 * (ref_angle_arr[0] - ref_angle_arr) / ref_angle_arr[0]
+        ref_angle_change = ref_angle_arr[0] - ref_angle_arr
+        ref_ampl_change = ref_ampl_arr[0] - ref_ampl_arr
+        if self.options["plot_opt"]["stability_plot_rel_change"]:
+            ref_ampl_change = 100 * ref_ampl_change / ref_ampl_arr[0]
+            ref_angle_change = 100 * ref_angle_change / ref_angle_arr[0]
 
         from random import choice
         idx = choice(range(len(meas_set)))
@@ -1417,22 +1560,28 @@ class DataSet:
         plt.figure("Reference zero crossing change")
         plt.title(f"Reference zero crossing change")
         plt.plot(meas_times[1:], abs_p_shifts, label=t0)
-        phase_change = np.abs(np.diff(ref_angle_arr))
+        phase_change = np.abs(np.diff(ref_angle_change))
         # plt.plot(meas_times[1:], 1e3*phase_change/(2*3.1415*selected_freq_), label=t0)
         plt.xlabel(f"Measurement time ({mt_unit})")
         plt.ylabel("Time (fs)")
 
         plt.figure("Stability amplitude")
         plt.title(f"Amplitude of reference measurement at {selected_freq_} THz")
-        plt.plot(meas_times, ref_ampl_arr)
+        plt.plot(meas_times, ref_ampl_change)
         plt.xlabel(f"Measurement time ({mt_unit})")
-        plt.ylabel("Relative amplitude change (%)")
+        if self.options["plot_opt"]["stability_plot_rel_change"]:
+            plt.ylabel("Relative amplitude change (%)")
+        else:
+            plt.ylabel("Amplitude change")
 
         plt.figure("Stability phase")
         plt.title(f"Phase of reference measurement at {selected_freq_} THz")
-        plt.plot(meas_times, ref_angle_arr)
+        plt.plot(meas_times, ref_angle_change)
         plt.xlabel(f"Measurement time ({mt_unit})")
-        plt.ylabel("Relative phase change (%)")
+        if self.options["plot_opt"]["stability_plot_rel_change"]:
+            plt.ylabel("Relative phase change (%)")
+        else:
+            plt.ylabel("Phase change (rad)")
 
         plt.figure("Time between reference measurements")
         plt.title(f"Time between reference measurements")
@@ -1442,6 +1591,8 @@ class DataSet:
 
         if climate_log_file is not None:
             self.plot_climate(climate_log_file)
+
+        return {"meas_times": meas_times, "ref_zero_crossing": ref_zero_crossing}
 
     def plot_frequency_noise(self):
         ref_meas_set = self.measurements["refs"]
@@ -1617,7 +1768,7 @@ class DataSet:
 
         plt_fun(meas_x_coords, meas_y_coords, color="black", linewidth=0.4)
 
-    def plot_refs(self):
+    def plot_refs_on_image(self):
         self._plot_meas_on_image(self.measurements["refs"])
 
     def plot_line(self, line_coords=None, direction=Direction.Horizontal, fig_num_=None, y_label=None, **plot_kwargs):
@@ -1840,6 +1991,54 @@ class DataSet:
         plt.figure("Stability phase")
         plt.scatter(mark_x, mark_y, color="red", s=30, zorder=99)
 
+    def system_stability_diff_plot(self):
+        system_stab_res_refs = self.plot_system_stability()
+        x = system_stab_res_refs["meas_times"]
+        y_ref = system_stab_res_refs["ref_zero_crossing"]
+
+        self.options["pp_opt"]["window_opt"]["win_start"] = 11
+        system_stab_res_mon_pulse0 = self.plot_system_stability(meas_set_kw="-sub-")
+        xp = system_stab_res_mon_pulse0["meas_times"]
+        fp = system_stab_res_mon_pulse0["ref_zero_crossing"]
+        y_pulse0 = np.interp(x, xp, fp)
+
+        self.options["pp_opt"]["window_opt"]["win_start"] = 27
+        system_stab_res_mon_pulse1 = self.plot_system_stability(meas_set_kw="-sub-")
+        xp = system_stab_res_mon_pulse1["meas_times"]
+        fp = system_stab_res_mon_pulse1["ref_zero_crossing"]
+        y_pulse1 = np.interp(x, xp, fp)
+
+        zero_crossing_difference_pulse0 = y_pulse0 - y_ref
+        offset_pulse0 = np.mean(zero_crossing_difference_pulse0[100:])
+        zero_crossing_difference_pulse1 = y_pulse1 - y_ref
+        offset_pulse1 = np.mean(zero_crossing_difference_pulse1[100:])
+        print(offset_pulse0, offset_pulse1)
+
+        y_pulse0 = y_pulse0 - offset_pulse0
+        y_pulse1 = y_pulse1 - offset_pulse1
+
+        y_mean = (y_pulse0 + y_pulse1) / 2
+
+        residual_pulse0 = np.sum((y_pulse0 - y_ref)**2) / len(y_ref)
+        residual_pulse1 = np.sum((y_pulse1 - y_ref) ** 2) / len(y_ref)
+        residual_mean = np.sum((y_mean - y_ref) ** 2) / len(y_ref)
+        print(residual_pulse0, residual_pulse1, residual_mean)
+
+        plt.figure("Zero crossing interpolation")
+        # plt.plot(x, y_pulse0, label="0-crossing monitor pulse0 (interp)")
+        # plt.plot(x, y_pulse1, label="0-crossing monitor pulse1 (interp)")
+        plt.plot(x, y_mean, label="0-crossing monitor mean pulse 0 and 1")
+        plt.plot(x, y_ref, label="0-crossing reference")
+        plt.xlabel(f"Measurement time (unit?)")
+        plt.ylabel("Time (fs)")
+
+        plt.figure("Zero crossing difference")
+        plt.plot(x, zero_crossing_difference_pulse0, label="difference y_mon_pulse0 - y_ref")
+        plt.plot(x, zero_crossing_difference_pulse1, label="difference y_mon_pulse1 - y_ref")
+        plt.xlabel(f"Measurement time (unit?)")
+        plt.ylabel("Time (fs)")
+
+
     def plot_jitter(self):
         x = [25, 50, 100, 200]
         y = [113.8, 39.8, 12.47, 6.17]
@@ -1856,7 +2055,7 @@ if __name__ == '__main__':
         # "cbar_lim": (0.64, 0.66), # img4
         "cbar_lim": (0.60, 0.66), # img5 1.5 THz
         # "cbar_lim": (0.55, 0.62), # img5 2.0 THz
-        "plot_range": slice(30, 650),
+        "plot_opt": {"plot_range": slice(30, 650), },
         "ref_pos": (10.0, 0.0),
         "fig_label": "",
         "dist_func": Dist.Position,
@@ -1881,7 +2080,7 @@ if __name__ == '__main__':
     # dataset.select_quantity(QuantityEnum.P2P)
     dataset.select_quantity(QuantityEnum.TransmissionAmp)
     # dataset.plot_point((16, 10), apply_window=False)
-    dataset.plot_point((35, 0), apply_window=False)
+    dataset.plot_meas((35, 0), apply_window=False)
     # dataset.plot_line()
     # dataset.plot_point((30, 14), label="x=30 mm")
     # dataset.plot_point((40, 14), label="x=40 mm")

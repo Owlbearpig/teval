@@ -44,7 +44,7 @@ dataset.select_quantity(QuantityEnum.TransmissionAmp)
 # dataset.plot_point((54, 17.5), apply_window=False)
 
 dataset.plot_image()
-dataset.plot_refs()
+dataset.plot_refs_on_image()
 
 # dataset.average_area((19, -2), (32, 5), label="2") # img3
 

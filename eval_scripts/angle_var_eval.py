@@ -17,7 +17,7 @@ dataset = DataSet(r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/sub_inc_ang
 dataset.select_freq(1.5)
 # dataset.select_quantity(QuantityEnum.P2P)
 dataset.select_quantity(QuantityEnum.TransmissionAmp)
-dataset.plot_point((40, 0), apply_window=False)
+dataset.plot_meas((40, 0), apply_window=False)
 
 dataset.plot_image()
 # dataset.plot_refs()

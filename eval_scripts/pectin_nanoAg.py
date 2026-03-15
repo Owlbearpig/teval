@@ -63,6 +63,6 @@ for meas_set in meas_dict:
 
     dataset = DataSet(sam_dataset_path, options)
     pos = meas_dict[meas_set]
-    dataset.plot_point(pos, label=meas_set, err_bar_limits=(70, 95))
+    dataset.plot_meas(pos, label=meas_set, err_bar_limits=(70, 95))
 
 dataset.plt_show()

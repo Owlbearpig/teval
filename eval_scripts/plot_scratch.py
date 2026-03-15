@@ -1,6 +1,7 @@
 from dataset import Dist, QuantityEnum, PixelInterpolation, Direction, DataSet
 import logging
 import numpy as np
+import matplotlib.pyplot as plt
 from functions import WindowTypes
 import gc
 
@@ -18,8 +19,8 @@ options = {
                       "d_film": 0.300, },
 "pp_opt": {"window_opt": {"enabled": True,
                           # "slope": 0.01, # 0.999, # 0.99
-                          # "win_start": 0,
-                          # "win_width": 70, # 18,#2*32,# 38*2, # 5*15 # 36
+                          #"win_start": 27, # 11,
+                          "win_width": 11, # 18,#2*32,# 38*2, # 5*15 # 36
                           "type": WindowTypes.tukey,
                           },
            "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
@@ -40,7 +41,7 @@ options = {
             "shift_sim": 0,
             "nfp_sim": 0,
 },
-"plot_opt": {"shift_sam2ref": False,},
+"plot_opt": {"shift_sam2ref": False, "stability_plot_rel_change": False},
 "shown_plots": {
     "Window": True,
     "Time domain": True,
@@ -86,18 +87,27 @@ options = {
 
 # Sapphire + Vanadium
 # dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img8"
-dataset_path = r"/media/storage/ArchivedData/Conductivity/Furtwangen/Vanadium Oxide/img5"
+# dataset_path = r"/media/storage/ArchivedData/Conductivity/Furtwangen/Vanadium Oxide/img5"
+
+# pulse monitoring mod
+dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set1"
 
 dataset = DataSet(dataset_path, options)
 
-dataset.select_freq(1.0)
+dataset.select_freq(0.75)
 # dataset.select_quantity(QuantityEnum.TransmissionPhase)
 # dataset.select_quantity(QuantityEnum.P2P)
-dataset.select_quantity(QuantityEnum.TransmissionAmp)
+# dataset.select_quantity(QuantityEnum.TransmissionAmp)
 # dataset.select_quantity(QuantityEnum.Phase)
-# dataset.plot_point((50, 20))
-dataset.plot_image()
-# dataset.plot_system_stability()
+# dataset.plot_meas((50, 20))
+# dataset.plot_image()
+
+# dataset.system_stability_diff_plot()
+dataset.plot_system_stability()
+# dataset.options["pp_opt"]["window_opt"]["enabled"] = False
+# dataset.plot_ref()
+# dataset.plot_ref(ref_idx=1250)
+
 
 dataset.plt_show()
 

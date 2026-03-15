@@ -336,10 +336,10 @@ options = {
 dataset = DataSet(r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img5", options)
 dataset.select_freq(f0)
 
-res_sub = dataset.plot_point((70, 2.5), en_td_plot=False,
-                             apply_window=en_sub_window, remove_t_offset=True, label="Sub. (exp.)")
-res_film = dataset.plot_point((40, 2.5), en_td_plot=True, # (grey area: (23, 2.5))
-                              apply_window=en_film_window, remove_t_offset=True, label="film")
+res_sub = dataset.plot_meas((70, 2.5), en_td_plot=False,
+                            apply_window=en_sub_window, remove_t_offset=True, label="Sub. (exp.)")
+res_film = dataset.plot_meas((40, 2.5), en_td_plot=True,  # (grey area: (23, 2.5))
+                             apply_window=en_film_window, remove_t_offset=True, label="film")
 
 #dataset.plot_system_stability()
 #dataset.select_quantity(QuantityEnum.TransmissionAmp)

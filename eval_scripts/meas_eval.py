@@ -74,8 +74,8 @@ options = {
 }
 dataset = DataSet(r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img5", options)
 dataset.select_freq(f0/1e12)
-res_sub = dataset.plot_point((70, -4), apply_window=False)
-res_film = dataset.plot_point((25, 2.5), apply_window=False)
+res_sub = dataset.plot_meas((70, -4), apply_window=False)
+res_film = dataset.plot_meas((25, 2.5), apply_window=False)
 # dataset.plot_image()
 
 plt.figure()

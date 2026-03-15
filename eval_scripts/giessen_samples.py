@@ -71,7 +71,7 @@ for sample_name, pos in samplesets.items():
     dataset.select_freq(1.00)
     # dataset.plot_line(line_coords=16, fig_num_=sample_name)
     label = sample_name.replace("_fine", "")
-    ret = dataset.plot_point(pos, label=label, err_bar_limits=limits[sample_name], ref_err_bars=True)
+    ret = dataset.plot_meas(pos, label=label, err_bar_limits=limits[sample_name], ref_err_bars=True)
 
     rets.append((sample_name, 20*np.log10(ret["absorb"])[dataset._selected_freq_idx()]))
     # dataset.plt_show(save_file_suffix=sample_name, only_save_plots=True)

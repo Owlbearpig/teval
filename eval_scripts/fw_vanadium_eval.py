@@ -90,7 +90,7 @@ dataset_eval.plot_image()
 # dataset_eval.plot_refs()
 # dataset_eval.plot_line(line_coords=10.0, direction=Direction.Horizontal)
 
-dataset_eval.plot_point(sub_pnt)
+dataset_eval.plot_meas(sub_pnt)
 dataset_eval.eval_point_n_fit(sam_pnt)
 # dataset_eval.ref_difference_plot()
 
