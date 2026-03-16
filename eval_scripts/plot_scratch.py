@@ -17,7 +17,7 @@ options = {
 "sample_properties": {"d_1": 640,#650,
                       "d_2": 650,
                       "d_film": 0.300, },
-"pp_opt": {"window_opt": {"enabled": True,
+"pp_opt": {"window_opt": {"enabled": False,
                           # "slope": 0.01, # 0.999, # 0.99
                           #"win_start": 27, # 11,
                           "win_width": 11, # 18,#2*32,# 38*2, # 5*15 # 36
@@ -90,7 +90,8 @@ options = {
 # dataset_path = r"/media/storage/ArchivedData/Conductivity/Furtwangen/Vanadium Oxide/img5"
 
 # pulse monitoring mod
-dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set1"
+# dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set1"
+dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set1"
 
 dataset = DataSet(dataset_path, options)
 
@@ -102,11 +103,14 @@ dataset.select_freq(0.75)
 # dataset.plot_meas((50, 20))
 # dataset.plot_image()
 
-# dataset.system_stability_diff_plot()
-dataset.plot_system_stability()
+dataset.system_stability_diff_plot()
+# dataset.plot_system_stability()
 # dataset.options["pp_opt"]["window_opt"]["enabled"] = False
 # dataset.plot_ref()
 # dataset.plot_ref(ref_idx=1250)
+#dataset.plot_meas(timestamp="2026-03-13T15-53-07.585936", label="sub")
+#dataset.plot_meas(timestamp="2026-03-13T15-53-17.787928", label="sam")
+# dataset.plot_meas(timestamp="2026-03-13T15-53-17.787928")
 
 
 dataset.plt_show()
