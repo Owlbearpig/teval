@@ -1,4 +1,4 @@
-from dataset import Dist, QuantityEnum, PixelInterpolation, Direction
+from dataset import Dist, QuantityEnum, PixelInterpolation, Direction, DataSet
 import logging
 import numpy as np
 from dataset_eval import DatasetEval
@@ -11,12 +11,14 @@ options = {
 
 # 1.5 THz
 # "cbar_lim": (0.65, 0.70), # img8 1.5 THz
+"cbar_lim": (6.65, 6.99), # img8 1.0 THz
+
 # "cbar_lim": (0.60, 0.68), # img9 1.5 THz
 #phase
 # "cbar_lim": (0.65, 0.70), # img8 1.5 THz
 # "cbar_lim": (0.330, 0.390), # img12
 
-"plot_range": slice(0, 750),
+"plot_range": slice(50, 450),
 
 # "ref_pos": (30, None), # img8
 "ref_pos": (30, None), # img9
@@ -29,9 +31,9 @@ options = {
                       "d_2": 650,
                       "d_film": 0.300, },
 "pp_opt": {"window_opt": {"enabled": True,
-                          "slope": 0.01, # 0.999, # 0.99
+                          "slope": 0.99, # 0.999, # 0.99
                           # "win_start": 0,
-                          "win_width": 70, # 18,#2*32,# 38*2, # 5*15 # 36
+                          "win_width": 7, # 18,#2*32,# 38*2, # 5*15 # 36
                           "type": WindowTypes.tukey,
                           },
            "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
@@ -52,31 +54,31 @@ options = {
             "shift_sim": 0,
             "nfp_sim": 0,
 },
-"plot_opt": {"shift_sam2ref": False,},
+"plot_opt": {"shift_sam2ref": False, "plot_zero_crossing": False, },
 "shown_plots": {
     "Window": True,
     "Time domain": True,
     "Spectrum": True,
     "Phase": True,
-    "Phase slope": False,
-    "Amplitude transmission": False,
+    "Phase slope": True,
+    "Amplitude transmission": True,
     "Absorbance": False,
     "Refractive index": False,
     "Absorption coefficient": False,
     "Conductivity": True,
 },
-"cbar_lim": (0.530, 0.570),
+
 }
-sam_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
-sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img15"
+sam_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img8"
+sub_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img8"
 
 #sam_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
 #sub_dataset_path = r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img15"
 
 dataset_eval = DatasetEval(sam_dataset_path, sub_dataset_path, options)
 
-dataset_eval.select_freq((0.50, 1.00))
-# dataset_eval.select_freq(0.5)
+# dataset_eval.select_freq((0.50, 1.00))
+dataset_eval.select_freq(1.0)
 dataset_eval.select_quantity(QuantityEnum.P2P)
 
 sub_pnt = options["eval_opt"]["sub_pnt"]
@@ -86,13 +88,22 @@ sam_pnt = (75, 5)
 
 # dataset_eval.plot_system_stability()
 
-dataset_eval.plot_image()
+# dataset_eval.plot_image()
 # dataset_eval.plot_refs()
 # dataset_eval.plot_line(line_coords=10.0, direction=Direction.Horizontal)
 
-dataset_eval.plot_meas(sub_pnt)
-dataset_eval.eval_point_n_fit(sam_pnt)
+dataset_eval.plot_meas(sam_pnt, label="Sample 2", en_csv_export=True)
+# dataset_eval.eval_point_n_fit(sam_pnt)
 # dataset_eval.ref_difference_plot()
+
+##########################################################################################
+# Sample 9
+sam2_dataset_path = r"/home/ftpuser/ftp/Data/Furtwangen/Vanadium Oxide/img9"
+# options["cbar_lim"] = ()
+dataset_s9 = DataSet(sam2_dataset_path, options)
+# dataset_s9.plot_image()
+sam_pnt = (77, 18)
+dataset_s9.plot_meas(sam_pnt, label="Sample 9", en_csv_export=True)
 
 """
 x_coords = np.arange(23.5, 50.0, 0.5)

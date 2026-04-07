@@ -22,6 +22,7 @@ from enum import Enum
 import logging
 from datetime import datetime
 from tqdm import tqdm
+import pandas as pd
 from scipy.signal import correlate
 
 """
@@ -170,6 +171,17 @@ class DataSet:
         if not list(self.data_path.glob("*")):
             raise ValueError(f"Path {self.data_path} is empty")
 
+    def _find_climate_log_file(self, climate_log_file):
+        checked_dirs = [self.data_path, self.data_path.parent]
+        log_files = []
+        log_files.extend([file for file in checked_dirs[0].iterdir() if "log" in file.name])
+        log_files.extend([file for file in checked_dirs[1].iterdir() if "log" in file.name])
+
+        for log_file in log_files:
+            if log_file.name == climate_log_file:
+                return log_file
+
+        return None
 
     def _set_defaults(self):
         if self.selected_freq is None:
@@ -235,6 +247,7 @@ class DataSet:
                                         "ref_err_bars": False,
                                         "stability_plot_rel_change": False,
                                           # use first and last reference measurement to estimate uncertainty
+                                        "plot_zero_crossing": False,
                                         }
                            }
         if "sample_properties" in options_:
@@ -1183,6 +1196,26 @@ class DataSet:
         # meas time difference in hours
         return (m2.meas_time - m1.meas_time).total_seconds() / 3600
 
+    def _export_as_csv(self, dict_, file_app=None):
+        if file_app is None:
+            file_app = ""
+        save_dir = self.options["result_dir"]
+        save_path = save_dir / f"plotted_data_{file_app}.csv"
+        logging.info(f"Exporting data to {save_path}")
+
+        exp_dict = {}
+        for k in dict_:
+            if isinstance(dict_[k], np.ndarray):
+                if dict_[k].ndim != 1:
+                    arr = dict_[k][:, 1]
+                else:
+                    arr = dict_[k]
+                if len(dict_[k]) == len(dict_["freq_axis"]):
+                    exp_dict[k] = arr
+
+        df = pd.DataFrame(exp_dict)
+        df.to_csv(save_path, index=False)
+
     def _print_ret(self, ret_):
         f_idx = self._selected_freq_idx()
         for quantity in ret_:
@@ -1237,8 +1270,9 @@ class DataSet:
         plt.ylabel("Amplitude (dB)")
 
         plt.figure("Time domain")
-        plt.plot(ref_td[:, 0], ref_td[:, 1], label=label)
-        plt.scatter(zero_crossing, 0, label="Zero-crossing", color="red")
+        plt.plot(ref_td[:, 0], ref_td[:, 1], label=label + " (Reference)")
+        if self.options["plot_opt"]["plot_zero_crossing"]:
+            plt.scatter(zero_crossing, 0, label="Zero-crossing", color="red")
         # plt.plot(ref_td[1:, 0], np.diff(np.abs(ref_td[:, 1])), label=label)
         plt.xlabel("Time (ps)")
         plt.ylabel("Amplitude (Arb. u.)")
@@ -1252,6 +1286,10 @@ class DataSet:
         td_scale = kwargs["td_scale"]
         remove_t_offset = kwargs["remove_t_offset"]
         std_limits = kwargs["err_bar_limits"] # limits of spatial coordinates to average over, for the err_bars
+        if "en_csv_export" in kwargs:
+            en_csv_export = kwargs["en_csv_export"]
+        else:
+            en_csv_export = False
 
         plot_range = self.options["plot_opt"]["plot_range"]
         if (point is not None) and (timestamp is not None):
@@ -1332,16 +1370,24 @@ class DataSet:
         t = sam_fd[:, 1] / ref_fd[:, 1]
         absorb = np.abs(1/t)
 
-        f_min, f_max = freq_axis[plot_range][0], freq_axis[plot_range][-1]
-        simple_eval_res = self.single_layer_eval(selected_meas, (f_min, f_max))
+
+        simple_eval_res = self.single_layer_eval(selected_meas, (0, 10))
         phi = simple_eval_res["phi"]
         phi_corrected = simple_eval_res["phi_corrected"]
-
         refr_idx = simple_eval_res["refr_idx"]
-        alph = self._absorption_coef(selected_meas, (f_min, f_max))
 
-        ret = {"freq_axis": freq_axis, "absorb": absorb, "t": t, "ref_fd": ref_fd, "sam_fd": sam_fd}
+        ret = {"freq_axis": freq_axis, "absorb": absorb, "t": t, "ref_fd": ref_fd, "sam_fd": sam_fd, "phi": phi,
+               "phi_corrected": phi_corrected, "t_amplitude": np.abs(t)}
         self._print_ret(ret)
+        if en_csv_export:
+            self._export_as_csv(ret, file_app=label)
+
+        f_min, f_max = freq_axis[plot_range][0], freq_axis[plot_range][-1]
+        f_idx = f_axis_idx_map(freq_axis, freq_range=(f_min, f_max))
+        phi = phi[f_idx]
+        phi_corrected = phi_corrected[f_idx]
+        refr_idx = refr_idx[f_idx]
+        alph = self._absorption_coef(selected_meas, (f_min, f_max))
 
         if not self.plotted_ref:
             self.plot_ref(ref_meas, **kwargs)
@@ -1357,14 +1403,21 @@ class DataSet:
         y_db = (20 * np.log10(np.abs(sam_fd[plot_range, 1])) - noise_floor).real
         plt.plot(freq_axis[plot_range], y_db, label=label)
 
-        plt.figure("Phase")
+        plt.figure("Phase correction comparison")
         plt.plot(freq_axis[plot_range], phi, label=label + " (Original)", ls="dashed")
         plt.plot(freq_axis[plot_range], phi_corrected, label=label + " (Corrected)")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad)")
 
+        plt.figure("Phase")
+        plt.plot(freq_axis[plot_range], phi_corrected, label=label)
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("Phase (rad)")
+
         plt.figure("Phase slope")
-        plt.plot(freq_axis[plot_range][:-1], np.diff(phi_corrected))
+        plt.plot(freq_axis[plot_range][:-1], np.diff(phi_corrected), label=label)
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("Phase (rad/THz)")
 
         plt.figure("Time domain")
         td_label = label
@@ -1441,6 +1494,9 @@ class DataSet:
         plt.ylabel("Phase difference (rad)")
 
     def plot_system_stability(self, climate_log_file=None, meas_set_kw=None):
+        if climate_log_file is not None:
+            climate_log_file = self._find_climate_log_file(climate_log_file)
+
         if meas_set_kw is not None:
             meas_set = []
             for meas in self.measurements["all"]:
@@ -1449,17 +1505,17 @@ class DataSet:
             logging.info(f"Using measurements containing keyword {meas_set_kw}")
         elif all([self.measurements["all"][0].position == meas.position for meas in self.measurements["all"]]):
             meas_set = self.measurements["all"]
-            logging.info("Using the full dataset")
+            logging.info("Using all measurements")
         else:
             meas_set = self.measurements["refs"]
-            logging.info("Using reference set")
+            logging.info("Using reference measurement set")
 
         selected_freq_ = self.selected_freq
         if isinstance(selected_freq_, tuple):
             selected_freq_ = selected_freq_[0]
         f_idx = np.argmin(np.abs(self.freq_axis - selected_freq_))
 
-        ref_ampl_arr, ref_angle_arr, ref_zero_crossing = np.zeros((3, len(meas_set)))
+        ampl_arr, angle_arr, relative_delay = np.zeros((3, len(meas_set)))
         t0 = meas_set[0].meas_time
 
         meas_times = np.array([self.meas_time_diff(meas_set[0], m) for m in meas_set])
@@ -1473,38 +1529,39 @@ class DataSet:
         else:
             mt_unit = "hours"
 
-        for i, ref in enumerate(meas_set):
-            ref_td, ref_fd = self._get_data(ref, domain=Domain.Both)
+        for i, meas_ in enumerate(meas_set):
+            ref_td, ref_fd = self._get_data(meas_, domain=Domain.Both)
 
-            # ref_zero_crossing[i] = self._get_zero_crossing(ref)
-            ref_zero_crossing[i] = self._delay_from_phaseslope(meas_set[0], ref)
-            ref_ampl_arr[i] = np.sum(np.abs(ref_fd[f_idx, 1]))
-            ref_angle_arr[i] = -np.angle(ref_fd[f_idx, 1])
+            # zero_crossing[i] = self._get_zero_crossing(meas_)
+            relative_delay[i] = self._delay_from_phaseslope(meas_set[0], meas_)
+            ampl_arr[i] = np.sum(np.abs(ref_fd[f_idx, 1]))
+            angle_arr[i] = -np.angle(ref_fd[f_idx, 1])
 
         meas_interval = np.mean(np.diff(meas_times))
-        ref_angle_arr = np.unwrap(ref_angle_arr)
+        angle_arr = np.unwrap(angle_arr)
 
-        minima = local_minima_1d(ref_angle_arr, en_plot=False)
+        minima = local_minima_1d(angle_arr, en_plot=False)
         period, period_std = minima[1] * meas_interval * 60, minima[2] * meas_interval * 60
 
-        ref_zero_crossing = (ref_zero_crossing - ref_zero_crossing[0]) * 1000
+        # relative_delay = (relative_delay - relative_delay[0]) * 1000
+        relative_delay *= 1000
 
         # correction
-        # ref_angle_arr -= 2*np.pi*self.freq_axis[f_idx]*(ref_zero_crossing/1000)
+        # angle_arr -= 2*np.pi*self.freq_axis[f_idx]*(zero_crossing/1000)
 
-        abs_p_shifts = np.abs(np.diff(ref_zero_crossing))
+        abs_p_shifts = np.abs(np.diff(relative_delay))
         logging.info(f"Mean pulse shift: {np.round(np.mean(abs_p_shifts), 2)} fs")
         max_diff_0x, min_diff_0x = np.max(abs_p_shifts), np.min(abs_p_shifts)
         logging.info(f"Largest/smallest shift: {np.round(max_diff_0x, 2)}/{np.round(min_diff_0x, 2)} fs")
 
-        max_diff, argmax_diff = np.max(np.diff(ref_angle_arr)), np.argmax(np.diff(ref_angle_arr))
+        max_diff, argmax_diff = np.max(np.diff(angle_arr)), np.argmax(np.diff(angle_arr))
         phase_str = f"Largest phase jump: {np.round(max_diff, 2)} rad"
         phase_str += f" (time: {np.round(meas_times[argmax_diff], 2)} {mt_unit})"
         phase_str += f" (at {selected_freq_} THz)"
         logging.info(phase_str)
 
-        avg_amp_change = np.mean(np.abs(np.diff(ref_ampl_arr)))
-        max_amp_change = np.max(np.diff(ref_ampl_arr))
+        avg_amp_change = np.mean(np.abs(np.diff(ampl_arr)))
+        max_amp_change = np.max(np.diff(ampl_arr))
 
         logging.info(f"Largest amplitude change: {np.round(max_amp_change, 2)} (Arb. u.)")
         logging.info(f"Mean absolute amplitude change: {np.round(avg_amp_change, 2)} (Arb. u.)")
@@ -1512,25 +1569,25 @@ class DataSet:
         logging.info(f"Period (estimation): {np.round(period, 2)}±{np.round(period_std, 2)} min.")
 
         plt.figure("fft")
-        phi_fft = np.fft.rfft(ref_angle_arr)
-        phi_fft_f = np.fft.rfftfreq(len(ref_angle_arr), d=meas_interval * 3600)
+        phi_fft = np.fft.rfft(angle_arr)
+        phi_fft_f = np.fft.rfftfreq(len(angle_arr), d=meas_interval * 3600)
 
         plt.plot(phi_fft_f[1:], np.abs(phi_fft)[1:])
         plt.xlabel("Frequency (1/hour)")
         plt.ylabel("Magnitude")
 
-        ref_angle_change = ref_angle_arr[0] - ref_angle_arr
-        ref_ampl_change = ref_ampl_arr[0] - ref_ampl_arr
+        angle_change = angle_arr[0] - angle_arr
+        ampl_change = ampl_arr[0] - ampl_arr
         if self.options["plot_opt"]["stability_plot_rel_change"]:
-            ref_ampl_change = 100 * ref_ampl_change / ref_ampl_arr[0]
-            ref_angle_change = 100 * ref_angle_change / ref_angle_arr[0]
+            ampl_change = 100 * ampl_change / ampl_arr[0]
+            angle_change = 100 * angle_change / angle_arr[0]
 
         from random import choice
         idx = choice(range(len(meas_set)))
-        ref0, ref1 =  meas_set[idx], meas_set[idx+1]
-        ref0_fd, ref1_fd = self._get_data(ref0, domain=Domain.Frequency), self._get_data(ref1, domain=Domain.Frequency)
-        phi0, phi1 = np.angle(ref0_fd[:, 1]), np.angle(ref1_fd[:, 1])
-        amp0, amp1 = np.abs(ref0_fd[:, 1]), np.abs(ref1_fd[:, 1])
+        meas0, meas1 =  meas_set[idx], meas_set[idx+1]
+        meas0_fd, meas1_fd = self._get_data(meas0, domain=Domain.Frequency), self._get_data(meas1, domain=Domain.Frequency)
+        phi0, phi1 = np.angle(meas0_fd[:, 1]), np.angle(meas1_fd[:, 1])
+        amp0, amp1 = np.abs(meas0_fd[:, 1]), np.abs(meas1_fd[:, 1])
         w = 2*np.pi*self.freq_axis
 
         plt.figure("Pulse shift")
@@ -1543,23 +1600,23 @@ class DataSet:
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Amplitude change (Arb. u.)")
 
-        plt.figure("Reference zero crossing")
-        plt.title(f"Reference zero crossing\n(relative to first measurement)")
-        plt.plot(meas_times, ref_zero_crossing, label=t0)
+        plt.figure("Reference delay")
+        plt.title(f"Reference delay\n(relative to first measurement)")
+        plt.plot(meas_times, relative_delay, label=t0)
         plt.xlabel(f"Measurement time ({mt_unit})")
         plt.ylabel("Time (fs)")
 
-        plt.figure("Reference zero crossing change")
-        plt.title(f"Reference zero crossing change")
+        plt.figure("Reference delay change")
+        plt.title(f"Reference delay change")
         plt.plot(meas_times[1:], abs_p_shifts, label=t0)
-        phase_change = np.abs(np.diff(ref_angle_change))
+        phase_change = np.abs(np.diff(angle_change))
         # plt.plot(meas_times[1:], 1e3*phase_change/(2*3.1415*selected_freq_), label=t0)
         plt.xlabel(f"Measurement time ({mt_unit})")
         plt.ylabel("Time (fs)")
 
         plt.figure("Stability amplitude")
         plt.title(f"Amplitude of reference measurement at {selected_freq_} THz")
-        plt.plot(meas_times, ref_ampl_change)
+        plt.plot(meas_times, ampl_change)
         plt.xlabel(f"Measurement time ({mt_unit})")
         if self.options["plot_opt"]["stability_plot_rel_change"]:
             plt.ylabel("Relative amplitude change (%)")
@@ -1568,7 +1625,7 @@ class DataSet:
 
         plt.figure("Stability phase")
         plt.title(f"Phase of reference measurement at {selected_freq_} THz")
-        plt.plot(meas_times, ref_angle_change)
+        plt.plot(meas_times, angle_change)
         plt.xlabel(f"Measurement time ({mt_unit})")
         if self.options["plot_opt"]["stability_plot_rel_change"]:
             plt.ylabel("Relative phase change (%)")
@@ -1582,9 +1639,24 @@ class DataSet:
         plt.xlabel("Time since first measurement (h)")
 
         if climate_log_file is not None:
-            self.plot_climate(climate_log_file)
+            climate_measurements = list(zip(*self.plot_climate(climate_log_file)))
+            thz_measurements = list(zip([meas.meas_time for meas in meas_set], relative_delay))
+            points = []
+            for thz_meas in thz_measurements:
+                best_fit = (None, np.inf)
+                for climate_meas in climate_measurements:
+                    meas_time_diff = np.abs((climate_meas[0]-thz_meas[0]).total_seconds())
+                    if meas_time_diff < best_fit[1]:
+                        best_fit = (climate_meas, meas_time_diff)
 
-        return {"meas_times": meas_times, "ref_zero_crossing": ref_zero_crossing}
+                points.append((best_fit[0][1], thz_meas[1]))
+
+            climate_quant, delay = [p[0] for p in points], [p[1] for p in points]
+
+            plt.figure("Climate correlation plot")
+            plt.scatter(climate_quant, delay)
+
+        return {"meas_times": meas_times, "relative_delay": relative_delay}
 
     def plot_frequency_noise(self):
         ref_meas_set = self.measurements["refs"]
@@ -1613,7 +1685,9 @@ class DataSet:
             with open(log_file_) as file:
                 meas_time_, temp_, humidity_ = [], [], []
                 for i, line in enumerate(file):
-                    if i % 150: # Sampling time: 2 sec (= 0.5 Hz) -> 300 * 2 = 600 sec
+                    if "nan" in line:
+                        continue
+                    if i % 15: # Sampling time: 2 sec (= 0.5 Hz) -> 300 * 2 = 600 sec
                         continue
                     try:
                         res = read_line(line)
@@ -1669,6 +1743,8 @@ class DataSet:
             ax1.scatter(meas_time_diff, quant, label=f"Start: {t0}")
             ax1.set_xlabel("Measurement time (hour)")
             ax1.set_ylabel(y_label)
+
+        return meas_time, quant
 
     def plot_image(self, img_extent=None):
         self._update_fig_num()
@@ -1986,25 +2062,27 @@ class DataSet:
     def system_stability_diff_plot(self):
         system_stab_res_refs = self.plot_system_stability()
         x = system_stab_res_refs["meas_times"]
-        y_ref = system_stab_res_refs["ref_zero_crossing"]
+        y_ref = system_stab_res_refs["ref_relative_delay"]
 
         self.options["pp_opt"]["window_opt"]["win_start"] = 11
         system_stab_res_mon_pulse0 = self.plot_system_stability(meas_set_kw="-sub-")
         xp = system_stab_res_mon_pulse0["meas_times"]
-        fp = system_stab_res_mon_pulse0["ref_zero_crossing"]
+        fp = system_stab_res_mon_pulse0["ref_relative_delay"]
         y_pulse0 = np.interp(x, xp, fp)
 
         self.options["pp_opt"]["window_opt"]["win_start"] = 27
         system_stab_res_mon_pulse1 = self.plot_system_stability(meas_set_kw="-sub-")
         xp = system_stab_res_mon_pulse1["meas_times"]
-        fp = system_stab_res_mon_pulse1["ref_zero_crossing"]
+        fp = system_stab_res_mon_pulse1["ref_relative_delay"]
         y_pulse1 = np.interp(x, xp, fp)
 
-        zero_crossing_difference_pulse0 = y_pulse0 - y_ref
-        offset_pulse0 = np.mean(zero_crossing_difference_pulse0[100:])
-        zero_crossing_difference_pulse1 = y_pulse1 - y_ref
-        offset_pulse1 = np.mean(zero_crossing_difference_pulse1[100:])
-        print(offset_pulse0, offset_pulse1)
+        delay_difference_pulse0 = y_pulse0 - y_ref
+        # offset_pulse0 = np.mean(delay_difference_pulse0[100:])
+        offset_pulse0 = 0
+        delay_difference_pulse1 = y_pulse1 - y_ref
+        # offset_pulse1 = np.mean(delay_difference_pulse1[100:])
+        offset_pulse1 = 0
+        # print(offset_pulse0, offset_pulse1)
 
         y_pulse0 = y_pulse0 - offset_pulse0
         y_pulse1 = y_pulse1 - offset_pulse1
@@ -2016,17 +2094,17 @@ class DataSet:
         residual_mean = np.sum((y_mean - y_ref) ** 2) / len(y_ref)
         print(residual_pulse0, residual_pulse1, residual_mean)
 
-        plt.figure("Zero crossing interpolation")
-        # plt.plot(x, y_pulse0, label="0-crossing monitor pulse0 (interp)")
-        # plt.plot(x, y_pulse1, label="0-crossing monitor pulse1 (interp)")
-        plt.plot(x, y_mean, label="0-crossing monitor mean pulse 0 and 1")
-        plt.plot(x, y_ref, label="0-crossing reference")
+        plt.figure("Delay interpolation")
+        # plt.plot(x, y_pulse0, label="Delay monitor pulse0 (interp)")
+        # plt.plot(x, y_pulse1, label="Delay monitor pulse1 (interp)")
+        plt.plot(x, y_mean, label="Delay monitor mean pulse 0 and 1")
+        plt.plot(x, y_ref, label="Delay reference")
         plt.xlabel(f"Measurement time (unit?)")
         plt.ylabel("Time (fs)")
 
-        plt.figure("Zero crossing difference")
-        plt.plot(x, zero_crossing_difference_pulse0, label="difference y_mon_pulse0 - y_ref")
-        plt.plot(x, zero_crossing_difference_pulse1, label="difference y_mon_pulse1 - y_ref")
+        plt.figure("Delay difference")
+        plt.plot(x, delay_difference_pulse0, label="difference y_mon_pulse0 - y_ref")
+        plt.plot(x, delay_difference_pulse1, label="difference y_mon_pulse1 - y_ref")
         plt.xlabel(f"Measurement time (unit?)")
         plt.ylabel("Time (fs)")
 
