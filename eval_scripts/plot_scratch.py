@@ -94,7 +94,9 @@ options = {
 # pulse monitoring mod
 # dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set1"
 # dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4_subset"
-dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4"
+# dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4"
+dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\test\set4_test"
+dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set4_subset"
 
 dataset = DataSet(dataset_path, options)
 

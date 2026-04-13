@@ -1525,13 +1525,16 @@ class DataSet:
         meas_times = np.array([self.meas_time_diff(meas_set[0], m) for m in meas_set])
 
         if meas_times.max() < 5 / 60:
-            meas_times *= 3600
+            conv_factor = 3600
             mt_unit = "seconds"
         elif 5 / 60 <= meas_times.max() < 0.5:
-            meas_times *= 60
+            conv_factor = 60
             mt_unit = "minutes"
         else:
+            conv_factor = 1
             mt_unit = "hours"
+
+        meas_times *= conv_factor
 
         for i, meas_ in enumerate(meas_set):
             ref_td, ref_fd = self._get_data(meas_, domain=Domain.Both)
@@ -1587,7 +1590,7 @@ class DataSet:
             angle_change = 100 * angle_change / angle_arr[0]
 
         from random import choice
-        idx = choice(range(len(meas_set)))
+        idx = choice(range(len(meas_set)-1))
         meas0, meas1 =  meas_set[idx], meas_set[idx+1]
         meas0_fd, meas1_fd = self._get_data(meas0, domain=Domain.Frequency), self._get_data(meas1, domain=Domain.Frequency)
         phi0, phi1 = np.angle(meas0_fd[:, 1]), np.angle(meas1_fd[:, 1])
@@ -1643,7 +1646,7 @@ class DataSet:
         plt.xlabel("Time since first measurement (h)")
 
         if climate_log_file is not None:
-            climate_measurements = list(zip(*self.plot_climate(climate_log_file)))
+            climate_measurements = list(zip(*self.plot_climate(climate_log_file, unit=(mt_unit, conv_factor))))
             thz_measurements = list(zip([meas.meas_time for meas in meas_set], relative_delay))
             points = []
             for thz_meas in thz_measurements:
@@ -1681,7 +1684,7 @@ class DataSet:
         plt.xlabel(f"Frequency (THz)")
         plt.ylabel("Amplitude (dB)")
 
-    def plot_climate(self, log_file, quantity=ClimateQuantity.Temperature):
+    def plot_climate(self, log_file, unit=None, quantity=ClimateQuantity.Temperature):
 
         def read_log_file(log_file_):
             is_rp_log = False
@@ -1726,7 +1729,7 @@ class DataSet:
             t0 = meas_time[0]
             tf_idx = len(meas_time)
 
-        meas_time_diff = [(t - t0).total_seconds() / 3600 for t in meas_time]
+        meas_time_diff = np.array([(t - t0).total_seconds() / 3600 for t in meas_time])
 
         if quantity == ClimateQuantity.Temperature:
             quant = temp
@@ -1734,6 +1737,21 @@ class DataSet:
         else:
             quant = humidity
             y_label = "Humidity (\\%)"
+
+        if unit is None:
+            if meas_time_diff.max() < 5 / 60:
+                conv_factor = 3600
+                mt_unit = "seconds"
+            elif 5 / 60 <= meas_time_diff.max() < 0.5:
+                conv_factor = 60
+                mt_unit = "minutes"
+            else:
+                conv_factor = 1
+                mt_unit = "hours"
+        else:
+            mt_unit, conv_factor = unit
+
+        meas_time_diff *= conv_factor
 
         meas_time_diff = meas_time_diff[:tf_idx]
         quant = quant[:tf_idx]
@@ -1759,7 +1777,7 @@ class DataSet:
         if not plt.fignum_exists(stability_figs[0]):
             fig, ax1 = plt.subplots(num="Climate plot")
             ax1.scatter(meas_time_diff, quant, label=f"Start: {t0}")
-            ax1.set_xlabel("Measurement time (hour)")
+            ax1.set_xlabel(f"Measurement time ({mt_unit})")
             ax1.set_ylabel(y_label)
 
         return meas_time, quant
