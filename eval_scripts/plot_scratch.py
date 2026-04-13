@@ -42,7 +42,8 @@ options = {
             "shift_sim": 0,
             "nfp_sim": 0,
 },
-"plot_opt": {"shift_sam2ref": False, "stability_plot_rel_change": False},
+"plot_opt": {"shift_sam2ref": False, "stability_plot_rel_change": False, "disable_legend": ["Reference delay"],
+             },
 "shown_plots": {
     "Window": True,
     "Time domain": True,
@@ -92,7 +93,8 @@ options = {
 
 # pulse monitoring mod
 # dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set1"
-dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set3"
+# dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4_subset"
+dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4"
 
 dataset = DataSet(dataset_path, options)
 
@@ -105,7 +107,8 @@ dataset.select_freq(0.75)
 # dataset.plot_image()
 
 # dataset.system_stability_diff_plot()
-dataset.plot_system_stability(climate_log_file=r"2026-03-17 14-49-35_log.txt")
+# dataset.plot_system_stability(climate_log_file=r"2026-04-07 14-08-28_log_pitaya_subset")
+dataset.plot_system_stability(climate_log_file=r"2026-04-07 14-08-28_log_pitaya")
 # dataset.options["pp_opt"]["window_opt"]["enabled"] = False
 # dataset.plot_ref()
 # dataset.plot_ref(ref_idx=1250)

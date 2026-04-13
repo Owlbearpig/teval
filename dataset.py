@@ -178,7 +178,7 @@ class DataSet:
         log_files.extend([file for file in checked_dirs[1].iterdir() if "log" in file.name])
 
         for log_file in log_files:
-            if log_file.name == climate_log_file:
+            if str(climate_log_file) in log_file.name:
                 return log_file
 
         return None
@@ -248,6 +248,7 @@ class DataSet:
                                         "stability_plot_rel_change": False,
                                           # use first and last reference measurement to estimate uncertainty
                                         "plot_zero_crossing": False,
+                                        "disable_legend": [], # list of fig_nums for which to disable legends
                                         }
                            }
         if "sample_properties" in options_:
@@ -1496,7 +1497,10 @@ class DataSet:
     def plot_system_stability(self, climate_log_file=None, meas_set_kw=None):
         if climate_log_file is not None:
             climate_log_file = self._find_climate_log_file(climate_log_file)
-
+            if not climate_log_file:
+                logging.info("No matching climate logfile found")
+            else:
+                logging.info(f"Using climate logfile: {climate_log_file.name}")
         if meas_set_kw is not None:
             meas_set = []
             for meas in self.measurements["all"]:
@@ -1609,7 +1613,7 @@ class DataSet:
         plt.figure("Reference delay change")
         plt.title(f"Reference delay change")
         plt.plot(meas_times[1:], abs_p_shifts, label=t0)
-        phase_change = np.abs(np.diff(angle_change))
+        # phase_change = np.abs(np.diff(angle_change))
         # plt.plot(meas_times[1:], 1e3*phase_change/(2*3.1415*selected_freq_), label=t0)
         plt.xlabel(f"Measurement time ({mt_unit})")
         plt.ylabel("Time (fs)")
@@ -1655,6 +1659,8 @@ class DataSet:
 
             plt.figure("Climate correlation plot")
             plt.scatter(climate_quant, delay)
+            plt.ylabel("Pulse shift (fs)")
+            plt.xlabel("Temperature (°C)")
 
         return {"meas_times": meas_times, "relative_delay": relative_delay}
 
@@ -1676,26 +1682,37 @@ class DataSet:
         plt.ylabel("Amplitude (dB)")
 
     def plot_climate(self, log_file, quantity=ClimateQuantity.Temperature):
-        def read_log_file(log_file_):
-            def read_line(line_):
-                parts = line_.split(" ")
-                t = datetime.strptime(f"{parts[0]} {parts[1]}", '%Y-%m-%d %H:%M:%S')
-                return t, float(parts[4]), float(parts[-3])
 
-            with open(log_file_) as file:
-                meas_time_, temp_, humidity_ = [], [], []
-                for i, line in enumerate(file):
-                    if "nan" in line:
-                        continue
-                    if i % 15: # Sampling time: 2 sec (= 0.5 Hz) -> 300 * 2 = 600 sec
-                        continue
-                    try:
-                        res = read_line(line)
-                        meas_time_.append(res[0])
-                        temp_.append(res[1])
-                        humidity_.append(res[2])
-                    except IndexError:
-                        continue
+        def read_log_file(log_file_):
+            is_rp_log = False
+            if "pitaya" in str(log_file_):
+                is_rp_log = True
+
+            if is_rp_log:
+                rp_data = pd.read_csv(log_file_)
+                meas_time_ = [datetime.strptime(t, "%Y-%m-%d %H:%M:%S") for t in rp_data.iloc[:, 0]]
+                temp_ = rp_data.iloc[:, 1]
+                humidity_ = np.zeros_like(temp_)
+            else:
+                def read_line(line_):
+                    parts = line_.split(" ")
+                    t = datetime.strptime(f"{parts[0]} {parts[1]}", '%Y-%m-%d %H:%M:%S')
+                    return t, float(parts[4]), float(parts[-3])
+
+                with open(log_file_) as file:
+                    meas_time_, temp_, humidity_ = [], [], []
+                    for i, line in enumerate(file):
+                        if "nan" in line:
+                            continue
+                        if i % 15: # Sampling time: 2 sec (= 0.5 Hz) -> 300 * 2 = 600 sec
+                            continue
+                        try:
+                            res = read_line(line)
+                            meas_time_.append(res[0])
+                            temp_.append(res[1])
+                            humidity_.append(res[2])
+                        except IndexError:
+                            continue
 
             return meas_time_, temp_, humidity_
 
@@ -1722,6 +1739,7 @@ class DataSet:
         quant = quant[:tf_idx]
 
         stability_figs = ["Reference zero crossing", "Stability amplitude", "Stability phase"]
+        stability_figs.extend(["Reference delay"])
         for fig_label in stability_figs:
             if plt.fignum_exists(fig_label):
                 fig = plt.figure(fig_label)
@@ -1995,7 +2013,7 @@ class DataSet:
             fig_label = fig.get_label()
             for ax in fig.get_axes():
                 h, labels = ax.get_legend_handles_labels()
-                if labels:
+                if labels and not (fig_label in self.options["plot_opt"]["disable_legend"]):
                     ax.legend()
 
             if self.options["save_plots"]:
