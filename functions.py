@@ -368,7 +368,7 @@ def f_axis_idx_map(freqs, freq_range=None):
 
 
 def remove_spikes(arr):
-    # TODO pretty bad
+    # TODO work in progress don't use, doesn't work
     diff = np.diff(arr)
     for i in range(1, len(arr) - 1):
         if i < 5:
@@ -381,6 +381,17 @@ def remove_spikes(arr):
 
     return arr
 
+def moving_average(a, n=3, iterations=1):
+    a = np.array(a)
+    if(n%2==0):
+        n=n+1
+    el = (n-1)//2 # edge_len
+    for i in range(iterations):
+        ret = np.cumsum(a, dtype=float)
+        ret[n:] = ret[n:] - ret[:-n]
+        a = np.concatenate((a[:el], ret[n - 1:] / n, a[-el:]))
+
+    return a
 
 def smooth(x, window_len=11, window='hanning'):
     """smooth the data using a window with requested size.
@@ -471,4 +482,7 @@ def local_minima_1d(arr, en_plot=True):
 
     return minima_idx, mean_period, std_period
 
+def smooth_temp_values(meas_time, temp, humidity):
+    # smooth()
 
+    return meas_time, temp, humidity

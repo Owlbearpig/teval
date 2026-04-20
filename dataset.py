@@ -14,7 +14,7 @@ from functions import unwrap, window, local_minima_1d, check_dict_values, Window
 from measurements import MeasurementType, Measurement, Domain
 from mpl_settings import mpl_style_params
 import matplotlib as mpl
-from functions import phase_correction, do_fft, do_ifft, f_axis_idx_map, remove_offset
+from functions import phase_correction, do_fft, do_ifft, f_axis_idx_map, remove_offset, moving_average
 from consts import c_thz, eps0_thz
 from scipy.optimize import shgo
 from scipy.special import erfc
@@ -246,6 +246,7 @@ class DataSet:
                                         "err_bar_limits": None,
                                         "ref_err_bars": False,
                                         "stability_plot_rel_change": False,
+                                        "temp_sensor_idx": 0,
                                           # use first and last reference measurement to estimate uncertainty
                                         "plot_zero_crossing": False,
                                         "disable_legend": [], # list of fig_nums for which to disable legends
@@ -1645,7 +1646,12 @@ class DataSet:
         plt.ylabel("Time difference (s)")
         plt.xlabel("Time since first measurement (h)")
 
+
         if climate_log_file is not None:
+            self.plot_climate(climate_log_file, unit=(mt_unit, conv_factor))
+
+        # if climate_log_file is not None:
+        if False:
             climate_measurements = list(zip(*self.plot_climate(climate_log_file, unit=(mt_unit, conv_factor))))
             thz_measurements = list(zip([meas.meas_time for meas in meas_set], relative_delay))
             points = []
@@ -1685,17 +1691,21 @@ class DataSet:
         plt.ylabel("Amplitude (dB)")
 
     def plot_climate(self, log_file, unit=None, quantity=ClimateQuantity.Temperature):
+        is_rp_log = False
+        if "pitaya" in str(log_file):
+            is_rp_log = True
+        temp_sensor_idx = self.options["plot_opt"]["temp_sensor_idx"]
 
         def read_log_file(log_file_):
-            is_rp_log = False
-            if "pitaya" in str(log_file_):
-                is_rp_log = True
-
+            meas_time_, temp_, humidity_ = [], [], []
             if is_rp_log:
                 rp_data = pd.read_csv(log_file_)
                 meas_time_ = [datetime.strptime(t, "%Y-%m-%d %H:%M:%S") for t in rp_data.iloc[:, 0]]
-                temp_ = rp_data.iloc[:, 1]
-                humidity_ = np.zeros_like(temp_)
+                if temp_sensor_idx is None:
+                    temp_ = rp_data.iloc[:, 1:]
+                else:
+                    temp_ = rp_data.iloc[:, temp_sensor_idx+1]
+                humidity_ = np.zeros_like(meas_time_)
             else:
                 def read_line(line_):
                     parts = line_.split(" ")
@@ -1703,7 +1713,6 @@ class DataSet:
                     return t, float(parts[4]), float(parts[-3])
 
                 with open(log_file_) as file:
-                    meas_time_, temp_, humidity_ = [], [], []
                     for i, line in enumerate(file):
                         if "nan" in line:
                             continue
@@ -1717,7 +1726,7 @@ class DataSet:
                         except IndexError:
                             continue
 
-            return meas_time_, temp_, humidity_
+            return meas_time_, np.array(temp_), np.array(humidity_)
 
         meas_time, temp, humidity = read_log_file(log_file)
 
@@ -1756,6 +1765,30 @@ class DataSet:
         meas_time_diff = meas_time_diff[:tf_idx]
         quant = quant[:tf_idx]
 
+        sas = (40, 15) # smoothing_average_settings
+        quant_values = {}
+        if is_rp_log:
+            if quant.ndim != 1:
+                for i in range(np.shape(quant)[1]):
+                    quant_values[f"Redp idx {i}"] = [quant[:, i], moving_average(quant[:, i], iterations=sas[0], n=sas[1])]
+            else:
+                quant_values[f"Redp idx {temp_sensor_idx}"] = moving_average(quant, iterations=sas[0], n=sas[1])
+        else:
+            quant_values["Arduino"] = [quant, moving_average(quant, iterations=sas[0], n=sas[1])]
+
+        for k in quant_values:
+            offset = np.mean(quant_values[k][0])
+            quant_values[k][0] -= offset
+            quant_values[k][1] -= offset
+
+        line_colors = ["r", "b", "g", "c", "m", "y", "k"]
+        fig, (ax0, ax1) = plt.subplots(1, 2, num="Stability phase with climate", sharex=True)
+
+        for i, k in enumerate(quant_values):
+            ax1.plot(meas_time_diff, quant_values[k][0], c=line_colors[i], alpha=0.11, label=k)
+            ax1.plot(meas_time_diff, quant_values[k][1], c=line_colors[i])
+        ax1.set_ylabel(y_label)
+
         stability_figs = ["Reference zero crossing", "Stability amplitude", "Stability phase"]
         stability_figs.extend(["Reference delay"])
         for fig_label in stability_figs:
@@ -1769,14 +1802,18 @@ class DataSet:
                 ax1.grid(False)
 
                 ax2 = ax1.twinx()
-                ax2.plot(meas_time_diff, quant, c="red")
-                ax2.set_ylabel(y_label, c="red")
-                ax2.tick_params(axis="y", colors="red")
+                for i, k in enumerate(quant_values):
+                    ax2.plot(meas_time_diff, quant_values[k][0], c=line_colors[i], alpha=0.11, label=k)
+                    ax2.plot(meas_time_diff, quant_values[k][1], c=line_colors[i])
+                ax2.set_ylabel(y_label)
+                ax2.tick_params(axis="y")
                 ax2.grid(False)
 
         if not plt.fignum_exists(stability_figs[0]):
             fig, ax1 = plt.subplots(num="Climate plot")
-            ax1.scatter(meas_time_diff, quant, label=f"Start: {t0}")
+            for i, k in enumerate(quant_values):
+                ax1.scatter(meas_time_diff, quant_values[k][0], c=line_colors[i], alpha=0.11, label=f"Start: {t0}" + k)
+                ax1.scatter(meas_time_diff, quant_values[k][1], c=line_colors[i])
             ax1.set_xlabel(f"Measurement time ({mt_unit})")
             ax1.set_ylabel(y_label)
 
