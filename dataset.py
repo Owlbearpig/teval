@@ -20,10 +20,12 @@ from scipy.optimize import shgo
 from scipy.special import erfc
 from enum import Enum
 import logging
+import colorlog
 from datetime import datetime
 from tqdm import tqdm
 import pandas as pd
 from scipy.signal import correlate
+from scipy.stats import pearsonr
 
 """
 TODOs: 
@@ -130,6 +132,23 @@ class LogLevel(Enum):
     warning = logging.WARNING
     error = logging.ERROR
     critical = logging.CRITICAL
+
+handler = colorlog.StreamHandler()
+formatter = colorlog.ColoredFormatter(
+    "%(log_color)s%(levelname)s: %(message)s",
+    log_colors={
+        'INFO': 'green',
+        'WARNING': 'yellow',
+        'ERROR': 'red',
+        'CRITICAL': 'red,bg_white',
+    }
+)
+
+handler.setFormatter(formatter)
+
+logger = logging.getLogger()
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 class DataSet:
     def __init__(self, data_path=None, options_=None):
@@ -1612,7 +1631,7 @@ class DataSet:
         plt.title(f"Reference delay\n(relative to first measurement)")
         plt.plot(meas_times, relative_delay, label=t0)
         plt.xlabel(f"Measurement time ({mt_unit})")
-        plt.ylabel("Time (fs)")
+        plt.ylabel("$\Delta$t (fs)")
 
         plt.figure("Reference delay change")
         plt.title(f"Reference delay change")
@@ -1620,25 +1639,25 @@ class DataSet:
         # phase_change = np.abs(np.diff(angle_change))
         # plt.plot(meas_times[1:], 1e3*phase_change/(2*3.1415*selected_freq_), label=t0)
         plt.xlabel(f"Measurement time ({mt_unit})")
-        plt.ylabel("Time (fs)")
+        plt.ylabel("$\Delta (\Delta$t) (fs)")
 
         plt.figure("Stability amplitude")
         plt.title(f"Amplitude of reference measurement at {selected_freq_} THz")
         plt.plot(meas_times, ampl_change)
         plt.xlabel(f"Measurement time ({mt_unit})")
         if self.options["plot_opt"]["stability_plot_rel_change"]:
-            plt.ylabel("Relative amplitude change (%)")
+            plt.ylabel("$\Delta$A (%)")
         else:
-            plt.ylabel("Amplitude change")
+            plt.ylabel("$\Delta$A (arb. u.)")
 
         plt.figure("Stability phase")
         plt.title(f"Phase of reference measurement at {selected_freq_} THz")
         plt.plot(meas_times, angle_change)
         plt.xlabel(f"Measurement time ({mt_unit})")
         if self.options["plot_opt"]["stability_plot_rel_change"]:
-            plt.ylabel("Relative phase change (%)")
+            plt.ylabel("$\Delta \phi$ (%)")
         else:
-            plt.ylabel("Phase change (rad)")
+            plt.ylabel("$\Delta \phi$ (rad)")
 
         plt.figure("Time between reference measurements")
         plt.title(f"Time between reference measurements")
@@ -1646,28 +1665,38 @@ class DataSet:
         plt.ylabel("Time difference (s)")
         plt.xlabel("Time since first measurement (h)")
 
-
         if climate_log_file is not None:
-            self.plot_climate(climate_log_file, unit=(mt_unit, conv_factor))
+            climate_meas_times, climate_value_dict = self.plot_climate(climate_log_file, unit=(mt_unit, conv_factor))
+            # climate_value_dict = key: sensor_id, dict[key] = [original_val_arr, smooth_val_arr]
 
-        # if climate_log_file is not None:
-        if False:
-            climate_measurements = list(zip(*self.plot_climate(climate_log_file, unit=(mt_unit, conv_factor))))
-            thz_measurements = list(zip([meas.meas_time for meas in meas_set], relative_delay))
-            points = []
-            for thz_meas in thz_measurements:
+            thz_meas_times = [meas.meas_time for meas in meas_set]
+            plotted_climate_vals = {k: np.zeros(len(meas_set)) for k in climate_value_dict}
+            for thz_meas_idx, thz_meas_time in enumerate(thz_meas_times):
                 best_fit = (None, np.inf)
-                for climate_meas in climate_measurements:
-                    meas_time_diff = np.abs((climate_meas[0]-thz_meas[0]).total_seconds())
+                for climate_meas_idx, climate_meas_time in enumerate(climate_meas_times):
+                    meas_time_diff = np.abs((climate_meas_time-thz_meas_time).total_seconds())
                     if meas_time_diff < best_fit[1]:
-                        best_fit = (climate_meas, meas_time_diff)
+                        best_fit = (climate_meas_idx, meas_time_diff)
 
-                points.append((best_fit[0][1], thz_meas[1]))
+                for k in climate_value_dict:
+                    plotted_climate_vals[k][thz_meas_idx] = climate_value_dict[k][1][best_fit[0]]
 
-            climate_quant, delay = [p[0] for p in points], [p[1] for p in points]
+            for k in plotted_climate_vals:
+                highest_correlation = [0, None]
+                for idx_shift in np.arange(-70, 71, 1):
+                    r = pearsonr(plotted_climate_vals[k], np.roll(relative_delay, idx_shift))
+                    if np.abs(r.statistic) > np.abs(highest_correlation[0]):
+                        highest_correlation = [r.statistic, idx_shift]
+
+                max_corr_val = np.round(highest_correlation[0], 3)
+                time_shift = np.round(highest_correlation[1] * meas_interval*3600, 2)
+                msg = f"Max Pearson r (climate quantity, pulse delay) for {k}: {max_corr_val}"
+                msg += f" when shifted by {time_shift} seconds"
+                logging.info(msg)
 
             plt.figure("Climate correlation plot")
-            plt.scatter(climate_quant, delay)
+            for k in plotted_climate_vals:
+                plt.scatter(plotted_climate_vals[k], relative_delay, label=k)
             plt.ylabel("Pulse shift (fs)")
             plt.xlabel("Temperature (°C)")
 
@@ -1730,9 +1759,9 @@ class DataSet:
 
         meas_time, temp, humidity = read_log_file(log_file)
 
-        if self.measurements["refs"] is not None:
-            t0 = self.measurements["refs"][0].meas_time
-            tf = self.measurements["refs"][-1].meas_time
+        if self.measurements["all"] is not None:
+            t0 = self.measurements["all"][0].meas_time
+            tf = self.measurements["all"][-1].meas_time
             tf_idx = np.argmin(np.abs([(tf - t).total_seconds() for t in meas_time]))
         else:
             t0 = meas_time[0]
@@ -1742,7 +1771,7 @@ class DataSet:
 
         if quantity == ClimateQuantity.Temperature:
             quant = temp
-            y_label = "Temperature (°C)"
+            y_label = "$\Delta$T (°C)"
         else:
             quant = humidity
             y_label = "Humidity (\\%)"
@@ -1762,6 +1791,7 @@ class DataSet:
 
         meas_time_diff *= conv_factor
 
+        meas_time = meas_time[:tf_idx]
         meas_time_diff = meas_time_diff[:tf_idx]
         quant = quant[:tf_idx]
 
@@ -1770,11 +1800,17 @@ class DataSet:
         if is_rp_log:
             if quant.ndim != 1:
                 for i in range(np.shape(quant)[1]):
-                    quant_values[f"Redp idx {i}"] = [quant[:, i], moving_average(quant[:, i], iterations=sas[0], n=sas[1])]
+                    vals = quant[:, i]
+                    smooth_vals = moving_average(vals, iterations=sas[0], n=sas[1])
+                    quant_values[f"Redp idx {i}"] = np.array([vals, smooth_vals])
             else:
-                quant_values[f"Redp idx {temp_sensor_idx}"] = moving_average(quant, iterations=sas[0], n=sas[1])
+                vals = quant
+                smooth_vals = moving_average(vals, iterations=sas[0], n=sas[1])
+                quant_values[f"Redp idx {temp_sensor_idx}"] = np.array([vals, smooth_vals])
         else:
-            quant_values["Arduino"] = [quant, moving_average(quant, iterations=sas[0], n=sas[1])]
+            vals = quant
+            smooth_vals = moving_average(vals, iterations=sas[0], n=sas[1])
+            quant_values["Arduino"] = np.array([vals, smooth_vals])
 
         for k in quant_values:
             offset = np.mean(quant_values[k][0])
@@ -1782,32 +1818,42 @@ class DataSet:
             quant_values[k][1] -= offset
 
         line_colors = ["r", "b", "g", "c", "m", "y", "k"]
-        fig, (ax0, ax1) = plt.subplots(1, 2, num="Stability phase with climate", sharex=True)
-
-        for i, k in enumerate(quant_values):
-            ax1.plot(meas_time_diff, quant_values[k][0], c=line_colors[i], alpha=0.11, label=k)
-            ax1.plot(meas_time_diff, quant_values[k][1], c=line_colors[i])
-        ax1.set_ylabel(y_label)
+        line_labels = {"Redp idx 0": "System", "Redp idx 1": "Air",
+                       "Redp idx 2": "Fiber", "Redp idx 3": "Box"}
 
         stability_figs = ["Reference zero crossing", "Stability amplitude", "Stability phase"]
         stability_figs.extend(["Reference delay"])
         for fig_label in stability_figs:
             if plt.fignum_exists(fig_label):
-                fig = plt.figure(fig_label)
-                ax_list = fig.get_axes()
-                ax1 = ax_list[0]
-                ax1.tick_params(axis="y", colors="blue")
-                ax1.set_ylabel(ax1.get_ylabel(), c="blue")
-                # ax1.grid(c="blue")
-                ax1.grid(False)
+                old_fig = plt.figure(fig_label)
+                ax_list = old_fig.get_axes()
+                lines = ax_list[0].get_lines()
+                plt.close(fig_label)
 
-                ax2 = ax1.twinx()
+                fig, (ax0, ax1) = plt.subplots(2, 1, num=fig_label,
+                                               sharex=True, gridspec_kw={'hspace': 0})
+                for line in lines:
+                    x_data = line.get_xdata()
+                    y_data = line.get_ydata()
+                    ax0.plot(x_data, y_data, color=line.get_color())
+                ax0.tick_params(axis="y", colors="blue")
+                ax0.set_ylabel(ax_list[0].get_ylabel(), c="blue")
+                # ax0.grid(c="blue")
+                ax0.grid(True)
+
                 for i, k in enumerate(quant_values):
-                    ax2.plot(meas_time_diff, quant_values[k][0], c=line_colors[i], alpha=0.11, label=k)
-                    ax2.plot(meas_time_diff, quant_values[k][1], c=line_colors[i])
-                ax2.set_ylabel(y_label)
-                ax2.tick_params(axis="y")
-                ax2.grid(False)
+
+                    ax1.plot(meas_time_diff, quant_values[k][0], c=line_colors[i], alpha=0.15)
+                    ax1.plot(meas_time_diff, quant_values[k][1], c=line_colors[i], label=line_labels.get(k, k))
+                ax1.set_ylabel(y_label)
+                ax1.set_xlabel(f"Measurement time ({mt_unit})")
+                ax1.tick_params(axis="y")
+                ax1.grid(True)
+
+                #ymin_0, ymax_0 = ax0.get_ylim()
+                #ax0.set_ylim(bottom=ymin_0, top=ymax_0 - (ymax_0 - ymin_0) * 0.05)
+                #ymin_1, ymax_1 = ax1.get_ylim()
+                #ax1.set_ylim(bottom=ymin_1 + (ymax_1 - ymin_1) * 0.05, top=ymax_1)
 
         if not plt.fignum_exists(stability_figs[0]):
             fig, ax1 = plt.subplots(num="Climate plot")
@@ -1817,7 +1863,7 @@ class DataSet:
             ax1.set_xlabel(f"Measurement time ({mt_unit})")
             ax1.set_ylabel(y_label)
 
-        return meas_time, quant
+        return meas_time, quant_values
 
     def plot_image(self, img_extent=None):
         self._update_fig_num()
@@ -2061,6 +2107,10 @@ class DataSet:
         if self.options["only_shown_figures"]:
             only_shown_fig_nums = self.options["only_shown_figures"]
             logging.warning(f"Only showing figures {self.options['only_shown_figures']}")
+
+        if self.options["plot_opt"]["disable_legend"]:
+            figs_w_disabled_legends = self.options["plot_opt"]["disable_legend"]
+            logging.warning(f"Legends disabled for figure: {figs_w_disabled_legends}")
 
         not_shown = []
         for fig_num in plt.get_fignums():

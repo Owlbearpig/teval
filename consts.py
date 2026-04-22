@@ -9,9 +9,9 @@ ROOT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 
 
 if 'posix' in os_name:
-    result_dir = Path(r"/home/alex/MEGA/AG/Projects/Material characterization/Gi_MachbarkeitsStudie")
+    result_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/ErrorAnalysis")
 else:
-    result_dir = Path(r"C:\Users\alexj\Mega\AG\Projects")
+    result_dir = Path(r"C:\Users\alexj\Mega\AG\Projects\Conductivity\ErrorAnalysis")
 
 # physical constants
 THz = 1e12

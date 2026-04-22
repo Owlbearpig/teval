@@ -383,8 +383,8 @@ def remove_spikes(arr):
 
 def moving_average(a, n=3, iterations=1):
     a = np.array(a)
-    if(n%2==0):
-        n=n+1
+    if n%2==0:
+        n += 1
     el = (n-1)//2 # edge_len
     for i in range(iterations):
         ret = np.cumsum(a, dtype=float)
