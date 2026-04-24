@@ -100,7 +100,8 @@ options = {
 # dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set4_subset"
 # dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4_subset"
 # dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set5_subset"
-dataset_path = r"/home/ftpuser/ftp/Data/Stability/TeraK15_comparison/set1"
+# dataset_path = r"/home/ftpuser/ftp/Data/Stability/TeraK15_comparison/set1"
+dataset_path = r"/home/ftpuser/ftp/Data/Stability/TeraK15_comparison/set2_subset"
 
 dataset = DataSet(dataset_path, options)
 
@@ -110,12 +111,12 @@ dataset.select_freq(0.5)
 # dataset.select_quantity(QuantityEnum.TransmissionAmp)
 # dataset.select_quantity(QuantityEnum.Phase)
 # dataset.plot_meas((50, 20))
+# dataset.plot_meas(timestamp="2026-04-22T20-53-54.638573")
 # dataset.plot_image()
 
 # dataset.system_stability_diff_plot()
-# dataset.plot_system_stability(climate_log_file=r"2026-04-07 14-08-28_log_pitaya_subset")
 # dataset.plot_system_stability(climate_log_file=r"2026-04-16 14-12-08_log_pitaya_subset.txt") # set5
-dataset.plot_system_stability(climate_log_file=r"2026-04-22 11-58-34_log_pitaya.txt")
+dataset.plot_system_stability(climate_log_file="2026-04-22 11-58-34_log_pitaya.txt")
 # dataset.options["pp_opt"]["window_opt"]["enabled"] = False
 # dataset.plot_ref()
 # dataset.plot_ref(ref_idx=1250)

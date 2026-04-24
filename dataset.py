@@ -628,6 +628,16 @@ class DataSet:
 
         return t[np.argmax(y)]
 
+    def _spectral_similarity(self, meas_0, meas_1, freq_min=0.15, freq_max=2.50):
+        data_fd_0 = self._get_data(meas_0, domain=Domain.Frequency)
+        data_fd_1 = self._get_data(meas_1, domain=Domain.Frequency)
+
+        f_idx_range = f_axis_idx_map(self.freq_axis, (freq_min, freq_max))
+
+        x, y = np.abs(data_fd_0[f_idx_range, 1]), np.abs(data_fd_1[f_idx_range, 1])
+
+        return 1+np.log(np.abs(pearsonr(x, y).statistic))
+
     def _delay_from_phaseslope(self, meas_0, meas_1, freq_min=0.15, freq_max=0.85):
         data_td_0 = self._get_data(meas_0)
         t0, y0 = data_td_0[:, 0], data_td_0[:, 1]
@@ -1520,7 +1530,7 @@ class DataSet:
             if not climate_log_file:
                 logging.info("No matching climate logfile found")
             else:
-                logging.info(f"Using climate logfile: {climate_log_file.name}")
+                logging.info(f"Using climate logfile: {climate_log_file}")
         if meas_set_kw is not None:
             meas_set = []
             for meas in self.measurements["all"]:
@@ -1539,7 +1549,7 @@ class DataSet:
             selected_freq_ = selected_freq_[0]
         f_idx = np.argmin(np.abs(self.freq_axis - selected_freq_))
 
-        ampl_arr, angle_arr, relative_delay = np.zeros((3, len(meas_set)))
+        ampl_arr, angle_arr, relative_delay, spec_similarity = np.zeros((4, len(meas_set)))
         t0 = meas_set[0].meas_time
 
         meas_times = np.array([self.meas_time_diff(meas_set[0], m) for m in meas_set])
@@ -1563,6 +1573,7 @@ class DataSet:
             relative_delay[i] = self._delay_from_phaseslope(meas_set[0], meas_)
             ampl_arr[i] = np.sum(np.abs(ref_fd[f_idx, 1]))
             angle_arr[i] = -np.angle(ref_fd[f_idx, 1])
+            spec_similarity[i] = self._spectral_similarity(meas_set[0], meas_)
 
         meas_interval = np.mean(np.diff(meas_times))
         angle_arr = np.unwrap(angle_arr)
@@ -1663,7 +1674,14 @@ class DataSet:
         plt.title(f"Time between reference measurements")
         plt.plot(meas_times[1:], np.diff(meas_times)*3600)
         plt.ylabel("Time difference (s)")
-        plt.xlabel("Time since first measurement (h)")
+        plt.xlabel(f"Measurement time ({mt_unit})")
+
+        plt.figure("Spectral similarity")
+        plt.title("Spectral similarity compared to the first measurement")
+        plt.plot(meas_times, spec_similarity)
+        plt.ylim((-0.05, 1.05))
+        plt.ylabel("1 + ln|pears_r|")
+        plt.xlabel(f"Measurement time ({mt_unit})")
 
         if climate_log_file is not None:
             climate_meas_times, climate_value_dict = self.plot_climate(climate_log_file, unit=(mt_unit, conv_factor))
@@ -1842,7 +1860,6 @@ class DataSet:
                 ax0.grid(True)
 
                 for i, k in enumerate(quant_values):
-
                     ax1.plot(meas_time_diff, quant_values[k][0], c=line_colors[i], alpha=0.15)
                     ax1.plot(meas_time_diff, quant_values[k][1], c=line_colors[i], label=line_labels.get(k, k))
                 ax1.set_ylabel(y_label)
