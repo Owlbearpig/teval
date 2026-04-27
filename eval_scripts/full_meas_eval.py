@@ -2,12 +2,13 @@ import numpy as np
 from numpy import pi
 import matplotlib.pyplot as plt
 from scipy.constants import c, epsilon_0
-from dataset import DataSet, plt_show, QuantityEnum
+from dataset import DataSet, QuantityEnum
 from scipy.optimize import shgo, curve_fit
 from functools import partial
 import logging
 from functions import do_ifft
 from numpy import polyfit
+from transfer_functions import model_1layer, model_2layer
 
 c = c / 1e12
 
@@ -18,44 +19,6 @@ d0 = 645 * 1e-6
 
 en_sub_window = True
 en_film_window = True
-
-def model_1layer(n3_, d=d0, f=f0, shift_=0):
-    w_ = 2 * pi * f
-    t_as = 2 * n1 / (n1 + n3_)
-    t_sa = 2 * n3_ / (n1 + n3_)
-    r_as = (n1 - n3_) / (n1 + n3_)
-    r_sa = (n3_ - n1) / (n1 + n3_)
-
-    exp = np.exp(1j * (d * w_ / c) * n3_)
-    e_sam = t_as * t_sa * exp / (1 + r_as * r_sa * exp ** 2)
-    e_ref = np.exp(1j * (d * w_ / c))
-    phase_shift = np.exp(1j * shift_ * 1e-3 * w_)
-    t = phase_shift * e_sam / e_ref
-
-    return np.nan_to_num(t)
-
-
-def model_2layer(n2_, n3_, h=h0, d=d0, f=f0, shift_=0):
-    # n3_ += 0.01
-    w_ = 2 * pi * f
-    t12 = 2 * n1 / (n1 + n2_)
-    t23 = 2 * n2_ / (n2_ + n3_)
-    t34 = 2 * n3_ / (n3_ + n4)
-
-    r12 = (n1 - n2_) / (n1 + n2_)
-    r23 = (n2_ - n3_) / (n2_ + n3_)
-    r34 = (n3_ - n4) / (n3_ + n4)
-
-    exp1 = np.exp(1j * (h * w_ / c) * n2_)
-    exp2 = np.exp(1j * (d * w_ / c) * n3_)
-
-    e_sam = t12 * t23 * t34 * exp1 * exp2 / (1 + r12 * r23 * exp1 ** 2 + r23 * r34 * exp2 ** 2 + r12 * r34 * exp1 ** 2 * exp2 ** 2)
-    e_ref = np.exp(1j * ((d0 + h) * w_ / c))
-    phase_shift = np.exp(1j * shift_ * 1e-3 * w_) # 6, 16
-
-    t = phase_shift * e_sam / e_ref
-
-    return np.nan_to_num(t)
 
 
 def cost_1layer(p, freq_, t_exp_, shift=0, d=d0, bounds_=None):
@@ -77,7 +40,7 @@ def cost_2layer(p, freq_, t_exp_, n_sub_, d=d0, shift=0):
     if p[0] < 0:
         return np.inf
     n = p[0] + 1j * p[1]
-    t_mod = model_2layer(n, n3_=n_sub_, f=freq_, shift_=shift, d=d)
+    t_mod = model_2layer(n, n3_=n_sub_, f=freq_, shift_=shift, d=d, h=h0)
 
     #real_loss = np.real(t_mod - t_exp_)**2
     #imag_loss = np.imag(t_mod - t_exp_)**2
@@ -355,7 +318,7 @@ n_sub_res_fit = ri_fit(f_axis, n_sub_res, ret_alpha_fit=True)
 # n_sub_res = n_sub_res_fit
 # n_sub_res = 3.0806 * np.ones_like(n_sub_res)
 
-t_sub_mod = np.array([model_1layer(n3_=n_sub_res[f_idx], f=f) for f_idx, f in enumerate(f_axis)])
+t_sub_mod = np.array([model_1layer(n3_=n_sub_res[f_idx], d=d0, f=f) for f_idx, f in enumerate(f_axis)])
 
 sub_fd_mod = np.array([res_sub["ref_fd"][:, 0], res_sub["ref_fd"][:, 1] * t_sub_mod]).T
 sam_td_sub_mod = do_ifft(sub_fd_mod, out_len=4001)
@@ -365,7 +328,7 @@ n_film_res = optimize_2layer(f_axis, t_exp_film, n_sub_res)
 n_film_res_fit = ri_fit(f_axis, n_film_res, ret_alpha_fit=False)
 # n_film_res = n_film_res_fit
 
-t_film_mod = np.array([model_2layer(n2_=n_film_res[f_idx], n3_=n_sub_res[f_idx], f=f) for f_idx, f in enumerate(f_axis)])
+t_film_mod = np.array([model_2layer(n2_=n_film_res[f_idx], n3_=n_sub_res[f_idx], f=f, h=h0, d=d0) for f_idx, f in enumerate(f_axis)])
 
 film_fd_mod = np.array([res_film["ref_fd"][:, 0], res_film["ref_fd"][:, 1] * t_film_mod]).T
 sam_td_film_mod = do_ifft(film_fd_mod, out_len=4001)
@@ -454,4 +417,4 @@ plt.ylim((-10, 500))
 plt.xlabel("Frequency (THz)")
 plt.ylabel("Conductivity (S/cm)")
 """
-plt_show()
+dataset.plt_show()

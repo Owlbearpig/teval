@@ -4,9 +4,6 @@ import os
 from pathlib import Path
 
 options = {
-
-"plot_range": slice(13, 230),
-
 "ref_pos": (20, None),
 
 "ref_threshold": 0.90,
@@ -23,17 +20,18 @@ options = {
            "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
            "remove_dc": True,
            },
-
+"eval_opt": {"fit_range": (0.50, 2.20),},
+"plot_opt" : {"plot_range": (0.25, 3.9)},
 "shown_plots": {
-    "Window": True,
-    "Time domain": True,
+    "Window": False,
+    "Time domain": False,
     "Spectrum": True,
     "Phase": False,
     "Phase slope": False,
     "Amplitude transmission": False,
-    "Absorbance": True,
-    "Refractive index": False,
-    "Absorption coefficient": False,
+    "Absorbance": False,
+    "Refractive index": True,
+    "Absorption coefficient": True,
     "Conductivity": False,
 },
 }
@@ -75,21 +73,36 @@ meas_points = {"Sample7_1": (84, -18), "Sample7_2": (83, -18), "Sample7_3": (83,
                "Sample2_1": (67, -18), "Sample2_2": (66, -18), "Sample2_3": (65, -18),
                # Sample 1 is missing (measured sample 3 twice because of wrong coordinates)
 }
+sample_thicknesses = {"Sample1": 89, "Sample2": 98, "Sample3": 92, "Sample4": 98,
+                      "Sample5": 101, "Sample6": 112, "Sample7": 111}
+sample_thicknesses = {"Sample1": 89, "Sample2": 98, "Sample3": 92, "Sample4": 98,
+                      "Sample5": 101, "Sample6": 112, "Sample7": 111}
 
 if 'nt' in os.name:
     base_dir = fr""
 else:
     base_dir = Path(fr"/home/ftpuser/ftp/Data/Pectin_set2")
 
-for meas_point in meas_points:
-    if "Sample7" in meas_point:
-        dir_name = base_dir / "2026.04.24" / "Measurement_set_sample_7"
-    else:
-        dir_name = base_dir / "2026.04.21" / "Measurement_Set_1"
+for spot in range(4):
+    for meas_point in meas_points:
+        if spot != 2:
+            continue
+        if str(spot) != meas_point[-1]:
+            continue
+        if "Sample6" not in meas_point:
+            continue
 
-    dataset = DataSet(dir_name, options)
-    pos = meas_points[meas_point]
-    # dataset.plot_meas(pos, label=meas_point, err_bar_limits=(70, 95))
-    dataset.plot_meas(pos, label=meas_point)
+        if "Sample7" in meas_point:
+            dir_name = base_dir / "2026.04.24" / "Measurement_set_sample_7"
+        else:
+            dir_name = base_dir / "2026.04.21" / "Measurement_Set_1"
+
+        options["sample_properties"] = {"d": sample_thicknesses[meas_point.split("_")[0]]}
+
+        dataset = DataSet(dir_name, options)
+        pos = meas_points[meas_point]
+
+        dataset.plot_meas(pos, label=meas_point, fig_num_ext=f"_{spot}")
+
 
 dataset.plt_show()

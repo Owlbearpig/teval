@@ -26,6 +26,7 @@ from tqdm import tqdm
 import pandas as pd
 from scipy.signal import correlate
 from scipy.stats import pearsonr
+from transfer_functions import model_1layer
 
 """
 TODOs: 
@@ -712,7 +713,7 @@ class DataSet:
         lag = lags[k] / upsample
 
         delay = lag * dt
-        print(delay)
+        # print(delay)
         return delay
 
     def _get_zero_crossing(self, measurement_):
@@ -844,7 +845,7 @@ class DataSet:
 
         self.options["pp_opt"]["window_opt"] = og_win_setting
 
-        freq_axis = ref_fd[:, 0].real
+        freq_axis = self.freq_axis
 
         phi_ref = np.unwrap(np.angle(ref_fd[:, 1]))
         phi_sam = np.unwrap(np.angle(sam_fd[:, 1]))
@@ -878,6 +879,83 @@ class DataSet:
                }
 
         return ret
+
+    def q_space_eval(self, meas_, fit_range=None):
+        if fit_range is None:
+            fit_range = self.options["eval_opt"]["fit_range"]
+        f_idx_range = f_axis_idx_map(self.freq_axis, fit_range)
+
+        min_kwargs = {"method": "Nelder-Mead",
+                      "options": {
+                          "maxev": np.inf,
+                          "maxiter": 4000,
+                          "tol": 1e-12,
+                          "fatol": 1e-12,
+                          "xatol": 1e-12,
+                      }
+                      }
+        shgo_options = {
+            # "maxfev": np.inf,
+            # "f_tol": 1e-12,
+            # "maxiter": 4000,
+            # "ftol": 1e-12,
+            # "xtol": 1e-12,
+            # "maxev": 4000,
+            # "minimize_every_iter": True,
+            # "disp": True
+        }
+
+        ref_meas_ = self.find_nearest_ref(meas_, dist_func=Dist.Time)
+        ref_fd = self._get_data(ref_meas_, Domain.Frequency)
+        sam_fd = self._get_data(meas_, Domain.Frequency)
+
+        simple_eval_res = self.single_layer_eval(meas_, freq_range=fit_range)
+
+        n0 = simple_eval_res["refr_idx"]
+
+        t_exp_ = sam_fd[f_idx_range, 1] / ref_fd[f_idx_range, 1]
+        phi = np.unwrap(np.angle(t_exp_))
+
+        phi_corrected = phase_correction(self.freq_axis[f_idx_range], phi, en_plot=True, fit_range=(0.5, 0.9))
+        t_exp_ = np.abs(t_exp_) * np.exp(1j * phi_corrected)
+
+        d0 = self.options["sample_properties"]["d"]
+        d_axis = np.linspace(d0*0.95, d0*1.05, 2)
+
+        opt_results = []
+        for d_ in d_axis:
+            n_opt_res = np.zeros_like(self.freq_axis[f_idx_range], dtype=complex)
+            for f_idx, f_ in enumerate(self.freq_axis[f_idx_range]):
+
+                def cost_fun(p):
+                    n3_ = p[0] + 1j * p[1]
+                    t_mod_ = model_1layer(n3_, d=d_, f=f_, n1=1, shift_=0)
+
+                    return np.abs(t_exp_[f_idx] - t_mod_)**2
+
+                n0_ = n0[f_idx]
+
+                opt_res_ = shgo(cost_fun,
+                                bounds=[(0.9*n0_.real, 1.1*n0_.real), (0.9*n0_.imag, 1.1*n0_.imag)],
+                                # bounds=[(1, 8000), (10, 150), (0.1, 100), (0, 100), (0, 100), (-1, 1)],
+                                # bounds = [(1, 800), (10, 150), (-1, 1)],
+                                # n=1, iters=200,
+                                minimizer_kwargs=min_kwargs,
+                                options=shgo_options,
+                                )
+
+                x = opt_res_.x
+                n_opt_res[f_idx] = x[0] + 1j * x[1]
+
+            opt_results.append(n_opt_res)
+
+        plt.figure("Q-Eval")
+        for opt_idx, opt_res in enumerate(opt_results):
+            d = d_axis[opt_idx]
+            plt.plot(self.freq_axis[f_idx_range], opt_res.real, label=d)
+
+        plt.legend()
+        plt.show()
 
     def _refractive_idx(self, meas_):
         return np.mean(np.real(self.single_layer_eval(meas_)["refr_idx"]))
@@ -1058,8 +1136,9 @@ class DataSet:
             return meas_in_limit_range, coords
 
 
-    def find_nearest_ref(self, meas_):
-        dist_func = self.options["dist_func"]
+    def find_nearest_ref(self, meas_, dist_func=None):
+        if not dist_func:
+            dist_func = self.options["dist_func"]
 
         closest_ref, best_fit_val = None, np.inf
         for ref_meas in self.measurements["refs"]:
@@ -1275,14 +1354,15 @@ class DataSet:
                 return
 
         zero_crossing = self._get_zero_crossing(ref_meas_)
-        print(zero_crossing)
-        zx_simple = self._get_zero_crossing(ref_meas_) - self._get_zero_crossing(self.measurements["refs"][0])
-        zx_phase = self._delay_from_phaseslope(self.measurements["refs"][0], ref_meas_)
-        print(zx_simple*1e3, zx_phase*1e3)
+        # print(zero_crossing)
+        # zx_simple = self._get_zero_crossing(ref_meas_) - self._get_zero_crossing(self.measurements["refs"][0])
+        # zx_phase = self._delay_from_phaseslope(self.measurements["refs"][0], ref_meas_)
+        # print(zx_simple*1e3, zx_phase*1e3)
 
         ref_td, ref_fd = self._get_data(ref_meas_, domain=Domain.Both)
         freq_axis = ref_fd[:, 0].real
         plot_range = self.options["plot_opt"]["plot_range"]
+        f_idx_range = f_axis_idx_map(self.freq_axis, plot_range)
 
         if kwargs["remove_t_offset"]:
             ref_td[:, 0] -= ref_td[0, 0]
@@ -1294,9 +1374,9 @@ class DataSet:
 
         noise_floor = np.mean(20 * np.log10(np.abs(ref_fd[ref_fd[:, 0] > 6.0, 1]))) * kwargs["sub_noise_floor"]
 
-        y_db = (20 * np.log10(np.abs(ref_fd[plot_range, 1])) - noise_floor).real
+        y_db = (20 * np.log10(np.abs(ref_fd[f_idx_range, 1])) - noise_floor).real
         plt.figure("Spectrum")
-        plt.plot(freq_axis[plot_range], y_db, label=label)
+        plt.plot(freq_axis[f_idx_range], y_db, label=label)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Amplitude (dB)")
 
@@ -1322,7 +1402,12 @@ class DataSet:
         else:
             en_csv_export = False
 
+        fig_num_ext = ""
+        if "fig_num_ext" in kwargs:
+            fig_num_ext += kwargs["fig_num_ext"]
+
         plot_range = self.options["plot_opt"]["plot_range"]
+        f_idx_range = f_axis_idx_map(self.freq_axis, plot_range)
         if (point is not None) and (timestamp is not None):
             logging.warning("either point or timestamp has to be None")
             return None
@@ -1336,7 +1421,8 @@ class DataSet:
             selected_meas = self.get_measurement_from_timestamp(timestamp)
             point = selected_meas.position
 
-        print(selected_meas)
+        self.q_space_eval(selected_meas)
+
         ref_meas = self.find_nearest_ref(selected_meas)
 
         logging.info(f"Plotting point {point}")
@@ -1401,7 +1487,6 @@ class DataSet:
         t = sam_fd[:, 1] / ref_fd[:, 1]
         absorb = np.abs(1/t)
 
-
         simple_eval_res = self.single_layer_eval(selected_meas, (0, 10))
         phi = simple_eval_res["phi"]
         phi_corrected = simple_eval_res["phi_corrected"]
@@ -1413,12 +1498,10 @@ class DataSet:
         if en_csv_export:
             self._export_as_csv(ret, file_app=label)
 
-        f_min, f_max = freq_axis[plot_range][0], freq_axis[plot_range][-1]
-        f_idx = f_axis_idx_map(freq_axis, freq_range=(f_min, f_max))
-        phi = phi[f_idx]
-        phi_corrected = phi_corrected[f_idx]
-        refr_idx = refr_idx[f_idx]
-        alph = self._absorption_coef(selected_meas, (f_min, f_max))
+        phi = phi[f_idx_range]
+        phi_corrected = phi_corrected[f_idx_range]
+        refr_idx = refr_idx[f_idx_range]
+        alph = self._absorption_coef(selected_meas, plot_range)
 
         if not self.plotted_ref:
             self.plot_ref(ref_meas, **kwargs)
@@ -1430,72 +1513,77 @@ class DataSet:
         freq_axis = sam_fd[:, 0].real
         noise_floor = np.mean(20 * np.log10(np.abs(sam_fd[sam_fd[:, 0] > 6.0, 1]))) * sub_noise_floor
 
-        plt.figure("Spectrum")
-        y_db = (20 * np.log10(np.abs(sam_fd[plot_range, 1])) - noise_floor).real
-        plt.plot(freq_axis[plot_range], y_db, label=label)
+        plt.figure("Spectrum" + fig_num_ext)
+        y_db = (20 * np.log10(np.abs(sam_fd[f_idx_range, 1])) - noise_floor).real
+        plt.plot(freq_axis[f_idx_range], y_db, label=label)
 
-        plt.figure("Phase correction comparison")
-        plt.plot(freq_axis[plot_range], phi, label=label + " (Original)", ls="dashed")
-        plt.plot(freq_axis[plot_range], phi_corrected, label=label + " (Corrected)")
+        plt.figure("Phase correction comparison" + fig_num_ext)
+        plt.plot(freq_axis[f_idx_range], phi, label=label + " (Original)", ls="dashed")
+        plt.plot(freq_axis[f_idx_range], phi_corrected, label=label + " (Corrected)")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad)")
 
-        plt.figure("Phase")
-        plt.plot(freq_axis[plot_range], phi_corrected, label=label)
+        plt.figure("Phase" + fig_num_ext)
+        plt.plot(freq_axis[f_idx_range], phi_corrected, label=label)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad)")
 
-        plt.figure("Phase slope")
-        plt.plot(freq_axis[plot_range][:-1], np.diff(phi_corrected), label=label)
+        plt.figure("Phase slope" + fig_num_ext)
+        plt.plot(freq_axis[f_idx_range][:-1], np.diff(phi_corrected), label=label)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad/THz)")
 
-        plt.figure("Time domain")
+        plt.figure("Time domain" + fig_num_ext)
         td_label = label
         if not np.isclose(td_scale, 1):
             td_label += f"\n(Amplitude x {td_scale})"
         if en_td_plot:
             plt.plot(sam_td[:, 0], td_scale * sam_td[:, 1], label=td_label)
 
-        if not plt.fignum_exists("Amplitude transmission"):
+        if not plt.fignum_exists("Amplitude transmission" + fig_num_ext):
             plt.figure("Amplitude transmission")
             plt.xlabel("Frequency (THz)")
             plt.ylabel(r"Amplitude transmission")
             plt.ylim((-0.05, 1.10))
         else:
-            plt.figure("Amplitude transmission")
+            plt.figure("Amplitude transmission" + fig_num_ext)
 
-        plt.plot(freq_axis[plot_range], (1/absorb[plot_range]), label=label)
+        plt.plot(freq_axis[f_idx_range], (1/absorb[f_idx_range]), label=label)
 
-        plt.figure("Absorbance")
-        y = 20*np.log10(absorb[plot_range])
-        plt.plot(freq_axis[plot_range], y, label=label)
+        plt.figure("Absorbance" + fig_num_ext)
+        y = 20*np.log10(absorb[f_idx_range])
+        plt.plot(freq_axis[f_idx_range], y, label=label)
         if std_limits:
-            lower = y - err_bar_range[plot_range]
-            upper = y + err_bar_range[plot_range]
-            plt.fill_between(freq_axis[plot_range], lower, upper, alpha=0.3)
+            lower = y - err_bar_range[f_idx_range]
+            upper = y + err_bar_range[f_idx_range]
+            plt.fill_between(freq_axis[f_idx_range], lower, upper, alpha=0.3)
 
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Absorbance (dB)")
 
-        plt.figure("Refractive index")
-        plt.plot(freq_axis[plot_range], refr_idx.real, label="Real part")
-        plt.plot(freq_axis[plot_range], refr_idx.imag, label="Imaginary part")
-        plt.xlabel("Frequency (THz)")
-        plt.ylabel("Refractive index")
+        ri_fignum = "Refractive index" + fig_num_ext
+        if not plt.fignum_exists(ri_fignum):
+            fig, (ax0, ax1) = plt.subplots(2, 1, num=ri_fignum, sharex=True, gridspec_kw={'hspace': 0})
+            ax1.set_xlabel("Frequency (THz)")
+            ax0.set_ylabel("Refractive index (Real)")
+            ax1.set_ylabel("Refractive index (Imag)")
+        else:
+            fig = plt.figure(ri_fignum)
+            ax0, ax1 = fig.get_axes()
+        ax0.plot(freq_axis[f_idx_range], refr_idx.real, label=label)
+        ax1.plot(freq_axis[f_idx_range], refr_idx.imag, label=label)
 
-        plt.figure("Absorption coefficient")
-        plt.plot(freq_axis[plot_range], alph)
+        plt.figure("Absorption coefficient" + fig_num_ext)
+        plt.plot(freq_axis[f_idx_range], alph, label=label)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Absorption coefficient (1/cm)")
 
         if self.sub_dataset is not None:
             sigma = self._conductivity(selected_meas)
-            # plot_range = slice(30, 550)
-            plt.figure("Conductivity")
+            plt.figure("Conductivity" + fig_num_ext)
             plt.title(label)
-            plt.plot(freq_axis[plot_range], sigma[plot_range].real, label="Real part")
-            plt.plot(freq_axis[plot_range], sigma[plot_range].imag, label="Imaginary part")
+            plt.plot(freq_axis[f_idx_range], sigma[f_idx_range].real, label="Real part")
+            plt.plot(freq_axis[f_idx_range], sigma[f_idx_range].imag, label="Imaginary part")
             # plt.ylim((-1e3, 1.5e5))
             plt.xlabel("Frequency (THz)")
             plt.ylabel("Conductivity (S/cm)")
@@ -1513,14 +1601,15 @@ class DataSet:
         ref_fd = self._get_data(ref_meas0, domain=Domain.Frequency)
         freq_axis = ref_fd[:, 0].real
 
-        f_min, f_max = freq_axis[plot_range][0], freq_axis[plot_range][-1]
+        f_min, f_max = plot_range[0], plot_range[-1]
         simple_eval_res0 = self.single_layer_eval(sam_meas0, (f_min, f_max))
         simple_eval_res1 = self.single_layer_eval(sam_meas1, (f_min, f_max))
         phi0 = simple_eval_res0["phi_corrected"]
         phi1 = simple_eval_res1["phi_corrected"]
 
+        f_idx_range = f_axis_idx_map(self.freq_axis, plot_range)
         plt.figure("Phi difference")
-        plt.plot(freq_axis[plot_range], phi0-phi1, label=label)
+        plt.plot(freq_axis[f_idx_range], phi0-phi1, label=label)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase difference (rad)")
 
@@ -2152,10 +2241,15 @@ class DataSet:
                 not_shown.append(fig_label)
                 plt.close(fig_num)
                 continue
+            for shown_plot_num in self.options["shown_plots"]:
+                if shown_plot_num in fig_label and (not self.options["shown_plots"][shown_plot_num]):
+                    not_shown.append(fig_label)
+                    plt.close(fig_num)
+            """
             if fig_label in self.options["shown_plots"]:
                 if not self.options["shown_plots"][fig_label]:
                     not_shown.append(fig_label)
-                    plt.close(fig_num)
+                    plt.close(fig_num)"""
 
         logging.info(f"Not showing plots: {', '.join(not_shown)}")
         plt.show()
@@ -2163,8 +2257,8 @@ class DataSet:
     def ref_difference_plot(self,):
         ref1, ref2 = self.measurements["refs"][11], self.measurements["refs"][16]
 
-        print(ref1)
-        print(ref2)
+        # print(ref1)
+        # print(ref2)
 
         ref1_fd = self._get_data(ref1, domain=Domain.Frequency)
         ref2_fd = self._get_data(ref2, domain=Domain.Frequency)
@@ -2232,7 +2326,7 @@ class DataSet:
         residual_pulse0 = np.sum((y_pulse0 - y_ref)**2) / len(y_ref)
         residual_pulse1 = np.sum((y_pulse1 - y_ref) ** 2) / len(y_ref)
         residual_mean = np.sum((y_mean - y_ref) ** 2) / len(y_ref)
-        print(residual_pulse0, residual_pulse1, residual_mean)
+        # print(residual_pulse0, residual_pulse1, residual_mean)
 
         plt.figure("Delay interpolation")
         # plt.plot(x, y_pulse0, label="Delay monitor pulse0 (interp)")

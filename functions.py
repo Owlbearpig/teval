@@ -74,20 +74,23 @@ def phase_correction(freq_axis_, phi, disable=False, fit_range=None, en_plot=Fal
 
     phi_corrected = phi - p[1].real
 
-    if en_plot:
-        plt.figure("phase_correction")
-        plt.plot(freq_axis_, phi, label="Unwrapped phase")
-        plt.plot(freq_axis_, phi_corrected, label="Shifted phase")
-        plt.plot(freq_axis_, freq_axis_*p[0]+p[1], label="PolyFit deg=1")
-        plt.xlabel("Frequency (THz)")
-        plt.ylabel("Phase (rad)")
-        plt.legend()
-
     if extrapolate:
         phi_corrected = p[0].real * freq_axis_
 
     if rewrap:
         phi_corrected = np.angle(np.exp(1j * phi_corrected))
+
+    if p[0] < 0:
+        phi_corrected *= -1
+
+    if en_plot:
+        plt.figure("phase_correction")
+        plt.plot(freq_axis_, phi, label="Unwrapped phase")
+        plt.plot(freq_axis_, phi_corrected, label="corrected phase")
+        plt.plot(freq_axis_, freq_axis_*p[0]+p[1], label="PolyFit deg=1")
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("Phase (rad)")
+        plt.legend()
 
     return phi_corrected
 
