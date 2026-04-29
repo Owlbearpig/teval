@@ -14,17 +14,17 @@ options = {
 "pp_opt": {"window_opt": {"enabled": True,
                           "slope": 0.05, # 0.999, # 0.99
                           # "win_start": 0,
-                          "win_width": 70, # 18,#2*32,# 38*2, # 5*15 # 36
+                          "win_width": 80, # 18,#2*32,# 38*2, # 5*15 # 36
                           "type": WindowTypes.tukey,
                           },
            "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
            "remove_dc": True,
            },
-"eval_opt": {"fit_range": (0.50, 2.20),},
+"eval_opt": {"fit_range": (0.75, 2.00),},
 "plot_opt" : {"plot_range": (0.25, 3.9)},
 "shown_plots": {
-    "Window": False,
-    "Time domain": False,
+    "Window": True,
+    "Time domain": True,
     "Spectrum": True,
     "Phase": False,
     "Phase slope": False,
@@ -75,13 +75,24 @@ meas_points = {"Sample7_1": (84, -18), "Sample7_2": (83, -18), "Sample7_3": (83,
 }
 sample_thicknesses = {"Sample1": 89, "Sample2": 98, "Sample3": 92, "Sample4": 98,
                       "Sample5": 101, "Sample6": 112, "Sample7": 111}
-sample_thicknesses = {"Sample1": 89, "Sample2": 98, "Sample3": 92, "Sample4": 98,
-                      "Sample5": 101, "Sample6": 112, "Sample7": 111}
+sample_thicknesses = {"Sample1": 89, "Sample2": 77, "Sample3": 69, "Sample4": 75,
+                      "Sample5": 70, "Sample6": 73, "Sample7": 89}
 
 if 'nt' in os.name:
     base_dir = fr""
 else:
     base_dir = Path(fr"/home/ftpuser/ftp/Data/Pectin_set2")
+
+"""
+base_dir = Path(fr"/home/ftpuser/ftp/Data/Test_Data_GaAs25")
+options["sample_properties"] = {"d": 500}
+
+dataset = DataSet(base_dir, options)
+pos = (30, 10)
+
+dataset.plot_meas(pos, label="GaAs Wafer")
+dataset.plt_show()
+"""
 
 for spot in range(4):
     for meas_point in meas_points:

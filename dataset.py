@@ -6,6 +6,7 @@ from functools import partial
 import consts
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import scipy.signal
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from numpy import array
 from pathlib import Path
@@ -22,6 +23,8 @@ from enum import Enum
 import logging
 import colorlog
 from datetime import datetime
+
+from streamlit import toast
 from tqdm import tqdm
 import pandas as pd
 from scipy.signal import correlate
@@ -906,6 +909,41 @@ class DataSet:
         }
 
         ref_meas_ = self.find_nearest_ref(meas_, dist_func=Dist.Time)
+
+        def calc_q_val(opt_res_):
+            dt = np.mean(np.diff(opt_res_["freqs"]))
+            alph_ = opt_res_["n"]
+            alph_ = alph_ - np.mean(alph_)
+
+            alph_ = scipy.signal.detrend(alph_, type="linear")
+
+            y = np.array([opt_res_["freqs"], alph_]).T
+            # y = window(y, win_width=len(alph_), win_start=0, shift=40, en_plot=True, type=WindowTypes.hann)
+
+            alph_ = y[:, 1]
+
+            alph_ = np.concatenate([np.zeros(3*len(alph_)), alph_, np.zeros(3*len(alph_))])
+
+            alph_ft = np.fft.rfft(alph_)
+            t_axis = np.fft.rfftfreq(len(alph_), d=dt)
+
+            q_val = (np.abs(alph_ft)[0:])
+            t_axis = t_axis[0:]
+
+            plt.figure("qval")
+            plt.plot(t_axis, q_val, label=opt_res_["d"])
+            # plt.plot(q_val, label=opt_res_["d"])
+            plt.xlabel("ps")
+            plt.legend()
+            # plt.show()
+
+            #t0, t1 = 0.85*3*t_diff, 1.15*3*t_diff
+            #t0_idx, t1_idx = np.argmin(np.abs(t0-t_axis)), np.argmin(np.abs(t1-t_axis))
+            #print(t_axis[t0_idx], t_axis[t1_idx], t_diff)
+            #t_diff = np.abs(self._delay_from_phaseslope(meas_, ref_meas_))
+            # exit()
+            return np.max(q_val)
+
         ref_fd = self._get_data(ref_meas_, Domain.Frequency)
         sam_fd = self._get_data(meas_, Domain.Frequency)
 
@@ -916,46 +954,107 @@ class DataSet:
         t_exp_ = sam_fd[f_idx_range, 1] / ref_fd[f_idx_range, 1]
         phi = np.unwrap(np.angle(t_exp_))
 
-        phi_corrected = phase_correction(self.freq_axis[f_idx_range], phi, en_plot=True, fit_range=(0.5, 0.9))
+        phi_corrected = phase_correction(self.freq_axis[f_idx_range], phi, en_plot=True, fit_range=(0.47, 1.05))
         t_exp_ = np.abs(t_exp_) * np.exp(1j * phi_corrected)
 
         d0 = self.options["sample_properties"]["d"]
-        d_axis = np.linspace(d0*0.95, d0*1.05, 2)
+        # d_axis = np.linspace(d0*0.80, d0*1.2, 3)
+        d_axis = np.linspace(d0 * 0.75, d0 * 1.25, 20)
 
-        opt_results = []
-        for d_ in d_axis:
+        def n_opt(d_):
             n_opt_res = np.zeros_like(self.freq_axis[f_idx_range], dtype=complex)
             for f_idx, f_ in enumerate(self.freq_axis[f_idx_range]):
-
                 def cost_fun(p):
                     n3_ = p[0] + 1j * p[1]
                     t_mod_ = model_1layer(n3_, d=d_, f=f_, n1=1, shift_=0)
 
-                    return np.abs(t_exp_[f_idx] - t_mod_)**2
+                    return np.abs(t_exp_[f_idx] - t_mod_) ** 2
 
                 n0_ = n0[f_idx]
+                n_min, n_max = 0.90 * n0_.real, 1.10 * n0_.real
+                k_min, k_max = 0.10 * n0_.imag, 1.10 * n0_.imag
+                bounds = [(n_min, n_max), (k_min, k_max)]
 
-                opt_res_ = shgo(cost_fun,
-                                bounds=[(0.9*n0_.real, 1.1*n0_.real), (0.9*n0_.imag, 1.1*n0_.imag)],
-                                # bounds=[(1, 8000), (10, 150), (0.1, 100), (0, 100), (0, 100), (-1, 1)],
-                                # bounds = [(1, 800), (10, 150), (-1, 1)],
-                                # n=1, iters=200,
-                                minimizer_kwargs=min_kwargs,
-                                options=shgo_options,
-                                )
+                conv, i_ = False, 0
+                while not conv:
+                    i_ += 1
+                    shgo_opt_res_ = shgo(cost_fun,
+                                         bounds=bounds,
+                                         minimizer_kwargs=min_kwargs,
+                                         options=shgo_options,
+                                         # n=1, iters=200,
+                                         )
 
-                x = opt_res_.x
-                n_opt_res[f_idx] = x[0] + 1j * x[1]
+                    x = shgo_opt_res_.x
+                    n_opt_res[f_idx] = x[0] + 1j * x[1]
+                    if f_idx == 0:
+                        break
 
-            opt_results.append(n_opt_res)
+                    diff = (n_opt_res[f_idx].real - n_opt_res[f_idx - 1].real)
+                    if np.abs(diff) < 0.10:
+                        conv = True
+                    else:
+                        c0, c1 = 0.90 + i_ * 0.02, 1.10 - i_ * 0.02
+                        n_bounds = (n0_.real * c0, n0_.real * c1)
+                        k_bounds = (n0_.imag * c0, n0_.imag * c1)
+
+                        bounds = [(min(n_bounds), max(n_bounds)), (min(k_bounds), max(k_bounds))]
+                    if i_ > 4:
+                        n_prev = n_opt_res[f_idx - 1]
+                        c0, c1 = 0.90 + i_ * 0.01, 1.10 - i_ * 0.01
+                        n_bounds = (n_prev.real * c0, n_prev.real * c1)
+                        k_bounds = (n_prev.imag * c0, n_prev.imag * c1)
+
+                        bounds = [(min(n_bounds), max(n_bounds)), (min(k_bounds), max(k_bounds))]
+                    if i_ > 5:
+                        break
+
+            alph_ = self.freq_axis[f_idx_range] * 4 * np.pi * n_opt_res.imag / (1e-4 * c_thz)
+
+            return n_opt_res, alph_
+
+        opt_results = []
+        for d_ in d_axis:
+            n_opt_res, alph = n_opt(d_)
+
+            opt_res = {"freqs": self.freq_axis[f_idx_range],
+                       "d": d_, "n": n_opt_res.real,
+                       "k": n_opt_res.imag, "alph": alph}
+            opt_res["q_val"] = calc_q_val(opt_res)
+
+            opt_results.append(opt_res)
+
+        q_vals = np.array([res["q_val"] for res in opt_results])
+        q_vals = q_vals / np.max(q_vals)
+
+        best_res_idx = np.argmin(q_vals)
+        best_res = opt_results[best_res_idx]
+        d_opt = np.round(best_res["d"], 1)
+
+        fig, (ax0, ax1) = plt.subplots(2, 1, num="Optimal result", sharex=True)
+        ax0.plot(best_res["freqs"], best_res["n"], label=f"Refractive index at {d_opt} µm")
+        ax1.plot(best_res["freqs"], best_res["k"], label=f"Extinction coefficient {d_opt} µm")
+
+        ax1.set_xlabel("Frequency (THz)")
+        ax0.set_ylabel("Refractive index")
+        ax1.set_ylabel("Extinction coefficient")
+
+        plt.figure("Absorption coefficient optimum")
+        plt.plot(best_res["freqs"], best_res["alph"], label=f"{d_opt} µm")
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("Absorption coefficient (1/cm)")
 
         plt.figure("Q-Eval")
+        """
+        q_vals = []
         for opt_idx, opt_res in enumerate(opt_results):
             d = d_axis[opt_idx]
-            plt.plot(self.freq_axis[f_idx_range], opt_res.real, label=d)
-
+            q_vals.append(opt_res["q_val"])
+            # plt.plot(self.freq_axis[f_idx_range], opt_res["n"], label=d)
+        """
+        plt.plot(d_axis, q_vals)
         plt.legend()
-        plt.show()
+        # plt.show()
 
     def _refractive_idx(self, meas_):
         return np.mean(np.real(self.single_layer_eval(meas_)["refr_idx"]))
@@ -1341,6 +1440,10 @@ class DataSet:
         kwargs = {**self.options["plot_opt"]}
         kwargs.update(kwargs_)
 
+        fig_num_ext = ""
+        if "fig_num_ext" in kwargs:
+            fig_num_ext += kwargs["fig_num_ext"]
+
         if (ref_meas_ is None) and (timestamp is None):
             if isinstance(ref_idx, int):
                 ref_meas_ = self.measurements["refs"][ref_idx]
@@ -1375,12 +1478,12 @@ class DataSet:
         noise_floor = np.mean(20 * np.log10(np.abs(ref_fd[ref_fd[:, 0] > 6.0, 1]))) * kwargs["sub_noise_floor"]
 
         y_db = (20 * np.log10(np.abs(ref_fd[f_idx_range, 1])) - noise_floor).real
-        plt.figure("Spectrum")
-        plt.plot(freq_axis[f_idx_range], y_db, label=label)
+        plt.figure("Spectrum" + fig_num_ext)
+        plt.plot(freq_axis[f_idx_range], y_db, label=label + " (Reference)")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Amplitude (dB)")
 
-        plt.figure("Time domain")
+        plt.figure("Time domain" + fig_num_ext)
         plt.plot(ref_td[:, 0], ref_td[:, 1], label=label + " (Reference)")
         if self.options["plot_opt"]["plot_zero_crossing"]:
             plt.scatter(zero_crossing, 0, label="Zero-crossing", color="red")

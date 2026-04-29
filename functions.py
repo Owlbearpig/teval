@@ -17,6 +17,7 @@ class WindowTypes(Enum):
     hamming = signal.windows.hamming
     hann = signal.windows.hann
     gaussian = signal.windows.gaussian
+    blackmanharris = signal.windows.blackmanharris
 
 def check_dict_values(new_options, default):
     for k in default:
