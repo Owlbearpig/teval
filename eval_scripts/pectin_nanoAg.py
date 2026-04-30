@@ -20,7 +20,7 @@ options = {
            "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
            "remove_dc": True,
            },
-"eval_opt": {"fit_range": (0.75, 2.00),},
+"eval_opt": {"fit_range": (0.25, 3.50), "q-space_range": (0.75, 2.00), },
 "plot_opt" : {"plot_range": (0.25, 3.9)},
 "shown_plots": {
     "Window": True,
@@ -100,7 +100,7 @@ for spot in range(4):
             continue
         if str(spot) != meas_point[-1]:
             continue
-        if "Sample6" not in meas_point:
+        if "Sample5" not in meas_point:
             continue
 
         if "Sample7" in meas_point:
