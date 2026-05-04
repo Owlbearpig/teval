@@ -585,6 +585,33 @@ class DataSet:
         else:
             return data_td, do_fft(data_td)
 
+    def _get_avg_data(self, meas_list, domain=None):
+        y0_td = self._get_data(meas_list[0])
+        y0_fd = do_fft(y0_td)
+
+        t_axis, f_axis = y0_td[:, 0], y0_fd[:, 0]
+
+        y_avg_td = np.zeros([len(meas_list), len(y0_td[:, 1])])
+        y_avg_fd = np.zeros([len(meas_list), len(y0_fd[:, 1])], dtype=complex)
+
+        for meas_idx, meas in enumerate(meas_list):
+            data_td = self._pre_process(meas)
+            y_avg_td[meas_idx, :] = data_td[:, 1]
+            y_avg_fd[meas_idx, :] = do_fft(data_td)
+
+        std_td = np.std(y_avg_td, ddof=1)
+        std_fd = np.std(y_avg_fd.real, ddof=1) + 1j * np.std(y_avg_fd.imag, ddof=1)
+
+        data_td = np.array([t_axis, np.mean(y_avg_td)]).T
+        data_fd = do_fft(data_td)
+
+        if domain == Domain.Time:
+            return data_td, std_td
+        elif domain == Domain.Frequency:
+            return data_fd, std_fd
+        else:
+            return data_td, std_td, data_fd, std_fd
+
     def _get_ref_argmax(self, measurement_):
         ref_td = self._get_data(measurement_)
         t, y = ref_td[:, 0], ref_td[:, 1]
@@ -914,9 +941,12 @@ class DataSet:
             logging.info("Single measurement evaluation")
             logging.info(f"Reference measurement: {ref_meas_}")
             logging.info(f"Sample measurement: {meas_}")
+
+            ref_fd = self._get_data(ref_meas_, Domain.Frequency)
+            sam_fd = self._get_data(meas_, Domain.Frequency)
         else:
-            sam_meas_list = self.get_measurement(*meas_.position, return_single=False)
             ref_meas_list = self.get_meas_group(ref_meas_)
+            sam_meas_list = self.get_measurement(*meas_.position, return_single=False)
 
             logging.info("Average measurement evaluation")
             logging.info(f"Reference measurement list (count: {len(ref_meas_list)}):")
@@ -924,8 +954,8 @@ class DataSet:
             logging.info(f"Sample measurement list (count {len(sam_meas_list)}): ")
             logging.info(f"{[meas.filepath.name for meas in sam_meas_list]}")
 
-        ref_fd = self._get_data(ref_meas_, Domain.Frequency)
-        sam_fd = self._get_data(meas_, Domain.Frequency)
+            ref_fd, ref_fd_std = self._get_avg_data(ref_meas_list, Domain.Frequency)
+            sam_fd, sam_fd_std = self._get_avg_data(sam_meas_list, Domain.Frequency)
 
         simple_eval_res = self.single_layer_eval(meas_, freq_range="full")
 
