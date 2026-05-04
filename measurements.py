@@ -7,6 +7,7 @@ from numpy.fft import fft, fftfreq, rfft, rfftfreq
 from functions import window, remove_offset
 from enum import Enum
 
+meas_id_func = lambda meas_datetime: int((meas_datetime - datetime.min).total_seconds() * 1e6)
 
 class Domain(Enum):
     Time = 0
@@ -73,7 +74,7 @@ class Measurement:
         self.position = self._extract_position()
 
         # set identifier
-        self.identifier = int((self.meas_time-datetime.min).total_seconds() * 1e6)
+        self.identifier = meas_id_func(self.meas_time)
 
     def get_data_td(self):
         if self._data_td is None:

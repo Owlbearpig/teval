@@ -17,3 +17,9 @@ else:
 THz = 1e12
 c_thz = c0 * 1e-6  # µm / ps -> 1e6 / 1e-12 = 1e-6
 eps0_thz = eps0 * 1e6 # F / m = S / (Hz * m) = Siemens * s / m = 1e12 ps * S / m = 1e6 ps * S / µm
+
+# ANSI Color Codes
+GREEN = "\033[32m"
+BLUE = "\033[34m"
+RESET = "\033[0m"
+

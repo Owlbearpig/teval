@@ -12,18 +12,18 @@ from numpy import array
 from pathlib import Path
 import numpy as np
 from functions import unwrap, window, local_minima_1d, check_dict_values, WindowTypes, butter_filt
-from measurements import MeasurementType, Measurement, Domain
+from measurements import MeasurementType, Measurement, Domain, meas_id_func
 from mpl_settings import mpl_style_params
 import matplotlib as mpl
 from functions import phase_correction, do_fft, do_ifft, f_axis_idx_map, remove_offset, moving_average
-from consts import c_thz, eps0_thz
+from consts import c_thz, eps0_thz, GREEN, RESET
 from scipy.optimize import shgo
 from scipy.special import erfc
 from enum import Enum
 import logging
 import colorlog
 from datetime import datetime
-
+from dataset_cache import DatasetCache
 from streamlit import toast
 from tqdm import tqdm
 import pandas as pd
@@ -41,7 +41,9 @@ TODOs:
 - freq_range variable in transmission function (and other functions?)
 - combine the different reference select settings into one dict
 - Fix unit labeling
-- Split dataset into smaller parts (e.g. a plotting class)
+- Split DataSet into multiple smaller classes (e.g. a plotting class) "Classes should do one thing each."
+- should phi correction be a part of the pre-processing?
+- rename some keys in options dict e.g. "eval_opt" to "eval"
 
 New ideas: add teralyzer evaluation (time consuming)
 - Add plt_show here (done)
@@ -160,9 +162,9 @@ class DataSet:
         self.noise_floor = None
         self.time_axis = None
         self.freq_axis = None
-        self.raw_data_cache = {}
         self.options = {}
         self.img_properties = {}
+        self.dataset_properties = {}
         self.selected_freq = None
         self.selected_freq_idx = None
         self.selected_quantity = None
@@ -247,6 +249,8 @@ class DataSet:
                                         "sub_pnt": (0, 0),
                                         "fit_range": (0.50, 2.20),
                                         "q-space_range": (0.75, 2.00),
+                                        "phi_fit_range": (0.47, 1.05),
+                                        "average": False,
                                         },
                            "only_shown_figures": [],
                            "shown_plots": {
@@ -330,23 +334,12 @@ class DataSet:
 
         refs_sorted, sams_sorted, all_sorted = sort(refs), sort(sams), sort([*refs, *sams])
 
-        self.measurements["refs"] = refs_sorted
-        self.measurements["sams"] = sams_sorted
-        self.measurements["all"] = all_sorted
-
-    def _generate_coord_map(self, all_measurements_):
-        # keys are of the format "xy" where x, y are the positions cut/0 filled to 3 dec. places
-        self.raw_data_cache["coord_map"] = {}
-        for meas in all_measurements_:
-            key = "".join([f"{val:.3f}" for val in meas.position])
-            self.raw_data_cache["coord_map"][key] = meas
+        return {"refs": refs_sorted, "sams": sams_sorted, "all": all_sorted}
 
     def _timestamp2id(self, timestamp_str):
         timestamp_dt = datetime.strptime(timestamp_str, "%Y-%m-%dT%H-%M-%S.%f")
 
-        id_ = int((timestamp_dt - datetime.min).total_seconds() * 1e6)
-
-        return id_
+        return meas_id_func(timestamp_dt)
 
     def _parse_measurements(self):
         if not isinstance(self.data_path, Path):
@@ -354,15 +347,9 @@ class DataSet:
 
         all_measurements = self._read_data_dir()
 
-        self.raw_data_cache["id_map"] = dict(zip([id_.identifier for id_ in
-                                                  sorted(all_measurements, key=lambda x: x.identifier)],
-                                                 range(len(all_measurements))))
+        self.measurements = self._sort_measurements(all_measurements)
 
-        self._fill_cache(all_measurements)
-
-        self._sort_measurements(all_measurements)
-
-        self._generate_coord_map(all_measurements)
+        self.cache = DatasetCache(self.measurements["all"], self.data_path)
 
         logging.info(f"Dataset contains {len(all_measurements)} measurements")
         if not self.measurements["refs"]:
@@ -383,7 +370,7 @@ class DataSet:
         sec_part = time_del.seconds % 60
 
         logging.info(f"Total measurement time: {tot_hours} hours, "
-                     f"{min_part} minutes and {sec_part} seconds ({td_secs} seconds)\n")
+                     f"{min_part} minute(s) and {sec_part} second(s) ({td_secs} seconds)\n")
 
         time_diffs = [(self.measurements["all"][i + 1].meas_time -
                        self.measurements["all"][i].meas_time).total_seconds()
@@ -391,6 +378,7 @@ class DataSet:
 
         mean_time_diff = np.mean(time_diffs)
 
+        self.dataset_properties["mean_time_diff"] = mean_time_diff
         logging.info(f"Mean time between measurements: {np.round(mean_time_diff, 2)} seconds")
         logging.info(f"Min and max time between measurements: "
                      f"({np.min(time_diffs)}, {np.max(time_diffs)}) seconds\n")
@@ -570,8 +558,8 @@ class DataSet:
     def _pre_process(self, meas_):
         pp_opt = self.options["pp_opt"]
 
-        idx = self.raw_data_cache["id_map"][meas_.identifier]
-        data_td = self.raw_data_cache["td"][idx]
+        cache_idx = self.cache.id_map[meas_.identifier]
+        data_td = self.cache.raw_data_td[cache_idx]
 
         if pp_opt["remove_dc"]:
             data_td = remove_offset(data_td)
@@ -596,36 +584,6 @@ class DataSet:
             return do_fft(data_td)
         else:
             return data_td, do_fft(data_td)
-
-    def _fill_cache(self, all_measurements):
-        cache_path = Path(self.data_path / "_cache")
-        cache_path.mkdir(parents=True, exist_ok=True)
-
-        y_td, y_fd = all_measurements[0].get_data_td(), all_measurements[0].get_data_fd()
-        td_cache_shape = (len(all_measurements), *y_td.shape)
-        fd_cache_shape = (len(all_measurements), *y_fd.shape)
-
-        try:
-            data_td = np.load(str(cache_path / "_td_cache.npy"))
-            data_fd = np.load(str(cache_path / "_fd_cache.npy"))
-            shape_match = (data_td.shape == td_cache_shape) * (data_fd.shape == fd_cache_shape)
-            if not shape_match:
-                logging.error("Data <-> cache shape mismatch. Rebuilding cache.")
-                raise FileNotFoundError
-        except FileNotFoundError:
-            data_td = np.zeros(td_cache_shape, dtype=y_td.dtype)
-            data_fd = np.zeros(fd_cache_shape, dtype=y_fd.dtype)
-
-            iter_ = tqdm(enumerate(all_measurements), total=len(all_measurements),
-                         desc="Saving as npy", colour="green")
-            for i, meas in iter_:
-                idx = self.raw_data_cache["id_map"][meas.identifier]
-                data_td[idx], data_fd[idx] = meas.get_data_td(), meas.get_data_fd()
-
-            np.save(str(cache_path / "_td_cache.npy"), data_td)
-            np.save(str(cache_path / "_fd_cache.npy"), data_fd)
-
-        self.raw_data_cache["td"], self.raw_data_cache["fd"] = data_td, data_fd
 
     def _get_ref_argmax(self, measurement_):
         ref_td = self._get_data(measurement_)
@@ -871,14 +829,16 @@ class DataSet:
 
         # phi =  - (phi_sam_corrected[freq_idx, 1] - phi_ref_corrected[freq_idx, 1])
 
-        n = 1 + phi_corrected * c_thz / (omega * d)
-        n[n < 0] = 1
-        kap = -c_thz * np.log(np.abs(sam_fd[freq_idx, 1] / ref_fd[freq_idx, 1]) * (1 + n) ** 2 / (4 * n)) / (omega * d)
-        alpha = 1e4 * 2 * omega * kap / c_thz
-        # kap = -c_thz * np.log(np.abs(sam_fd[freq_idx, 1] / ref_fd[freq_idx, 1])) / (omega * d)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            n = 1 + phi_corrected * c_thz / (omega * d)
+            n[0] = n[1]
+            n[n < 0] = 1
+            kap = -c_thz * np.log(np.abs(sam_fd[freq_idx, 1] / ref_fd[freq_idx, 1]) * (1 + n) ** 2 / (4 * n)) / (omega * d)
+            alpha = 1e4 * 2 * omega * kap / c_thz
+            refr_idx = n + 1j * kap
 
         ret = {"freq_axis": freq_axis,
-               "refr_idx": n + 1j * kap, "alpha": alpha,
+               "refr_idx": refr_idx, "alpha": alpha,
                "phi_ref": phi_ref, "phi_sam": phi_sam, "phi": phi, "phi_corrected": phi_corrected,
                }
 
@@ -889,8 +849,6 @@ class DataSet:
             fit_range = self.options["eval_opt"]["fit_range"]
         if q_space_range is None:
             q_space_range = self.options["eval_opt"]["q-space_range"]
-
-        f_idx_range = f_axis_idx_map(self.freq_axis, fit_range)
 
         min_kwargs = {"method": "Nelder-Mead",
                       "options": {
@@ -912,9 +870,7 @@ class DataSet:
             # "disp": True
         }
 
-        ref_meas_ = self.find_nearest_ref(meas_, dist_func=Dist.Time)
-
-        def calc_q_val(opt_res_):
+        def calc_q_val(opt_res_, en_plot=False):
             q_space_idx_range = f_axis_idx_map(opt_res_["freq_axis"], q_space_range)
 
             dt = np.mean(np.diff(opt_res_["freq_axis"][q_space_idx_range]))
@@ -936,12 +892,13 @@ class DataSet:
             q_val = (np.abs(y_ft)[0:])
             t_axis = t_axis[0:]
 
-            plt.figure("qval")
-            plt.plot(t_axis, q_val, label=opt_res_["d"])
-            # plt.plot(q_val, label=opt_res_["d"])
-            plt.xlabel("ps")
-            plt.legend()
-            # plt.show()
+            if en_plot:
+                plt.figure("qval")
+                plt.plot(t_axis, q_val, label=opt_res_["d"])
+                # plt.plot(q_val, label=opt_res_["d"])
+                plt.xlabel("ps")
+                plt.legend()
+                # plt.show()
 
             #t0, t1 = 0.85*3*t_diff, 1.15*3*t_diff
             #t0_idx, t1_idx = np.argmin(np.abs(t0-t_axis)), np.argmin(np.abs(t1-t_axis))
@@ -951,26 +908,40 @@ class DataSet:
 
             return np.max(q_val)
 
+        ref_meas_ = self.find_nearest_ref(meas_, dist_func=Dist.Time)
+
+        if not self.options["eval_opt"]["average"]:
+            logging.info("Single measurement evaluation")
+            logging.info(f"Reference measurement: {ref_meas_}")
+            logging.info(f"Sample measurement: {meas_}")
+        else:
+            sam_meas_list = self.get_measurement(*meas_.position, return_single=False)
+            ref_meas_list = self.get_meas_group(ref_meas_)
+
+            logging.info("Average measurement evaluation")
+            logging.info(f"Reference measurement list (count: {len(ref_meas_list)}):")
+            logging.info(f"{[meas.filepath.name for meas in ref_meas_list]}")
+            logging.info(f"Sample measurement list (count {len(sam_meas_list)}): ")
+            logging.info(f"{[meas.filepath.name for meas in sam_meas_list]}")
+
         ref_fd = self._get_data(ref_meas_, Domain.Frequency)
         sam_fd = self._get_data(meas_, Domain.Frequency)
 
-        simple_eval_res = self.single_layer_eval(meas_, freq_range=fit_range)
+        simple_eval_res = self.single_layer_eval(meas_, freq_range="full")
 
         n0 = simple_eval_res["refr_idx"]
 
         t_exp = sam_fd[:, 1] / ref_fd[:, 1]
         phi = np.unwrap(np.angle(t_exp))
 
-        phi_corrected = phase_correction(self.freq_axis, phi, en_plot=True, fit_range=(0.47, 1.05))
+        phi_fit_range = self.options["eval_opt"]["phi_fit_range"]
+        phi_corrected = phase_correction(self.freq_axis, phi, en_plot=True, fit_range=phi_fit_range)
         t_exp = np.abs(t_exp) * np.exp(1j * phi_corrected)
-
-        d0 = self.options["sample_properties"]["d"]
-        # d_axis = np.linspace(d0*0.80, d0*1.2, 3)
-        d_axis = np.linspace(d0 * 0.75, d0 * 1.25, 20)
 
         def model_opt(d_, f_idx_range_):
             t_exp_ = t_exp[f_idx_range_]
             freq_axis = self.freq_axis[f_idx_range_]
+            n0_ = n0[f_idx_range_]
 
             n_opt_res_ = np.zeros_like(freq_axis, dtype=complex)
             for f_idx, f_ in enumerate(freq_axis):
@@ -980,9 +951,9 @@ class DataSet:
 
                     return np.abs(t_exp_[f_idx] - t_mod_) ** 2
 
-                n0_ = n0[f_idx]
-                n_min, n_max = 0.90 * n0_.real, 1.10 * n0_.real
-                k_min, k_max = 0.10 * n0_.imag, 1.10 * n0_.imag
+                n0_f_idx = n0_[f_idx]
+                n_min, n_max = 0.90 * n0_f_idx.real, 1.10 * n0_f_idx.real
+                k_min, k_max = 0.10 * n0_f_idx.imag, 1.10 * n0_f_idx.imag
                 bounds = [(n_min, n_max), (k_min, k_max)]
 
                 conv, i_ = False, 0
@@ -1005,8 +976,8 @@ class DataSet:
                         conv = True
                     else:
                         c0, c1 = 0.90 + i_ * 0.02, 1.10 - i_ * 0.02
-                        n_bounds = (n0_.real * c0, n0_.real * c1)
-                        k_bounds = (n0_.imag * c0, n0_.imag * c1)
+                        n_bounds = (n0_f_idx.real * c0, n0_f_idx.real * c1)
+                        k_bounds = (n0_f_idx.imag * c0, n0_f_idx.imag * c1)
 
                         bounds = [(min(n_bounds), max(n_bounds)), (min(k_bounds), max(k_bounds))]
                     if i_ > 4:
@@ -1023,38 +994,48 @@ class DataSet:
 
             opt_res_ = {"freq_axis": freq_axis,
                         "d": d_, "n": n_opt_res_.real,
-                        "k": n_opt_res_.imag, "alpha": alpha_}
+                        "k": n_opt_res_.imag, "alpha": alpha_, "n0": n0_}
             opt_res_["q_val"] = calc_q_val(opt_res_)
 
             return opt_res_
 
+        d0 = self.options["sample_properties"]["d"]
+        d_min, d_max = int(d0 * 0.75), int(d0 * 1.25)
+        d_axis = np.linspace(d_min, d_max, 20)
+
+        f_idx_range = f_axis_idx_map(self.freq_axis, fit_range)
+
         opt_results = []
-        for d in d_axis:
+        custom_format = f"{GREEN}{{l_bar}}{{bar}}{GREEN}{{r_bar}}{RESET}"
+        pbar_ = tqdm(d_axis, total=len(d_axis), colour="green", bar_format=custom_format)
+        for d in pbar_:
+            pbar_.set_description(f"Optimizing thickness {np.round(d, 2)} µm")
             opt_res = model_opt(d, f_idx_range)
             opt_results.append(opt_res)
 
         q_vals = np.array([res["q_val"] for res in opt_results])
         q_vals = q_vals / np.max(q_vals)
 
-        best_res = opt_results[np.argmin(q_vals)]
-        d_opt = np.round(best_res["d"], 1)
+        min_d_res = opt_results[np.argmin(q_vals)]
+        d_opt = np.round(min_d_res["d"], 1)
 
-        best_res_full_range = model_opt(d_opt, f_idx_range)
+        f_idx_range = f_axis_idx_map(self.freq_axis, self.options["plot_opt"]["plot_range"])
+        best_res = model_opt(d_opt, f_idx_range)
 
-        fig, (ax0, ax1) = plt.subplots(2, 1, num="Optimal result", sharex=True)
-        ax0.plot(best_res_full_range["freq_axis"], best_res_full_range["n"], label=f"Refractive index at {d_opt} µm")
-        ax1.plot(best_res_full_range["freq_axis"], best_res_full_range["k"], label=f"Extinction coefficient {d_opt} µm")
+        fig, (ax0, ax1) = plt.subplots(2, 1, num="Optimal result", sharex=True, gridspec_kw={'hspace': 0})
+        ax0.plot(best_res["freq_axis"], best_res["n"], label=f"Refractive index at {d_opt} µm")
+        ax1.plot(best_res["freq_axis"], best_res["k"], label=f"Extinction coefficient {d_opt} µm")
 
         ax1.set_xlabel("Frequency (THz)")
         ax0.set_ylabel("Refractive index")
         ax1.set_ylabel("Extinction coefficient")
 
         plt.figure("Absorption coefficient optimum")
-        plt.plot(best_res_full_range["freq_axis"], best_res_full_range["alpha"], label=f"{d_opt} µm")
+        plt.plot(best_res["freq_axis"], best_res["alpha"], label=f"{d_opt} µm")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Absorption coefficient (1/cm)")
 
-        plt.figure("Q-Eval")
+        plt.figure("Q-Space maxima")
         """
         q_vals = []
         for opt_idx, opt_res in enumerate(opt_results):
@@ -1063,8 +1044,12 @@ class DataSet:
             # plt.plot(self.freq_axis[f_idx_range], opt_res["n"], label=d)
         """
         plt.plot(d_axis, q_vals)
-        plt.legend()
+        plt.xlabel("Thickness (µm)")
+        plt.ylabel("Maximum of q-space")
+        # plt.legend()
         # plt.show()
+
+        return best_res
 
     def _refractive_idx(self, meas_):
         return np.mean(np.real(self.single_layer_eval(meas_)["refr_idx"]))
@@ -1167,21 +1152,24 @@ class DataSet:
 
         self._update_fig_num()
 
-    def get_measurement(self, x, y) -> Measurement:
+    def get_measurement(self, x: float, y: float, return_single=True):
         meas_list = self.measurements["all"]
         pnt = (x, y)
         try:
-            key = "".join([f"{val:.3f}" for val in pnt])
-            closest_meas = self.raw_data_cache["coord_map"][key]
+            key = self.cache.coord_map_key_func(pnt)
+            found_meas_list = self.cache.coord_map[key]
         except KeyError:
-            closest_meas, best_fit_val = None, np.inf
+            found_meas_list, best_fit_val = None, np.inf
             for meas in meas_list:
                 val = abs(meas.position[0] - pnt[0]) + abs(meas.position[1] - pnt[1])
                 if val < best_fit_val:
                     best_fit_val = val
-                    closest_meas = meas
+                    found_meas_list = [meas]
 
-        return closest_meas
+        if return_single:
+            return found_meas_list[0]
+        else:
+            return found_meas_list
 
     def get_measurement_from_timestamp(self, timestamp_str):
         meas_id_ = self._timestamp2id(timestamp_str)
@@ -1244,6 +1232,32 @@ class DataSet:
 
             return meas_in_limit_range, coords
 
+
+    def get_meas_group(self, meas_):
+        # measurements with same position as meas_ sampled without interruption (compared to avg meas time)
+        coord_map_key = self.cache.coord_map_key_func(meas_.position)
+        meas_at_pos = self.cache.coord_map[coord_map_key]
+        if len(meas_at_pos) == 1:
+            return meas_at_pos
+
+        meas_idx0 = meas_at_pos.index(meas_)
+        max_dist = 2*self.dataset_properties["mean_time_diff"]
+
+        time_diff = np.diff([meas.meas_time for meas in meas_at_pos])
+        time_diff_sec = [t_diff.total_seconds() for t_diff in time_diff]
+        jump_idx_list = np.where(time_diff_sec > max_dist)[0]
+
+        interval_idx = np.digitize(meas_idx0, jump_idx_list, right=True)
+        if interval_idx == 0:
+            meas_idx_range = np.arange(0, jump_idx_list[0]+1)
+        elif interval_idx == len(jump_idx_list):
+            meas_idx_range = np.arange(jump_idx_list[-1]+1, len(meas_at_pos))
+        else:
+            meas_idx_range = np.arange(jump_idx_list[interval_idx-1]+1, jump_idx_list[interval_idx]+1)
+
+        found_meas = np.array(meas_at_pos)[meas_idx_range]
+
+        return found_meas
 
     def find_nearest_ref(self, meas_, dist_func=None):
         if not dist_func:
@@ -1530,11 +1544,10 @@ class DataSet:
             point = selected_meas.position
         elif point is not None:
             selected_meas = self.get_measurement(*point)
+            self.q_space_eval(selected_meas)
         else:
             selected_meas = self.get_measurement_from_timestamp(timestamp)
             point = selected_meas.position
-
-        self.q_space_eval(selected_meas)
 
         ref_meas = self.find_nearest_ref(selected_meas)
 

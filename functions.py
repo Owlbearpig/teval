@@ -364,6 +364,8 @@ def f_axis_idx_map(freqs, freq_range=None):
         f0_idx = int(np.argmin(np.abs(freqs - freq_range[0])))
         f1_idx = int(np.argmin(np.abs(freqs - freq_range[1])))
         f_idx = np.arange(f0_idx, f1_idx + 1)
+    elif freq_range == "full":
+        f_idx = np.ones_like(freqs, dtype=bool)
     else:
         single_freq = freq_range
         f_idx = np.array([int(np.argmin(np.abs(freqs - single_freq)))])

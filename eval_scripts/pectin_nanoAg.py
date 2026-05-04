@@ -20,8 +20,9 @@ options = {
            "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
            "remove_dc": True,
            },
-"eval_opt": {"fit_range": (0.25, 3.50), "q-space_range": (0.75, 2.00), },
-"plot_opt" : {"plot_range": (0.25, 3.9)},
+"eval_opt": {"fit_range": (0.25, 3.50), "q-space_range": (0.75, 2.00), "phi_fit_range": (0.47, 1.05),
+             "average": True},
+"plot_opt" : {"plot_range": (0.25, 3.5)},
 "shown_plots": {
     "Window": True,
     "Time domain": True,
@@ -94,19 +95,21 @@ dataset.plot_meas(pos, label="GaAs Wafer")
 dataset.plt_show()
 """
 
-for spot in range(4):
+for spot in [1, 2, 3]:
     for meas_point in meas_points:
-        if spot != 2:
-            continue
-        if str(spot) != meas_point[-1]:
-            continue
-        if "Sample5" not in meas_point:
-            continue
-
         if "Sample7" in meas_point:
             dir_name = base_dir / "2026.04.24" / "Measurement_set_sample_7"
         else:
             dir_name = base_dir / "2026.04.21" / "Measurement_Set_1"
+
+        if "Sample3" not in meas_point:
+            continue
+
+        if spot != 3:
+            continue
+            # pass
+        if spot != int(meas_point[-1]):
+            continue
 
         options["sample_properties"] = {"d": sample_thicknesses[meas_point.split("_")[0]]}
 
