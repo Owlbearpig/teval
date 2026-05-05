@@ -84,7 +84,7 @@ sample_thicknesses = {"Sample1": 89, "Sample2": 77, "Sample3": 69, "Sample4": 75
                       "Sample5": 60, "Sample6": 73, "Sample7": 89}
 
 if 'nt' in os.name:
-    base_dir = fr""
+    base_dir = Path(fr"C:\Users\alexj\Data\Pectin_set2")
 else:
     base_dir = Path(fr"/home/ftpuser/ftp/Data/Pectin_set2")
 

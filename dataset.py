@@ -967,7 +967,7 @@ class DataSet:
         n0 = simple_eval_res["refr_idx"]
 
         phi_fit_range = self.options["eval_opt"]["phi_fit_range"]
-        """
+        #"""
         phi_ref = np.unwrap(np.angle(ref_fd[:, 1]))
         phi_ref_corrected = phase_correction(self.freq_axis, phi_ref, en_plot=False, fit_range=phi_fit_range)
 
@@ -976,7 +976,7 @@ class DataSet:
         
         ref_fd[:, 1] = np.abs(ref_fd[:, 1]) * np.exp(1j * phi_ref_corrected)
         sam_fd[:, 1] = np.abs(sam_fd[:, 1]) * np.exp(1j * phi_sam_corrected)
-        """
+        #"""
 
         t_exp = sam_fd[:, 1] / ref_fd[:, 1]
 
@@ -993,7 +993,13 @@ class DataSet:
         # plt.show()
 
         # t_exp = np.abs(t_exp) * np.exp(1j * (phi_corrected + p[1]))
-        t_exp = np.abs(t_exp) * np.exp(-1j * np.unwrap(np.angle(t_exp)))
+        # t_exp = np.abs(t_exp) * np.exp(-1j * np.unwrap(np.angle(t_exp)))
+        t_exp = np.conjugate(t_exp)
+
+        plt.figure()
+        plt.plot(self.freq_axis, phi)
+        plt.plot(self.freq_axis, p[0]*self.freq_axis+p[1])
+        plt.show()
 
         # t_exp = np.abs(t_exp) * np.exp(1j * (phi_corrected - p[1]))
 
