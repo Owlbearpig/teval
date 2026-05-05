@@ -18,6 +18,7 @@ class WindowTypes(Enum):
     hann = signal.windows.hann
     gaussian = signal.windows.gaussian
     blackmanharris = signal.windows.blackmanharris
+    blackman = signal.windows.blackman
 
 def check_dict_values(new_options, default):
     for k in default:
@@ -73,6 +74,10 @@ def phase_correction(freq_axis_, phi, disable=False, fit_range=None, en_plot=Fal
     fit_slice = (freq_axis_ >= fit_range[0]) * (freq_axis_ <= fit_range[1])
     p = np.polyfit(freq_axis_[fit_slice], phi[fit_slice], 1)
 
+    if p[0] < 0:
+        phi *= -1
+        p[0] *= -1
+
     phi_corrected = phi - p[1].real
 
     if extrapolate:
@@ -80,9 +85,6 @@ def phase_correction(freq_axis_, phi, disable=False, fit_range=None, en_plot=Fal
 
     if rewrap:
         phi_corrected = np.angle(np.exp(1j * phi_corrected))
-
-    if p[0] < 0:
-        phi_corrected *= -1
 
     if en_plot:
         plt.figure("phase_correction")
@@ -163,10 +165,11 @@ def window(data_td, win_width=None, win_start=None, shift=None, en_plot=False, s
 
     if "type" in k:
         window_function = k["type"]
+        window_arr = window_function(win_width)
     else:
         window_function = WindowTypes.tukey
+        window_arr = window_function(win_width, slope)
 
-    window_arr = window_function(win_width, slope)
     window_mask = np.zeros(len(y))
     window_mask[:win_width] = window_arr
 

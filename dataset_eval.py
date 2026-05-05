@@ -719,7 +719,7 @@ class DatasetEval(DataSet):
 
         freq_fit_res = self._fit_freq_model()
         p_opt = freq_fit_res.x
-        print(freq_fit_res)
+
         res["t_mod_film"] = self._t_cond_model(self.freq_axis, p_opt)
         # best res: [ 2.720e+04 -1.130e+03  9.979e-01 -2.997e+03  4.591e+04] or [ 3.714e+04  4.980e+02  1.801e+00  5.587e+04  1.945e+00]
         # p_opt = [100, 1000, 2, 20, 0.025*16.8] # sig0, tau, wp, eps_s, eps_inf = 16.8 # 0.025*16.8

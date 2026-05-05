@@ -12,17 +12,21 @@ options = {
 "img_title": "",
 
 "pp_opt": {"window_opt": {"enabled": True,
-                          "slope": 0.05, # 0.999, # 0.99
-                          # "win_start": 0,
-                          "win_width": 80, # 18,#2*32,# 38*2, # 5*15 # 36
+                          "slope": 0.050, # 0.025 # 0.999, # 0.99
+                          "win_start": 5,
+                          "win_width": 70, # 18,#2*32,# 38*2, # 5*15 # 36
                           "type": WindowTypes.tukey,
                           },
            "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
            "remove_dc": True,
            },
-"eval_opt": {"fit_range": (0.25, 3.50), "q-space_range": (0.75, 2.00), "phi_fit_range": (0.47, 1.05),
-             "average": True},
-"plot_opt" : {"plot_range": (0.25, 3.5)},
+"eval_opt": {"fit_range": (0.35, 2.50),
+             "q-space_range": (1.00, 2.50), # "q-space_range": (0.75, 2.00),
+             "phi_fit_range": (0.47, 1.05), # "phi_fit_range": (0.47, 1.05),
+             "average": True,
+             "delta_d": 2.0, # µm
+             },
+"plot_opt" : {"plot_range": (0.40, 3.2)},
 "shown_plots": {
     "Window": True,
     "Time domain": True,
@@ -77,7 +81,7 @@ meas_points = {"Sample7_1": (84, -18), "Sample7_2": (83, -18), "Sample7_3": (83,
 sample_thicknesses = {"Sample1": 89, "Sample2": 98, "Sample3": 92, "Sample4": 98,
                       "Sample5": 101, "Sample6": 112, "Sample7": 111}
 sample_thicknesses = {"Sample1": 89, "Sample2": 77, "Sample3": 69, "Sample4": 75,
-                      "Sample5": 70, "Sample6": 73, "Sample7": 89}
+                      "Sample5": 60, "Sample6": 73, "Sample7": 89}
 
 if 'nt' in os.name:
     base_dir = fr""
@@ -102,10 +106,10 @@ for spot in [1, 2, 3]:
         else:
             dir_name = base_dir / "2026.04.21" / "Measurement_Set_1"
 
-        if "Sample3" not in meas_point:
+        if "Sample4" not in meas_point:
             continue
 
-        if spot != 3:
+        if spot != 1:
             continue
             # pass
         if spot != int(meas_point[-1]):
@@ -116,7 +120,7 @@ for spot in [1, 2, 3]:
         dataset = DataSet(dir_name, options)
         pos = meas_points[meas_point]
 
-        dataset.plot_meas(pos, label=meas_point, fig_num_ext=f"_{spot}")
+        dataset.plot_meas(pos, label=meas_point, fig_num_ext=f"")
 
 
 dataset.plt_show()
