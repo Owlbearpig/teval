@@ -12,9 +12,9 @@ options = {
 "img_title": "",
 
 "pp_opt": {"window_opt": {"enabled": True,
-                          "slope": 0.050, # 0.025 # 0.999, # 0.99
-                          "win_start": 5,
-                          "win_width": 70, # 18,#2*32,# 38*2, # 5*15 # 36
+                          "slope": 0.95, # 0.025 # 0.999, # 0.99
+                          "win_start": 0,
+                          "win_width": 35, # 18,#2*32,# 38*2, # 5*15 # 36
                           "type": WindowTypes.tukey,
                           },
            "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
@@ -24,7 +24,7 @@ options = {
              "q-space_range": (1.00, 2.50), # "q-space_range": (0.75, 2.00),
              "phi_fit_range": (0.47, 1.05), # "phi_fit_range": (0.47, 1.05),
              "average": True,
-             "delta_d": 2.0, # µm
+             "delta_d": 3.0, # µm
              },
 "plot_opt" : {"plot_range": (0.40, 3.2)},
 "shown_plots": {

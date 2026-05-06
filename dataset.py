@@ -44,6 +44,7 @@ TODOs:
 - Split DataSet into multiple smaller classes (e.g. a plotting class) "Classes should do one thing each."
 - should phi correction be a part of the pre-processing?
 - rename some keys in options dict e.g. "eval_opt" to "eval"
+- make Dataset(dict)?
 
 New ideas: add teralyzer evaluation (time consuming)
 - Add plt_show here (done)
@@ -922,11 +923,18 @@ class DataSet:
     def _calc_uncertainties(self, meas_quantities, result):
         uncertainties = {**result}
 
+        f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.options["plot_opt"]["plot_range"])
+
         sam_fd_, sam_fd_std = meas_quantities["sam_fd"], meas_quantities["sam_fd_std"]
         ref_fd_, ref_fd_std = meas_quantities["ref_fd"], meas_quantities["ref_fd_std"]
+        delta_amp = meas_quantities["t_exp_amp_std"][f_idx_plot_range, 1]
+        delta_phi = meas_quantities["t_exp_phi_std"][f_idx_plot_range, 1]
+        amp = meas_quantities["t_exp_amp"][f_idx_plot_range, 1]
+        phi = meas_quantities["t_exp_phi"][f_idx_plot_range, 1]
 
-        f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.options["plot_opt"]["plot_range"])
+
         f_axis = self.freq_axis[f_idx_plot_range]
+        w = 2 * np.pi * f_axis
 
         delta_t = TransferfunctionError(sam_fd_, ref_fd_, ref_fd_std, sam_fd_std, noise_freq=5.0)
         delta_t = delta_t[f_idx_plot_range]
@@ -939,6 +947,17 @@ class DataSet:
 
         uncertainties["delta_n"] = np.sqrt(((1 / dtdn_) * delta_t) ** 2 + ((1 / dtdn_) * dtdd_ * delta_d) ** 2)
         uncertainties["delta_alpha"] = (4 * np.pi * f_axis / (1e-4 * c_thz)) * uncertainties["delta_n"].imag
+
+        delta_k_term1 = delta_phi * -(c_thz / (w * d)) ** 2 * (n.real - 1) / (n.real * (n.real + 1))
+        delta_k_term2 = delta_amp * (c_thz / (w * d)) * (1 / amp)
+        delta_k_term3 = delta_d * (c_thz/(w*d**2)) * np.log(amp*(1+n.real)**2/(4*n))
+        delta_k = np.sqrt(np.abs(delta_k_term1)**2 + np.abs(delta_k_term2)**2 + np.abs(delta_k_term3)**2)
+
+        delta_n_term1 = delta_phi * c_thz / (w * d)
+        delta_n_term2 = delta_d * (-phi*c_thz)/(w*d**2)
+
+        uncertainties["delta_alpha"] = np.abs(4*np.pi*f_axis*delta_k / (1e-4 * c_thz))
+        uncertainties["delta_n"] = np.sqrt(np.abs(delta_n_term1)**2 + np.abs(delta_n_term2)**2) + 1j * delta_k
 
         return uncertainties
 
@@ -1172,12 +1191,14 @@ class DataSet:
         d_opt = np.round(d_opt, 0)
         fig, (ax0, ax1) = plt.subplots(2, 1, num="Optimal result", sharex=True, gridspec_kw={'hspace': 0})
         ax0.plot(best_res["freq_axis"], best_res["n"], label=f"Refractive index at {d_opt} µm")
-        ax0.fill_between(best_res["freq_axis"], best_res["n"] + delta_n.real,
-                         best_res["n"] - delta_n.real, alpha=0.2)
+        ax0.fill_between(best_res["freq_axis"],
+                         best_res["n"] + delta_n.real,
+                         best_res["n"] - delta_n.real, alpha=0.7)
 
         ax1.plot(best_res["freq_axis"], best_res["k"], label=f"Extinction coefficient {d_opt} µm")
-        ax1.fill_between(best_res["freq_axis"], best_res["k"] + delta_n.imag,
-                         best_res["k"] - delta_n.imag, alpha=0.2)
+        ax1.fill_between(best_res["freq_axis"],
+                         best_res["k"] + delta_n.imag,
+                         best_res["k"] - delta_n.imag, alpha=0.7)
 
         ax1.set_xlabel("Frequency (THz)")
         ax0.set_ylabel("Refractive index")
@@ -1185,7 +1206,9 @@ class DataSet:
 
         plt.figure("Absorption coefficient optimum")
         plt.plot(best_res["freq_axis"], best_res["alpha"], label=f"{d_opt} µm")
-        plt.fill_between(best_res["freq_axis"], best_res["alpha"] + delta_alpha, best_res["alpha"] - delta_alpha, alpha=0.2)
+        plt.fill_between(best_res["freq_axis"],
+                         best_res["alpha"] + delta_alpha,
+                         best_res["alpha"] - delta_alpha, alpha=0.7)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Absorption coefficient (1/cm)")
 
