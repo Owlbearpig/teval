@@ -63,9 +63,9 @@ def unwrap(data_fd):
     return array([data_fd[:, 0].real, np.unwrap(np.angle(y))]).T
 
 
-def phase_correction(freq_axis_, phi, disable=False, fit_range=None, en_plot=False,
+def phase_correction(freq_axis_, phi, enable=False, fit_range=None, en_plot=False,
                      extrapolate=False, rewrap=False):
-    if disable:
+    if not enable:
         return phi
 
     if fit_range is None:

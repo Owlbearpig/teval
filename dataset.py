@@ -252,6 +252,7 @@ class DataSet:
                                         "phi_fit_range": (0.47, 1.05),
                                         "average": False,
                                         "delta_d": 2.0,
+                                        "phi_offset_correction": True,
                                         },
                            "only_shown_figures": [],
                            "shown_plots": {
@@ -586,33 +587,25 @@ class DataSet:
         else:
             return data_td, do_fft(data_td)
 
-    def _get_avg_data(self, meas_list, domain=Domain.Both):
+    def _get_multi_data(self, meas_list, domain=Domain.Both):
         y0_td = self._get_data(meas_list[0])
         y0_fd = do_fft(y0_td)
 
         t_axis, f_axis = y0_td[:, 0], y0_fd[:, 0]
 
-        y_avg_td = np.zeros([len(meas_list), len(y0_td[:, 1])])
-        y_avg_fd = np.zeros([len(meas_list), len(y0_fd[:, 1])], dtype=complex)
+        data_td = np.zeros([len(meas_list), *y0_td.shape])
+        data_fd = np.zeros([len(meas_list), *y0_fd.shape], dtype=complex)
 
         for meas_idx, meas in enumerate(meas_list):
-            data_td = self._pre_process(meas)
-            y_avg_td[meas_idx, :] = data_td[:, 1]
-            data_fd = do_fft(data_td)
-            y_avg_fd[meas_idx, :] = data_fd[:, 1]
-
-        std_td = np.std(y_avg_td, ddof=1, axis=0)
-        std_fd = np.std(y_avg_fd.real, ddof=1, axis=0) + 1j * np.std(y_avg_fd.imag, ddof=1, axis=0)
-
-        data_td = np.array([t_axis, np.mean(y_avg_td, axis=0)]).T
-        data_fd = do_fft(data_td)
+            data_td[meas_idx] = self._pre_process(meas)
+            data_fd[meas_idx] = do_fft(data_td[meas_idx])
 
         if domain == Domain.Time:
-            return data_td, std_td
+            return data_td
         elif domain == Domain.Frequency:
-            return data_fd, std_fd
+            return data_fd
         else:
-            return data_td, std_td, data_fd, std_fd
+            return data_td, data_fd
 
     def _get_ref_argmax(self, measurement_):
         ref_td = self._get_data(measurement_)
@@ -819,6 +812,136 @@ class DataSet:
 
         return np.abs(t_zero_ref - t_zero_sam)
 
+    def _calc_ndim_quant(self, *arrs, op, out_like=None):
+        ndim = arrs[0].ndim
+
+        if out_like is not None:
+            val = out_like.copy()
+        else:
+            val = arrs[0].copy()
+
+        if ndim == 1:
+            val = op(*arrs)
+        elif ndim == 2:
+            val[:, 1] = op(*(a for a in arrs))
+        else:
+            for i in range(arrs[0].shape[0]):
+                val[i, :, 1] = op(*(a[i, :, :] for a in arrs))
+
+        return val
+
+    def _calc_phi(self, ref_td_, sam_td_, ref_fd_, sam_fd_):
+        phi_fit_range = self.options["eval_opt"]["phi_fit_range"]
+
+        t_axis, f_axis = ref_td_[:, 0], ref_fd_[:, 0].real
+        w_axis = 2*np.pi*f_axis
+
+        t0_ref_idx = np.argmax(np.abs(ref_td_[:, 1]))
+        t0_sam_idx = np.argmax(np.abs(sam_td_[:, 1]))
+
+        t0_ref, t0_sam = t_axis[t0_ref_idx], t_axis[t0_sam_idx]
+        t_offset = ref_td_[0, 0] - sam_td_[0, 0]
+
+        phi0_ref, phi0_sam = w_axis * t0_ref, w_axis * t0_sam
+
+        phi_r_ref = np.angle(ref_fd_[:, 1] * np.exp(-1j * phi0_ref))
+        phi_r_sam = np.angle(sam_fd_[:, 1] * np.exp(-1j * w_axis * t0_sam))
+
+        phi0_star = np.unwrap(phi_r_sam - phi_r_ref)
+
+        fit_slice = (f_axis >= phi_fit_range[0]) * (f_axis <= phi_fit_range[1])
+        p = np.polyfit(f_axis[fit_slice], phi0_star[fit_slice], 1)
+
+        phi0 = phi0_star - 2*np.pi * int(p[1] / (2*np.pi))
+
+        if not self.options["eval_opt"]["phi_offset_correction"]:
+            return phi0_star
+
+        phi = phi0 - phi0_ref + phi0_sam + t_offset
+
+        return phi
+
+    def _data_statistics(self, data):
+        def _std(data_):
+            if np.iscomplex(data_).any():
+                a = np.std(data_.real, ddof=1, axis=0)
+                b = np.std(data_.imag, ddof=1, axis=0)
+                return a + 1j * b
+            else:
+                return np.std(data_, ddof=1, axis=0)
+
+        if data.ndim <= 2:
+            avg = data
+            std = np.zeros_like(data)
+        else:
+            avg = np.mean(data, axis=0)
+            std = _std(data)
+
+        return avg, std
+
+    def _calc_meas_quantities(self, ref_meas_, meas_):
+        meas_quants = {}
+
+        is_avg_eval = self.options["eval_opt"]["average"]
+        if not is_avg_eval:
+            logging.info("Single measurement evaluation")
+            logging.info(f"Reference measurement: {ref_meas_}")
+            logging.info(f"Sample measurement: {meas_}")
+
+            ref_td, ref_fd = self._get_data(ref_meas_, Domain.Both)
+            sam_td, sam_fd = self._get_data(meas_, Domain.Both)
+
+        else:
+            ref_meas_list = self.get_meas_group(ref_meas_)
+            sam_meas_list = self.get_measurement(*meas_.position, return_single=False)
+
+            logging.info("Average measurement evaluation")
+            logging.info(f"Reference measurement list (count: {len(ref_meas_list)}):")
+            logging.info(f"{[meas.filepath.name for meas in ref_meas_list]}")
+            logging.info(f"Sample measurement list (count {len(sam_meas_list)}): ")
+            logging.info(f"{[meas.filepath.name for meas in sam_meas_list]}")
+
+            ref_td, ref_fd = self._get_multi_data(ref_meas_list, Domain.Both)
+            sam_td, sam_fd = self._get_multi_data(sam_meas_list, Domain.Both)
+
+        meas_quants["ref_td"], meas_quants["ref_td_std"] = self._data_statistics(ref_td)
+        meas_quants["sam_td"], meas_quants["sam_td_std"] = self._data_statistics(sam_td)
+        meas_quants["ref_fd"], meas_quants["ref_fd_std"] = self._data_statistics(ref_fd)
+        meas_quants["sam_fd"], meas_quants["sam_fd_std"] = self._data_statistics(sam_fd)
+
+        t_exp_amp = self._calc_ndim_quant(sam_fd, ref_fd, op=lambda a, b: np.abs(np.divide(a[:, 1], b[:, 1])))
+        t_exp_phi = self._calc_ndim_quant(ref_td, sam_td, ref_fd, sam_fd, op=self._calc_phi, out_like=ref_fd)
+        t_exp = self._calc_ndim_quant(t_exp_amp, t_exp_phi, op=lambda a, b: a[:, 1] * np.exp(-1j*b[:, 1]))
+
+        meas_quants["t_exp_amp"], meas_quants["t_exp_amp_std"] = self._data_statistics(t_exp_amp)
+        meas_quants["t_exp_phi"], meas_quants["t_exp_phi_std"] = self._data_statistics(t_exp_phi)
+        meas_quants["t_exp"], meas_quants["t_exp_std"] = self._data_statistics(t_exp)
+
+        return meas_quants
+
+    def _calc_uncertainties(self, meas_quantities, result):
+        uncertainties = {**result}
+
+        sam_fd_, sam_fd_std = meas_quantities["sam_fd"], meas_quantities["sam_fd_std"]
+        ref_fd_, ref_fd_std = meas_quantities["ref_fd"], meas_quantities["ref_fd_std"]
+
+        f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.options["plot_opt"]["plot_range"])
+        f_axis = self.freq_axis[f_idx_plot_range]
+
+        delta_t = TransferfunctionError(sam_fd_, ref_fd_, ref_fd_std, sam_fd_std, noise_freq=5.0)
+        delta_t = delta_t[f_idx_plot_range]
+        n, d = result["n"] + 1j * result["k"], result["d"]
+
+        dtdn_ = dtdn(n, d, f_axis)
+        dtdd_ = dtdd(n, d, f_axis)
+
+        delta_d = self.options["eval_opt"]["delta_d"]
+
+        uncertainties["delta_n"] = np.sqrt(((1 / dtdn_) * delta_t) ** 2 + ((1 / dtdn_) * dtdd_ * delta_d) ** 2)
+        uncertainties["delta_alpha"] = (4 * np.pi * f_axis / (1e-4 * c_thz)) * uncertainties["delta_n"].imag
+
+        return uncertainties
+
     def single_layer_eval(self, meas_, freq_range=None):
         if self.options["sample_properties"]["default_values"]:
             logging.warning(f"Using default sample properties: {self.options['sample_properties']}")
@@ -940,71 +1063,16 @@ class DataSet:
 
         ref_meas_ = self.find_nearest_ref(meas_, dist_func=Dist.Time)
 
-        if not self.options["eval_opt"]["average"]:
-            logging.info("Single measurement evaluation")
-            logging.info(f"Reference measurement: {ref_meas_}")
-            logging.info(f"Sample measurement: {meas_}")
-
-            ref_td, ref_fd = self._get_data(ref_meas_, Domain.Both)
-            sam_td, sam_fd = self._get_data(meas_, Domain.Both)
-            ref_td_std, sam_td_std = np.zeros_like(ref_td), np.zeros_like(sam_td)
-            ref_fd_std, sam_fd_std = np.zeros_like(ref_fd), np.zeros_like(sam_fd)
-        else:
-            ref_meas_list = self.get_meas_group(ref_meas_)
-            sam_meas_list = self.get_measurement(*meas_.position, return_single=False)
-
-            logging.info("Average measurement evaluation")
-            logging.info(f"Reference measurement list (count: {len(ref_meas_list)}):")
-            logging.info(f"{[meas.filepath.name for meas in ref_meas_list]}")
-            logging.info(f"Sample measurement list (count {len(sam_meas_list)}): ")
-            logging.info(f"{[meas.filepath.name for meas in sam_meas_list]}")
-
-            ref_td, ref_td_std, ref_fd, ref_fd_std = self._get_avg_data(ref_meas_list, Domain.Both)
-            sam_td, sam_td_std, sam_fd, sam_fd_std = self._get_avg_data(sam_meas_list, Domain.Both)
-
         simple_eval_res = self.single_layer_eval(meas_, freq_range="full")
 
         n0 = simple_eval_res["refr_idx"]
 
-        phi_fit_range = self.options["eval_opt"]["phi_fit_range"]
-        #"""
-        phi_ref = np.unwrap(np.angle(ref_fd[:, 1]))
-        phi_ref_corrected = phase_correction(self.freq_axis, phi_ref, en_plot=False, fit_range=phi_fit_range)
+        quants = self._calc_meas_quantities(ref_meas_, meas_)
 
-        phi_sam = np.unwrap(np.angle(sam_fd[:, 1]))
-        phi_sam_corrected = phase_correction(self.freq_axis, phi_sam, en_plot=False, fit_range=phi_fit_range)
-        
-        ref_fd[:, 1] = np.abs(ref_fd[:, 1]) * np.exp(1j * phi_ref_corrected)
-        sam_fd[:, 1] = np.abs(sam_fd[:, 1]) * np.exp(1j * phi_sam_corrected)
-        #"""
-
-        t_exp = sam_fd[:, 1] / ref_fd[:, 1]
-
-        # phi_sam_corrected += 0.164
-
-        phi = np.unwrap(np.angle(t_exp))
-
-        fit_slice = (self.freq_axis >= phi_fit_range[0]) * (self.freq_axis <= phi_fit_range[1])
-        p = np.polyfit(self.freq_axis[fit_slice], phi[fit_slice], 1)
-        print(p[1])
-        # phi_corrected = phi + p[1].real
-
-        # phi_corrected = phase_correction(self.freq_axis, phi, en_plot=True, fit_range=phi_fit_range)
-        # plt.show()
-
-        # t_exp = np.abs(t_exp) * np.exp(1j * (phi_corrected + p[1]))
-        # t_exp = np.abs(t_exp) * np.exp(-1j * np.unwrap(np.angle(t_exp)))
-        t_exp = np.conjugate(t_exp)
-
-        plt.figure()
-        plt.plot(self.freq_axis, phi)
-        plt.plot(self.freq_axis, p[0]*self.freq_axis+p[1])
-        plt.show()
-
-        # t_exp = np.abs(t_exp) * np.exp(1j * (phi_corrected - p[1]))
+        t_exp = quants["t_exp"]
 
         def model_opt(d_, f_idx_range_):
-            t_exp_ = t_exp[f_idx_range_]
+            t_exp_ = t_exp[f_idx_range_, 1]
             freq_axis = self.freq_axis[f_idx_range_]
             n0_ = n0[f_idx_range_]
 
@@ -1069,7 +1137,7 @@ class DataSet:
 
         iterations = 1
         d_opt = float(self.options["sample_properties"]["d"])
-        iter_results = {}
+        iter_results = []
         for i in range(iterations):
             s0, s1 = 0.85 + 0.05*i, 1.15 - 0.05*i
             d_min, d_max = int(d_opt * s0), int(d_opt * s1)
@@ -1089,26 +1157,19 @@ class DataSet:
             min_d_res = opt_results[np.argmin(q_vals)]
             d_opt = np.round(min_d_res["d"], 2)
 
-            iter_results[i] = (d_opt, d_axis, q_vals)
+            iter_result = (d_opt, d_axis, q_vals)
+            iter_results.append(iter_result)
 
-        d_opt, d_axis, q_vals = iter_results[iterations-1]
+        d_opt, d_axis, q_vals = iter_results[-1]
         best_res = model_opt(d_opt, f_idx_plot_range)
+
+        best_res = self._calc_uncertainties(quants, best_res)
+
+        best_res.update(quants)
+
+        delta_n, delta_alpha = best_res["delta_n"], best_res["delta_alpha"]
+
         d_opt = np.round(d_opt, 0)
-
-        delta_t = TransferfunctionError(sam_fd, ref_fd, ref_fd_std, sam_fd_std, noise_freq=5.0)
-        delta_t = delta_t[f_idx_plot_range]
-        n = best_res["n"] + 1j * best_res["k"]
-        dtdn_ = dtdn(n, d_opt, self.freq_axis[f_idx_plot_range])
-        dtdd_ = dtdd(n, d_opt, self.freq_axis[f_idx_plot_range])
-
-        delta_d = 0#self.options["eval_opt"]["delta_d"]
-        delta_n = np.sqrt(((1 / dtdn_) * delta_t)**2 + ((1 / dtdn_) * dtdd_ * delta_d)**2)
-
-        delta_alpha = (4*np.pi*self.freq_axis[f_idx_plot_range] / (1e-4*c_thz)) * delta_n.imag
-
-        best_res["sam_td"], best_res["sam_fd"] = sam_td, sam_fd
-        best_res["ref_td"], best_res["ref_fd"] = ref_td, ref_fd
-
         fig, (ax0, ax1) = plt.subplots(2, 1, num="Optimal result", sharex=True, gridspec_kw={'hspace': 0})
         ax0.plot(best_res["freq_axis"], best_res["n"], label=f"Refractive index at {d_opt} µm")
         ax0.fill_between(best_res["freq_axis"], best_res["n"] + delta_n.real,

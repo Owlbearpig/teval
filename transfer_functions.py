@@ -74,10 +74,10 @@ def TransferfunctionError(sam_fd, ref_fd, ref_fd_std, sam_fd_std, noise_freq=5.0
     cnstd = np.std(cnoise)
     dnstd = np.std(dnoise)
 
-    Astd = sam_fd_std.real
-    Bstd = sam_fd_std.imag
-    Cstd = ref_fd_std.real
-    Dstd = ref_fd_std.imag
+    Astd = sam_fd_std[:, 1].real
+    Bstd = sam_fd_std[:, 1].imag
+    Cstd = ref_fd_std[:, 1].real
+    Dstd = ref_fd_std[:, 1].imag
 
     DeltaA = (Astd * Astd + anstd * anstd) ** 0.5
     DeltaB = (Bstd * Bstd + bnstd * bnstd) ** 0.5
