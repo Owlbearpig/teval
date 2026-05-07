@@ -25,6 +25,7 @@ options = {
              "phi_fit_range": (0.47, 1.05), # "phi_fit_range": (0.47, 1.05),
              "average": True,
              "delta_d": 3.0, # µm
+             "printed_freqs": (1.0, 1.5, 2.0),
              },
 "plot_opt" : {"plot_range": (0.40, 3.2)},
 "shown_plots": {
@@ -76,7 +77,7 @@ meas_points = {"Sample7_1": (84, -18), "Sample7_2": (83, -18), "Sample7_3": (83,
                "Sample4_1": (49, 0), "Sample4_2": (48, 0), "Sample4_3": (47, 0),
                "Sample3_1": (49, -18), "Sample3_2": (48, -18), "Sample3_3": (47, -18),
                "Sample2_1": (67, -18), "Sample2_2": (66, -18), "Sample2_3": (65, -18),
-               # Sample 1 is missing (measured sample 3 twice because of wrong coordinates)
+               "Sample1_1": (83, -18), "Sample1_2": (84, -18), "Sample1_3": (85, -18),
 }
 sample_thicknesses = {"Sample1": 89, "Sample2": 98, "Sample3": 92, "Sample4": 98,
                       "Sample5": 101, "Sample6": 112, "Sample7": 111}
@@ -103,15 +104,17 @@ for spot in [1, 2, 3]:
     for meas_point in meas_points:
         if "Sample7" in meas_point:
             dir_name = base_dir / "2026.04.24" / "Measurement_set_sample_7"
+        elif "Sample1" in meas_point:
+            dir_name = base_dir / "2026.05.05" / "measurement"
         else:
             dir_name = base_dir / "2026.04.21" / "Measurement_Set_1"
 
-        if "Sample4" not in meas_point:
+        if "Sample5" not in meas_point:
             continue
 
         if spot != 1:
-            continue
-            # pass
+            pass
+
         if spot != int(meas_point[-1]):
             continue
 
@@ -120,7 +123,7 @@ for spot in [1, 2, 3]:
         dataset = DataSet(dir_name, options)
         pos = meas_points[meas_point]
 
-        dataset.plot_meas(pos, label=meas_point, fig_num_ext=f"")
+        eval_res = dataset.plot_meas(pos, label=meas_point, fig_num_ext=f"")
 
 
 dataset.plt_show()

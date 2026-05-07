@@ -45,6 +45,7 @@ TODOs:
 - should phi correction be a part of the pre-processing?
 - rename some keys in options dict e.g. "eval_opt" to "eval"
 - make Dataset(dict)?
+- q-eval: svmaf, estimate #FP reflections and FP spacing for q-space freq range
 
 New ideas: add teralyzer evaluation (time consuming)
 - Add plt_show here (done)
@@ -254,6 +255,7 @@ class DataSet:
                                         "average": False,
                                         "delta_d": 2.0,
                                         "phi_offset_correction": True,
+                                        "printed_freqs": None,
                                         },
                            "only_shown_figures": [],
                            "shown_plots": {
@@ -1154,13 +1156,13 @@ class DataSet:
         f_idx_fit_range = f_axis_idx_map(self.freq_axis, fit_range)
         f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.options["plot_opt"]["plot_range"])
 
-        iterations = 1
+        iterations = 3
         d_opt = float(self.options["sample_properties"]["d"])
         iter_results = []
         for i in range(iterations):
-            s0, s1 = 0.85 + 0.05*i, 1.15 - 0.05*i
+            s0, s1 = 0.80 + 0.07*i, 1.20 - 0.07*i
             d_min, d_max = int(d_opt * s0), int(d_opt * s1)
-            d_axis = np.linspace(d_min, d_max, 1)
+            d_axis = np.linspace(d_min, d_max, 8) # 8
 
             opt_results = []
             custom_format = f"{GREEN}{{l_bar}}{{bar}}{GREEN}{{r_bar}}{RESET}"
@@ -1189,26 +1191,31 @@ class DataSet:
         delta_n, delta_alpha = best_res["delta_n"], best_res["delta_alpha"]
 
         d_opt = np.round(d_opt, 0)
-        fig, (ax0, ax1) = plt.subplots(2, 1, num="Optimal result", sharex=True, gridspec_kw={'hspace': 0})
+        fig_num = "Optimal result"
+        if not plt.fignum_exists(fig_num):
+            fig, (ax0, ax1) = plt.subplots(2, 1, num=fig_num, sharex=True, gridspec_kw={'hspace': 0})
+            ax1.set_xlabel("Frequency (THz)")
+            ax0.set_ylabel("Refractive index")
+            ax1.set_ylabel("Extinction coefficient")
+        else:
+            fig = plt.figure(fig_num)
+            ax0, ax1 = fig.get_axes()
+
         ax0.plot(best_res["freq_axis"], best_res["n"], label=f"Refractive index at {d_opt} µm")
         ax0.fill_between(best_res["freq_axis"],
                          best_res["n"] + delta_n.real,
-                         best_res["n"] - delta_n.real, alpha=0.7)
+                         best_res["n"] - delta_n.real, alpha=0.3)
 
         ax1.plot(best_res["freq_axis"], best_res["k"], label=f"Extinction coefficient {d_opt} µm")
         ax1.fill_between(best_res["freq_axis"],
                          best_res["k"] + delta_n.imag,
-                         best_res["k"] - delta_n.imag, alpha=0.7)
-
-        ax1.set_xlabel("Frequency (THz)")
-        ax0.set_ylabel("Refractive index")
-        ax1.set_ylabel("Extinction coefficient")
+                         best_res["k"] - delta_n.imag, alpha=0.3)
 
         plt.figure("Absorption coefficient optimum")
         plt.plot(best_res["freq_axis"], best_res["alpha"], label=f"{d_opt} µm")
         plt.fill_between(best_res["freq_axis"],
                          best_res["alpha"] + delta_alpha,
-                         best_res["alpha"] - delta_alpha, alpha=0.7)
+                         best_res["alpha"] - delta_alpha, alpha=0.3)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Absorption coefficient (1/cm)")
 
@@ -1619,15 +1626,49 @@ class DataSet:
         df = pd.DataFrame(exp_dict)
         df.to_csv(save_path, index=False)
 
-    def _print_ret(self, ret_):
-        f_idx = self._selected_freq_idx()
+    def _print_ret(self, ret_, label=""):
+        if label:
+            logging.info(label)
+        freq_axis = ret_["freq_axis"].real
+        if self.options["eval_opt"]["printed_freqs"] is None:
+            f_idx_list = [self._selected_freq_idx()]
+        else:
+            printed_freq_list = list(self.options["eval_opt"]["printed_freqs"])
+            f_idx_list = np.array([np.argmin(np.abs(f-freq_axis)) for f in printed_freq_list])
+        if "k" in ret_:
+            ret_["n"] = ret_["n"] + 1j * ret_["k"]
+
+        printed_quantities = ["d", "n", "alpha"]
+        uncert_map = {"d": self.options["eval_opt"]["delta_d"], "n": ret_["delta_n"], "alpha": ret_["delta_alpha"]}
         for quantity in ret_:
-            val = ret_[quantity][f_idx]
-            if quantity == "absorb":
-                val = 20 * np.log10(val)
-            msg = f" {quantity}: {np.round(val, 2)}"
+            if quantity not in printed_quantities:
+                continue
+
+            val = ret_[quantity]
+            uncert = uncert_map[quantity]
+            msg = "\n"
+            if isinstance(val, np.ndarray):
+                for f_idx in f_idx_list:
+                    if val.ndim == 2:
+                        freq = val[f_idx, 0]
+                        val_ = val[f_idx, 1]
+                        uncert_ = uncert[f_idx, 1]
+                    else:
+                        freq = freq_axis[f_idx]
+                        val_ = val[f_idx]
+                        uncert_ = uncert[f_idx]
+                    val_ = np.round(val_, 2)
+                    uncert_ = np.round(uncert_, 2)
+                    freq = np.round(freq, 2)
+                    msg += f"{quantity}: {val_}±{uncert_} at {freq} THz\n"
+            else:
+                val_ = np.round(val, 2)
+                uncert_ = np.round(uncert, 2)
+                msg = f"{quantity}: {val_}±{uncert_}\n"
+
             if quantity == list(ret_.keys())[-1]:
                 msg += "\n"
+
             logging.info(msg)
 
     def plot_ref(self, ref_meas_=None, timestamp=None, ref_idx=None, **kwargs_):
@@ -1792,9 +1833,12 @@ class DataSet:
         phi_corrected = simple_eval_res["phi_corrected"]
         refr_idx = simple_eval_res["refr_idx"]
 
-        ret = {"freq_axis": freq_axis, "absorb": absorb, "t": t, "ref_fd": ref_fd, "sam_fd": sam_fd, "phi": phi,
-               "phi_corrected": phi_corrected, "t_amplitude": np.abs(t)}
-        self._print_ret(ret)
+        if q_eval_res is None:
+            ret = {"freq_axis": freq_axis, "absorb": absorb, "t": t, "ref_fd": ref_fd, "sam_fd": sam_fd, "phi": phi,
+                   "phi_corrected": phi_corrected, "t_amplitude": np.abs(t)}
+        else:
+            ret = q_eval_res
+        self._print_ret(ret, label)
         if en_csv_export:
             self._export_as_csv(ret, file_app=label)
 
