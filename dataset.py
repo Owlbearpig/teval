@@ -29,7 +29,7 @@ from tqdm import tqdm
 import pandas as pd
 from scipy.signal import correlate
 from scipy.stats import pearsonr
-from transfer_functions import model_1layer, TransferfunctionError, dtdn, dtdd
+from transfer_functions import model_1layer, transferfunction_error, dtdn, dtdd
 
 """
 TODOs: 
@@ -938,7 +938,7 @@ class DataSet:
         f_axis = self.freq_axis[f_idx_plot_range]
         w = 2 * np.pi * f_axis
 
-        delta_t = TransferfunctionError(sam_fd_, ref_fd_, ref_fd_std, sam_fd_std, noise_freq=5.0)
+        delta_t = transferfunction_error(sam_fd_, ref_fd_, ref_fd_std, sam_fd_std, noise_freq=5.0)
         delta_t = delta_t[f_idx_plot_range]
         n, d = result["n"] + 1j * result["k"], result["d"]
 
@@ -1018,13 +1018,13 @@ class DataSet:
 
         return ret
 
-    def q_space_eval(self, meas_, fit_range=None, q_space_range=None):
+    def q_space_eval(self, meas_, fit_range=None, q_space_range=None, **kwargs):
         if fit_range is None:
             fit_range = self.options["eval_opt"]["fit_range"]
         if q_space_range is None:
             q_space_range = self.options["eval_opt"]["q-space_range"]
 
-        min_kwargs = {"method": "Nelder-Mead",
+        minimizer_kwargs = {"method": "Nelder-Mead",
                       "options": {
                           "maxev": np.inf,
                           "maxiter": 4000,
@@ -1115,7 +1115,7 @@ class DataSet:
                     i_ += 1
                     shgo_opt_res_ = shgo(cost_fun,
                                          bounds=bounds,
-                                         minimizer_kwargs=min_kwargs,
+                                         minimizer_kwargs=minimizer_kwargs,
                                          options=shgo_options,
                                          # n=1, iters=200,
                                          )
@@ -1200,19 +1200,23 @@ class DataSet:
         else:
             fig = plt.figure(fig_num)
             ax0, ax1 = fig.get_axes()
+        if "label" in kwargs:
+            label = kwargs["label"] + f" ({d_opt} µm)"
+        else:
+            label = f"{d_opt} µm"
 
-        ax0.plot(best_res["freq_axis"], best_res["n"], label=f"Refractive index at {d_opt} µm")
+        ax0.plot(best_res["freq_axis"], best_res["n"], label=label)
         ax0.fill_between(best_res["freq_axis"],
                          best_res["n"] + delta_n.real,
                          best_res["n"] - delta_n.real, alpha=0.3)
 
-        ax1.plot(best_res["freq_axis"], best_res["k"], label=f"Extinction coefficient {d_opt} µm")
+        ax1.plot(best_res["freq_axis"], best_res["k"], label=label)
         ax1.fill_between(best_res["freq_axis"],
                          best_res["k"] + delta_n.imag,
                          best_res["k"] - delta_n.imag, alpha=0.3)
 
         plt.figure("Absorption coefficient optimum")
-        plt.plot(best_res["freq_axis"], best_res["alpha"], label=f"{d_opt} µm")
+        plt.plot(best_res["freq_axis"], best_res["alpha"], label=label)
         plt.fill_between(best_res["freq_axis"],
                          best_res["alpha"] + delta_alpha,
                          best_res["alpha"] - delta_alpha, alpha=0.3)
@@ -1606,9 +1610,7 @@ class DataSet:
         # meas time difference in hours
         return (m2.meas_time - m1.meas_time).total_seconds() / 3600
 
-    def _export_as_csv(self, dict_, file_app=None):
-        if file_app is None:
-            file_app = ""
+    def _export_as_csv(self, dict_, file_app=""):
         save_dir = self.options["result_dir"]
         save_path = save_dir / f"plotted_data_{file_app}.csv"
         logging.info(f"Exporting data to {save_path}")
@@ -1675,9 +1677,7 @@ class DataSet:
         kwargs = {**self.options["plot_opt"]}
         kwargs.update(kwargs_)
 
-        fig_num_ext = ""
-        if "fig_num_ext" in kwargs:
-            fig_num_ext += kwargs["fig_num_ext"]
+        fig_num_ext = kwargs.get("fig_num_ext", "")
 
         if (ref_meas_ is None) and (timestamp is None):
             if isinstance(ref_idx, int):
@@ -1705,10 +1705,7 @@ class DataSet:
         if kwargs["remove_t_offset"]:
             ref_td[:, 0] -= ref_td[0, 0]
 
-        if kwargs["label"]:
-            label = kwargs["label"]
-        else:
-            label = f"Reference ({ref_meas_.meas_time})"
+        label = kwargs.get("label", f"Reference ({ref_meas_.meas_time})")
 
         noise_floor = np.mean(20 * np.log10(np.abs(ref_fd[ref_fd[:, 0] > 6.0, 1]))) * kwargs["sub_noise_floor"]
 
@@ -1735,14 +1732,8 @@ class DataSet:
         td_scale = kwargs["td_scale"]
         remove_t_offset = kwargs["remove_t_offset"]
         std_limits = kwargs["err_bar_limits"] # limits of spatial coordinates to average over, for the err_bars
-        if "en_csv_export" in kwargs:
-            en_csv_export = kwargs["en_csv_export"]
-        else:
-            en_csv_export = False
-
-        fig_num_ext = ""
-        if "fig_num_ext" in kwargs:
-            fig_num_ext += kwargs["fig_num_ext"]
+        en_csv_export = kwargs.get("en_csv_export", False)
+        fig_num_ext = kwargs.get("fig_num_ext", "")
 
         plot_range = self.options["plot_opt"]["plot_range"]
         f_idx_range = f_axis_idx_map(self.freq_axis, plot_range)
@@ -1756,7 +1747,7 @@ class DataSet:
             point = selected_meas.position
         elif point is not None:
             selected_meas = self.get_measurement(*point)
-            q_eval_res = self.q_space_eval(selected_meas)
+            q_eval_res = self.q_space_eval(selected_meas, **kwargs)
         else:
             selected_meas = self.get_measurement_from_timestamp(timestamp)
             point = selected_meas.position

@@ -53,7 +53,7 @@ def model_2layer(n2_, n3_, h, d, f, n1=1, n4=1, shift_=0):
     return np.nan_to_num(t)
 
 
-def TransferfunctionError(sam_fd, ref_fd, ref_fd_std, sam_fd_std, noise_freq=5.0):
+def transferfunction_error(sam_fd, ref_fd, ref_fd_std, sam_fd_std, noise_freq=5.0):
     # H=Esam/Eref=(a+ib)/(c+id)
     # f=Re(H)
     # g=Im(H)

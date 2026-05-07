@@ -25,7 +25,7 @@ options = {
              "phi_fit_range": (0.47, 1.05), # "phi_fit_range": (0.47, 1.05),
              "average": True,
              "delta_d": 3.0, # µm
-             "printed_freqs": (1.0, 1.5, 2.0),
+             "printed_freqs": (1.0, 1.5, 1.8, 2.0),
              },
 "plot_opt" : {"plot_range": (0.40, 3.2)},
 "shown_plots": {
@@ -71,7 +71,7 @@ for meas_set in meas_dict:
     pos = meas_dict[meas_set]
     dataset.plot_meas(pos, label=meas_set, err_bar_limits=(70, 95))
 """
-meas_points = {"Sample7_1": (84, -18), "Sample7_2": (83, -18), "Sample7_3": (83, -18),
+meas_points = {"Sample7_1": (84, -18), "Sample7_2": (83, -18), "Sample7_3": (82, -18),
                "Sample6_1": (84, 0), "Sample6_2": (83, 0), "Sample6_3": (82, 0),
                "Sample5_1": (67, 0), "Sample5_2": (66, 0), "Sample5_3": (65, 0),
                "Sample4_1": (49, 0), "Sample4_2": (48, 0), "Sample4_3": (47, 0),
@@ -82,7 +82,7 @@ meas_points = {"Sample7_1": (84, -18), "Sample7_2": (83, -18), "Sample7_3": (83,
 sample_thicknesses = {"Sample1": 89, "Sample2": 98, "Sample3": 92, "Sample4": 98,
                       "Sample5": 101, "Sample6": 112, "Sample7": 111}
 sample_thicknesses = {"Sample1": 89, "Sample2": 77, "Sample3": 69, "Sample4": 75,
-                      "Sample5": 60, "Sample6": 73, "Sample7": 89}
+                      "Sample5": 60, "Sample6": 73, "Sample7": 60}
 
 if 'nt' in os.name:
     base_dir = Path(fr"C:\Users\alexj\Data\Pectin_set2")
@@ -102,6 +102,7 @@ dataset.plt_show()
 
 for spot in [1, 2, 3]:
     for meas_point in meas_points:
+        sample = meas_point.split("_")[0]
         if "Sample7" in meas_point:
             dir_name = base_dir / "2026.04.24" / "Measurement_set_sample_7"
         elif "Sample1" in meas_point:
@@ -109,21 +110,20 @@ for spot in [1, 2, 3]:
         else:
             dir_name = base_dir / "2026.04.21" / "Measurement_Set_1"
 
-        if "Sample5" not in meas_point:
-            continue
-
-        if spot != 1:
+        if sample not in ["Sample1", "Sample4", "Sample7"]:
             pass
+
+        if spot != 3:
+            continue
 
         if spot != int(meas_point[-1]):
             continue
 
-        options["sample_properties"] = {"d": sample_thicknesses[meas_point.split("_")[0]]}
+        options["sample_properties"] = {"d": sample_thicknesses[sample]}
 
         dataset = DataSet(dir_name, options)
         pos = meas_points[meas_point]
 
-        eval_res = dataset.plot_meas(pos, label=meas_point, fig_num_ext=f"")
-
+        eval_res = dataset.plot_meas(pos, label=meas_point, fig_num_ext="")
 
 dataset.plt_show()
