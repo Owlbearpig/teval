@@ -2125,8 +2125,9 @@ class DataSet:
 
             for k in plotted_climate_vals:
                 highest_correlation = [0, None]
-                for idx_shift in np.arange(-70, 71, 1):
-                    r = pearsonr(plotted_climate_vals[k], np.roll(relative_delay, idx_shift))
+                # for idx_shift in np.arange(-70, 71, 1):
+                for idx_shift in np.arange(0, 2, 1):
+                    r = pearsonr(np.diff(plotted_climate_vals[k]), np.roll(relative_delay[1:], idx_shift))
                     if np.abs(r.statistic) > np.abs(highest_correlation[0]):
                         highest_correlation = [r.statistic, idx_shift]
 
@@ -2211,13 +2212,6 @@ class DataSet:
 
         meas_time_diff = np.array([(t - t0).total_seconds() / 3600 for t in meas_time])
 
-        if quantity == ClimateQuantity.Temperature:
-            quant = temp
-            y_label = "$\Delta$T (°C)"
-        else:
-            quant = humidity
-            y_label = "Humidity (\\%)"
-
         if unit is None:
             if meas_time_diff.max() < 5 / 60:
                 conv_factor = 3600
@@ -2230,6 +2224,15 @@ class DataSet:
                 mt_unit = "hours"
         else:
             mt_unit, conv_factor = unit
+
+        if quantity == ClimateQuantity.Temperature:
+            quant = temp
+            y_label = r"$\theta$ (°C)"
+            dy_label = r"$\Delta \theta$ (mK)"
+        else:
+            quant = humidity
+            y_label = "Humidity (\\%)"
+            dy_label = "$\Delta$Humidity (m\\%)"
 
         meas_time_diff *= conv_factor
 
@@ -2282,14 +2285,21 @@ class DataSet:
                 ax0.set_ylabel(ax_list[0].get_ylabel(), c="blue")
                 # ax0.grid(c="blue")
                 ax0.grid(True)
-
+                """
                 for i, k in enumerate(quant_values):
                     ax1.plot(meas_time_diff, quant_values[k][0], c=line_colors[i], alpha=0.15)
                     ax1.plot(meas_time_diff, quant_values[k][1], c=line_colors[i], label=line_labels.get(k, k))
                 ax1.set_ylabel(y_label)
-                ax1.set_xlabel(f"Measurement time ({mt_unit})")
-                ax1.tick_params(axis="y")
                 ax1.grid(True)
+                """
+                for i, k in enumerate(quant_values):
+                    c = line_colors[i]
+                    label = line_labels.get(k, k)
+                    ax1.plot(meas_time_diff[1:], 1e3*np.diff(quant_values[k][1]), c=c, label=label)
+                ax1.set_xlabel(f"Measurement time ({mt_unit})")
+                ax1.set_ylabel(dy_label)
+                ax1.grid(True)
+                ax1.tick_params(axis="y")
 
                 #ymin_0, ymax_0 = ax0.get_ylim()
                 #ax0.set_ylim(bottom=ymin_0, top=ymax_0 - (ymax_0 - ymin_0) * 0.05)

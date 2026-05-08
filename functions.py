@@ -395,10 +395,13 @@ def moving_average(a, n=3, iterations=1):
     if n%2==0:
         n += 1
     el = (n-1)//2 # edge_len
-    for i in range(iterations):
-        ret = np.cumsum(a, dtype=float)
+
+    for _ in range(iterations):
+        a_padded = np.pad(a, (el, el), mode='reflect')
+        ret = np.cumsum(a_padded, dtype=float)
         ret[n:] = ret[n:] - ret[:-n]
-        a = np.concatenate((a[:el], ret[n - 1:] / n, a[-el:]))
+        # a = np.concatenate((a[:el], ret[n - 1:] / n, a[-el:]))
+        a = ret[n - 1:] / n
 
     return a
 
