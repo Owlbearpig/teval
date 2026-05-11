@@ -2130,11 +2130,8 @@ class DataSet:
                 highest_correlation = [0, None]
                 # for idx_shift in np.arange(-70, 71, 1):
                 for idx_shift in np.arange(0, 1, 1):
-                    print(len(plotted_climate_vals[k]), len(climate_meas_times))
-                    dq = np.gradient(plotted_climate_vals[k], climate_meas_times)
-                    r = pearsonr(dq, np.roll(relative_delay, idx_shift))
                     # r = pearsonr(np.diff(plotted_climate_vals[k]), np.roll(relative_delay[1:], idx_shift))
-                    # r = pearsonr(plotted_climate_vals[k], np.roll(relative_delay, idx_shift))
+                    r = pearsonr(plotted_climate_vals[k], np.roll(relative_delay, idx_shift))
 
                     if np.abs(r.statistic) > np.abs(highest_correlation[0]):
                         highest_correlation = [r.statistic, idx_shift]
