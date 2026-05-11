@@ -10,7 +10,8 @@ ROOT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 
 if 'posix' in os_name:
     result_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/ErrorAnalysis")
-    result_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/Pectin_NanoAg/Sample_set2/results/alex")
+    # result_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/Pectin_NanoAg/Sample_set2/results/alex")
+    result_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/ErrorAnalysis/ManuscriptFigures")
 else:
     result_dir = Path(r"C:\Users\alexj\Mega\AG\Projects\Conductivity\ErrorAnalysis")
 

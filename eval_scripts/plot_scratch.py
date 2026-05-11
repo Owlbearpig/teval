@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 from functions import WindowTypes
 import gc
 
+figure_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/ErrorAnalysis/ManuscriptFigures")
+
 options = {
 "plot_range": slice(0, 750),
 
@@ -15,6 +17,9 @@ options = {
 "pixel_interpolation": PixelInterpolation.none,
 "dist_func": Dist.Position,
 "img_title": "",
+"save_plots": True,
+"save_plots_settings": {"path": figure_dir, "filetype": "png", "suffix": "", "dpi": 300, "bbox_inches": "tight",
+                        "pad_inches": 0, "set_size_inches": (19, 9)},
 "sample_properties": {"d_1": 640,#650,
                       "d_2": 650,
                       "d_film": 0.300, },
@@ -115,7 +120,7 @@ dataset.select_freq(0.5)
 # dataset.plot_image()
 
 # dataset.system_stability_diff_plot()
-dataset.plot_system_stability(climate_log_file=r"2026-04-16 14-12-08_log_pitaya_subset.txt") # set5
+dataset.plot_system_stability(climate_log_file=r"2026-04-16 14-12-08_log_pitaya_subset_0start.txt") # set5
 # dataset.plot_system_stability(climate_log_file="2026-04-22 11-58-34_log_pitaya.txt")
 # dataset.options["pp_opt"]["window_opt"]["enabled"] = False
 # dataset.plot_ref()

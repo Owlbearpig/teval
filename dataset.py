@@ -225,6 +225,9 @@ class DataSet:
         default_options = {"log_level": LogLevel.info,
                            "result_dir": consts.result_dir,
                            "save_plots": False,
+                           "save_plots_settings": {"path": consts.result_dir, "filetype": "pdf",
+                                                   "suffix": "", "bbox_inches": 'tight', "dpi": 300, "pad_inches": 0,
+                                                   "set_size_inches": (12, 9)},
                            "excluded_areas": None,
                            "cbar_lim": (None, None),
                            "log_scale": False,
@@ -1986,7 +1989,7 @@ class DataSet:
             mt_unit = "minutes"
         else:
             conv_factor = 1
-            mt_unit = "hours"
+            mt_unit = "h"
 
         meas_times *= conv_factor
 
@@ -2064,7 +2067,7 @@ class DataSet:
 
         plt.figure("Reference delay")
         plt.title(f"Reference delay\n(relative to first measurement)")
-        plt.plot(meas_times, relative_delay, label=t0)
+        plt.plot(meas_times, relative_delay, label="Pulse shift")
         plt.xlabel(f"Measurement time ({mt_unit})")
         plt.ylabel("$\Delta$t (fs)")
 
@@ -2126,14 +2129,19 @@ class DataSet:
             for k in plotted_climate_vals:
                 highest_correlation = [0, None]
                 # for idx_shift in np.arange(-70, 71, 1):
-                for idx_shift in np.arange(0, 2, 1):
-                    r = pearsonr(np.diff(plotted_climate_vals[k]), np.roll(relative_delay[1:], idx_shift))
+                for idx_shift in np.arange(0, 1, 1):
+                    print(len(plotted_climate_vals[k]), len(climate_meas_times))
+                    dq = np.gradient(plotted_climate_vals[k], climate_meas_times)
+                    r = pearsonr(dq, np.roll(relative_delay, idx_shift))
+                    # r = pearsonr(np.diff(plotted_climate_vals[k]), np.roll(relative_delay[1:], idx_shift))
+                    # r = pearsonr(plotted_climate_vals[k], np.roll(relative_delay, idx_shift))
+
                     if np.abs(r.statistic) > np.abs(highest_correlation[0]):
                         highest_correlation = [r.statistic, idx_shift]
 
                 max_corr_val = np.round(highest_correlation[0], 3)
                 time_shift = np.round(highest_correlation[1] * meas_interval*3600, 2)
-                msg = f"Max Pearson r (climate quantity, pulse delay) for {k}: {max_corr_val}"
+                msg = f"Pearson r (climate quantity, pulse delay) for {k}: {max_corr_val}"
                 msg += f" when shifted by {time_shift} seconds"
                 logging.info(msg)
 
@@ -2221,18 +2229,18 @@ class DataSet:
                 mt_unit = "minutes"
             else:
                 conv_factor = 1
-                mt_unit = "hours"
+                mt_unit = "h"
         else:
             mt_unit, conv_factor = unit
 
         if quantity == ClimateQuantity.Temperature:
             quant = temp
             y_label = r"$\theta$ (°C)"
-            dy_label = r"$\Delta \theta$ (mK)"
+            dy_label = r"$\partial \theta / \partial t_m$" + f" (°C/{mt_unit[0]})"
         else:
             quant = humidity
             y_label = "Humidity (\\%)"
-            dy_label = "$\Delta$Humidity (m\\%)"
+            dy_label = f"$\Delta$Humidity (\\%/{mt_unit[0]})"
 
         meas_time_diff *= conv_factor
 
@@ -2263,8 +2271,8 @@ class DataSet:
             quant_values[k][1] -= offset
 
         line_colors = ["r", "b", "g", "c", "m", "y", "k"]
-        line_labels = {"Redp idx 0": "System", "Redp idx 1": "Air",
-                       "Redp idx 2": "Fiber", "Redp idx 3": "Box"}
+        line_labels = {"Redp idx 0": r"$\theta_{system}$", "Redp idx 1": r"$\theta_{air}$",
+                       "Redp idx 2": r"$\theta_{fiber}$", "Redp idx 3": r"$\theta_{box}$"}
 
         stability_figs = ["Reference zero crossing", "Stability amplitude", "Stability phase"]
         stability_figs.extend(["Reference delay"])
@@ -2275,31 +2283,60 @@ class DataSet:
                 lines = ax_list[0].get_lines()
                 plt.close(fig_label)
 
-                fig, (ax0, ax1) = plt.subplots(2, 1, num=fig_label,
+                fig, (ax0, ax1, ax2) = plt.subplots(3, 1, num=fig_label,
                                                sharex=True, gridspec_kw={'hspace': 0})
-                for line in lines:
-                    x_data = line.get_xdata()
-                    y_data = line.get_ydata()
-                    ax0.plot(x_data, y_data, color=line.get_color())
-                ax0.tick_params(axis="y", colors="blue")
-                ax0.set_ylabel(ax_list[0].get_ylabel(), c="blue")
-                # ax0.grid(c="blue")
-                ax0.grid(True)
-                """
-                for i, k in enumerate(quant_values):
-                    ax1.plot(meas_time_diff, quant_values[k][0], c=line_colors[i], alpha=0.15)
-                    ax1.plot(meas_time_diff, quant_values[k][1], c=line_colors[i], label=line_labels.get(k, k))
-                ax1.set_ylabel(y_label)
-                ax1.grid(True)
-                """
+                ax0.tick_params(bottom=False, labelbottom=False)
+                ax1.tick_params(bottom=False, labelbottom=False)
+
                 for i, k in enumerate(quant_values):
                     c = line_colors[i]
                     label = line_labels.get(k, k)
-                    ax1.plot(meas_time_diff[1:], 1e3*np.diff(quant_values[k][1]), c=c, label=label)
-                ax1.set_xlabel(f"Measurement time ({mt_unit})")
+                    # label = None
+                    ax0.plot(meas_time_diff, quant_values[k][0], c=c, alpha=0.15)
+                    ax0.plot(meas_time_diff, quant_values[k][1], c=c, label=label)
+                ax0.set_yticks([-0.25, 0, 0.25])
+                ax0.set_ylabel(y_label)
+                ax0.grid(True)
+
+                for i, k in enumerate(quant_values):
+                    dqdt = np.gradient(quant_values[k][1], np.mean(np.diff(meas_time_diff)))
+                    c = line_colors[i]
+                    label = line_labels.get(k, k)
+                    label = None
+                    ax1.plot(meas_time_diff, dqdt, c=c, label=label)
+                ax1.set_yticks([-2.6, 0, 1.6])
                 ax1.set_ylabel(dy_label)
                 ax1.grid(True)
                 ax1.tick_params(axis="y")
+
+                c = "black"
+                for line in lines:
+                    x_data = line.get_xdata()
+                    y_data = line.get_ydata()
+                    # c = line.get_color()
+                    ax2.plot(x_data, y_data, color=c, label=line.get_label())
+                if "delay" in fig_label:
+                    ax2.set_yticks([0, -50, -100])
+                ax2.tick_params(axis="y", colors=c)
+                ax2.set_ylabel(ax_list[0].get_ylabel(), c=c)
+                # ax0.grid(c="blue")
+                ax2.grid(True)
+                ax2.set_xlabel(f"Measurement time $t_m$ ({mt_unit})")
+
+                if "delay" in fig_label:
+                    h0, l0 = ax0.get_legend_handles_labels()
+                    h2, l2 = ax2.get_legend_handles_labels()
+
+                    ax0.legend(h0 + h2, l0 + l2, loc="upper right", framealpha=0.910)
+
+                fig.align_ylabels([ax0, ax1, ax2])
+                axes = [ax0, ax1, ax2]
+                labels = ["a)", "b)", "c)"]
+
+                box_style = dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.95, lw=0)
+                for ax, label in zip(axes, labels):
+                    ax.text(0.010, 0.95, label, transform=ax.transAxes,
+                            fontsize=34, fontweight="bold", va="top", ha="left", bbox=box_style)
 
                 #ymin_0, ymax_0 = ax0.get_ylim()
                 #ax0.set_ylim(bottom=ymin_0, top=ymax_0 - (ymax_0 - ymin_0) * 0.05)
@@ -2531,6 +2568,10 @@ class DataSet:
 
     def save_fig(self, fig_num_, filename=None, **kwargs):
         save_dir = Path(self.options["result_dir"])
+        filetype = self.options["save_plots_settings"]["filetype"]
+        kwargs.setdefault("dpi", self.options["save_plots_settings"]["dpi"])
+        kwargs.setdefault("bbox_inches", self.options["save_plots_settings"]["bbox_inches"])
+        kwargs.setdefault("pad_inches", self.options["save_plots_settings"]["pad_inches"])
 
         fig = plt.figure(fig_num_)
 
@@ -2547,9 +2588,10 @@ class DataSet:
             filename_s = filename_s.replace(char, '')
         filename_s.replace(" ", "_")
 
-        fig.set_size_inches((12, 9), forward=False)
+        w = self.options["save_plots_settings"]["set_size_inches"]
+        fig.set_size_inches(w=w, forward=False)
         plt.subplots_adjust(wspace=0.3)
-        plt.savefig(save_dir / (filename_s + ".pdf"), bbox_inches='tight', dpi=300, pad_inches=0, **kwargs)
+        plt.savefig(save_dir / (filename_s + f".{filetype}"), **kwargs)
 
     def plt_show(self, save_file_suffix=None, only_save_plots=False):
 
@@ -2567,10 +2609,12 @@ class DataSet:
         for fig_num in plt.get_fignums():
             fig = plt.figure(fig_num)
             fig_label = fig.get_label()
-            for ax in fig.get_axes():
-                h, labels = ax.get_legend_handles_labels()
-                if labels and not (fig_label in self.options["plot_opt"]["disable_legend"]):
-                    ax.legend()
+            axes = fig.get_axes()
+            if not any([ax.get_legend() for ax in axes]):
+                for ax in axes:
+                    h, labels = ax.get_legend_handles_labels()
+                    if labels and not (fig_label in self.options["plot_opt"]["disable_legend"]):
+                        ax.legend()
 
             if self.options["save_plots"]:
                 save_file=None
