@@ -1,4 +1,5 @@
 from dataset import Dist, QuantityEnum, PixelInterpolation, Direction, DataSet
+import os
 import logging
 from pathlib import Path
 import numpy as np
@@ -98,15 +99,18 @@ options = {
 # dataset_path = r"/media/storage/ArchivedData/Conductivity/Furtwangen/Vanadium Oxide/img5"
 
 # pulse monitoring mod
-# dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set1"
-# dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4_subset"
-# dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4"
-# dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\test\set4_test"
-# dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set4_subset"
-# dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4_subset"
-dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set5_subset"
-# dataset_path = r"/home/ftpuser/ftp/Data/Stability/TeraK15_comparison/set1"
-# dataset_path = r"/home/ftpuser/ftp/Data/Stability/TeraK15_comparison/set2_subset"
+if "nt" in os.name:
+    dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set1"
+    dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\test\set4_test"
+    dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set4_subset"
+    dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set5_subset"
+else:
+    dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4_subset"
+    dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4"
+    dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4_subset"
+    dataset_path = r"/home/ftpuser/ftp/Data/Stability/TeraK15_comparison/set1"
+    dataset_path = r"/home/ftpuser/ftp/Data/Stability/TeraK15_comparison/set2_subset"
+    dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set5_subset"
 
 dataset = DataSet(dataset_path, options)
 
