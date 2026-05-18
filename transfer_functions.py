@@ -18,15 +18,16 @@ def model_1layer(n3_, d, f, n1=1, shift_=0):
 
     t = phase_shift * e_sam / e_ref
     """
+    #"""
     exp1 = np.exp(1j * (d * w_ / c_thz) * (n3_ - 1))
     exp2 = np.exp(1j * 2 * (d * w_ / c_thz) * n3_)
-    m = 75
+    m = 15
     s = 0
     for i in range(m):
         s += (r_as**2 * exp2)**i
 
     t = (1 - r_as ** 2) * exp1 * s
-
+    #"""
     return np.nan_to_num(t)
 
 

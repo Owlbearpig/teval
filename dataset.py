@@ -1033,10 +1033,10 @@ class DataSet:
         minimizer_kwargs = {"method": "Nelder-Mead",
                       "options": {
                           "maxev": np.inf,
-                          "maxiter": 4000,
-                          "tol": 1e-12,
-                          "fatol": 1e-12,
-                          "xatol": 1e-12,
+                          "maxiter": 200,
+                          "tol": 1e-8,
+                          "fatol": 1e-8,
+                          "xatol": 1e-8,
                       }
                       }
         shgo_options = {
@@ -1054,7 +1054,8 @@ class DataSet:
             q_space_idx_range = f_axis_idx_map(opt_res_["freq_axis"], q_space_range)
 
             dt = np.mean(np.diff(opt_res_["freq_axis"][q_space_idx_range]))
-            y = opt_res_["n"][q_space_idx_range]
+            # y = opt_res_["n"][q_space_idx_range]
+            y = opt_res_["k"][q_space_idx_range]
             y = y - np.mean(y)
 
             y = scipy.signal.detrend(y, type="linear")
@@ -1175,19 +1176,23 @@ class DataSet:
         f_idx_fit_range = f_axis_idx_map(self.freq_axis, fit_range)
         f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.options["plot_opt"]["plot_range"])
 
-        iterations = 2
+        iterations = 3
         d_opt = float(self.options["sample_properties"]["d"])
         iter_results = []
+        step_size = [20, 5, 1]
         for i in range(iterations):
-            s0, s1 = 0.90 + 0.03*i, 1.10 - 0.03*i
-            d_min, d_max = int(d_opt * s0), int(d_opt * s1)
-            d_axis = np.linspace(d_min, d_max, 8)
+            #s0, s1 = 0.95 + 0.01*i, 1.05 - 0.01*i
+            #d_min, d_max = int(d_opt * s0), int(d_opt * s1)
+            d_min, d_max = d_opt - step_size[i], d_opt + step_size[i]
+            d_axis = np.linspace(d_min, d_max, 5)
 
             opt_results = []
             custom_format = f"{GREEN}{{l_bar}}{{bar}}{GREEN}{{r_bar}}{RESET}"
             pbar_ = tqdm(d_axis, total=len(d_axis), colour="green", bar_format=custom_format)
             for d in pbar_:
-                pbar_.set_description(f"Step {i+1}/{iterations}: Optimizing thickness {np.round(d, 2)} µm")
+                desc = f"Step {i+1}/{iterations}: Optimizing thickness {np.round(d, 2)} µm"
+                desc += f" of {d_axis}"
+                pbar_.set_description(desc)
                 opt_res = model_opt(d, f_idx_fit_range)
                 opt_results.append(opt_res)
 
@@ -2005,10 +2010,11 @@ class DataSet:
 
         meas_times *= conv_factor
 
+        zero_crossing = np.zeros(len(meas_set))
         for i, meas_ in enumerate(meas_set):
             ref_td, ref_fd = self._get_data(meas_, domain=Domain.Both)
 
-            # zero_crossing[i] = self._get_zero_crossing(meas_)
+            zero_crossing[i] = self._get_zero_crossing(meas_)
             relative_delay[i] = self._delay_from_phaseslope(meas_set[0], meas_)
             ampl_arr[i] = np.sum(np.abs(ref_fd[f_idx, 1]))
             angle_arr[i] = -np.angle(ref_fd[f_idx, 1])
@@ -2071,6 +2077,11 @@ class DataSet:
         plt.plot(self.freq_axis, 1e3*(phi0-phi1)/w, label=idx)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Time (fs)")
+
+        plt.figure("Interpolation zero crossing")
+        plt.plot(meas_times, zero_crossing)
+        plt.xlabel(f"Measurement time ({mt_unit})")
+        plt.ylabel("Time (ps)")
 
         plt.figure("Amp change")
         plt.plot(self.freq_axis, amp0-amp1)
@@ -2144,15 +2155,19 @@ class DataSet:
                 for k in climate_value_dict:
                     plotted_climate_vals[k][thz_meas_idx] = climate_value_dict[k][1][best_fit[0]]
 
+            plt.figure("pearsonplot")
             for k in plotted_climate_vals:
-                highest_correlation = [0, None]
+                shift_arr = np.arange(-100, 100, 1)
+                r_vals = np.zeros(len(shift_arr))
                 # for idx_shift in np.arange(-70, 71, 1):
-                for idx_shift in np.arange(0, 1, 1):
+                for i, idx_shift in enumerate(shift_arr):
                     r = pearsonr(np.diff(plotted_climate_vals[k]), np.roll(relative_delay[1:], idx_shift))
                     # r = pearsonr(plotted_climate_vals[k], np.roll(relative_delay, idx_shift))
+                    r_vals[i] = r.statistic
 
-                    if np.abs(r.statistic) > np.abs(highest_correlation[0]):
-                        highest_correlation = [r.statistic, idx_shift]
+                argmax = np.argmax(np.abs(r_vals))
+
+                highest_correlation = [r_vals[argmax], shift_arr[argmax]]
 
                 max_corr_val = np.round(highest_correlation[0], 3)
                 time_shift = np.round(highest_correlation[1] * meas_interval*3600, 2)
@@ -2160,9 +2175,19 @@ class DataSet:
                 msg += f" when shifted by {time_shift} seconds"
                 logging.info(msg)
 
+                plt.plot(shift_arr * meas_interval, r_vals, label=k)
+
             plt.figure("Climate correlation plot")
             for k in plotted_climate_vals:
-                plt.scatter(plotted_climate_vals[k], relative_delay, label=k)
+                x = np.gradient(plotted_climate_vals[k], 0.012186554258538694)
+                if "2" in k:
+                    y = relative_delay
+                    p = np.polyfit(x, y, 1)
+                    y = x*p[0]+p[1]
+                    plt.plot(x, y, label=f"linear fit {k}")
+                    print(p)
+                plt.scatter(x, relative_delay, label=k)
+                # plt.scatter(plotted_climate_vals[k], relative_delay, label=k)
             plt.ylabel("Pulse shift (fs)")
             plt.xlabel("Temperature (°C)")
 
@@ -2302,7 +2327,7 @@ class DataSet:
                        "Redp idx 2": r"$\theta_{fiber}$", "Redp idx 3": r"$\theta_{box}$"}
 
         stability_figs = ["Reference zero crossing", "Stability amplitude", "Stability phase"]
-        stability_figs.extend(["Reference delay"])
+        stability_figs.extend(["Reference delay", "Interpolation zero crossing"])
         for fig_label in stability_figs:
             if plt.fignum_exists(fig_label):
                 old_fig = plt.figure(fig_label)
@@ -2659,7 +2684,7 @@ class DataSet:
                 plt.close(fig_num)
                 continue
             for shown_plot_num in self.options["shown_plots"]:
-                if shown_plot_num in fig_label and (not self.options["shown_plots"][shown_plot_num]):
+                if shown_plot_num == fig_label and (not self.options["shown_plots"][shown_plot_num]):
                     not_shown.append(fig_label)
                     plt.close(fig_num)
             """

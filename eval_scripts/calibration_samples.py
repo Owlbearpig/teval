@@ -1,4 +1,4 @@
-from dataset import Dist, QuantityEnum, PixelInterpolation, Direction, DataSet
+from dataset import Dist, QuantityEnum, PixelInterpolation, Direction, DataSet, ClimateQuantity
 import os
 import logging
 from pathlib import Path
@@ -7,7 +7,6 @@ import matplotlib.pyplot as plt
 from functions import WindowTypes
 import gc
 
-from teval import ClimateQuantity
 
 figure_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/Calibration test samples - Andreone")
 
@@ -61,12 +60,13 @@ options = {
     "Refractive index": False,
     "Absorption coefficient": False,
     "Conductivity": True,
+    "Absorption coefficient optimum": True,
 },
 }
 
 # pulse monitoring mod
 if "nt" in os.name:
-    dataset_path = r""
+    dataset_path = r"C:\Users\alexj\Data\CalibrationSamples\Graphene"
 else:
     dataset_path = r"/home/ftpuser/ftp/Data/CalibrationSamples/Graphene"
 
