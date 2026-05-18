@@ -260,6 +260,7 @@ class DataSet:
                                         "phi_offset_correction": True,
                                         "printed_freqs": None,
                                         },
+                           "enable_q_eval": False,
                            "only_shown_figures": [],
                            "shown_plots": {
                                "Window": True,
@@ -273,7 +274,7 @@ class DataSet:
                                "Absorption coefficient": False,
                                "Conductivity": False,
                            },
-                           "plot_opt": {"plot_range": slice(0, 900),
+                           "plot_opt": {"plot_range": (0.05, 3.5),
                                         "shift_sam2ref": False,
                                         "label": "",
                                         "sub_noise_floor": False,
@@ -282,6 +283,7 @@ class DataSet:
                                         "err_bar_limits": None,
                                         "ref_err_bars": False,
                                         "stability_plot_rel_change": False,
+                                        "subtract_mean": False,
                                         "temp_sensor_idx": 0,
                                           # use first and last reference measurement to estimate uncertainty
                                         "plot_zero_crossing": False,
@@ -991,6 +993,7 @@ class DataSet:
 
         phi = - (phi_sam - phi_ref)
         phi_corrected = phase_correction(freq_axis, phi)
+        # phi_corrected = phi
 
         if freq_range is None:
             freq_idx = f_axis_idx_map(freq_axis, freq_range=self.selected_freq)
@@ -1066,16 +1069,21 @@ class DataSet:
             y_ft = np.fft.rfft(y)
             t_axis = np.fft.rfftfreq(len(y), d=dt)
 
-            q_val = (np.abs(y_ft)[0:])
+            q_val = np.abs(y_ft)[0:]
             t_axis = t_axis[0:]
 
+            fp_spacing = self.options["sample_properties"]["fp_spacing"]
+            t0 = np.argmin(np.abs(t_axis - (fp_spacing - 2)))
+            t1 = np.argmin(np.abs(t_axis - (fp_spacing + 2)))
             if en_plot:
                 plt.figure("qval")
-                plt.plot(t_axis, q_val, label=opt_res_["d"])
+                plt.plot(t_axis, q_val, label=opt_res_["d"] + " µm")
+                plt.axvline(x=t_axis[t0], color='r', linestyle='--', linewidth=2)
+                plt.axvline(x=t_axis[t1], color='r', linestyle='--', linewidth=2)
                 # plt.plot(q_val, label=opt_res_["d"])
                 plt.xlabel("ps")
                 plt.legend()
-                # plt.show()
+                plt.show()
 
             #t0, t1 = 0.85*3*t_diff, 1.15*3*t_diff
             #t0_idx, t1_idx = np.argmin(np.abs(t0-t_axis)), np.argmin(np.abs(t1-t_axis))
@@ -1083,7 +1091,7 @@ class DataSet:
             #t_diff = np.abs(self._delay_from_phaseslope(meas_, ref_meas_))
             # exit()
 
-            return np.max(q_val)
+            return np.max(q_val[t0:t1])
 
         ref_meas_ = self.find_nearest_ref(meas_, dist_func=Dist.Time)
 
@@ -1091,6 +1099,13 @@ class DataSet:
 
         n0 = simple_eval_res["refr_idx"]
 
+        """ # TODO add to final result dict and plot
+        for k in simple_eval_res:
+            plt.figure()
+            plt.plot(self.freq_axis, simple_eval_res[k], label=k)
+            plt.legend()
+        plt.show()
+        """
         quants = self._calc_meas_quantities(ref_meas_, meas_)
 
         t_exp = quants["t_exp"]
@@ -1152,6 +1167,7 @@ class DataSet:
             opt_res_ = {"freq_axis": freq_axis,
                         "d": d_, "n": n_opt_res_.real,
                         "k": n_opt_res_.imag, "alpha": alpha_, "n0": n0_}
+            # fp_spacing_estimate = ...
             opt_res_["q_val"] = calc_q_val(opt_res_, en_plot=False)
 
             return opt_res_
@@ -1159,13 +1175,13 @@ class DataSet:
         f_idx_fit_range = f_axis_idx_map(self.freq_axis, fit_range)
         f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.options["plot_opt"]["plot_range"])
 
-        iterations = 3
+        iterations = 2
         d_opt = float(self.options["sample_properties"]["d"])
         iter_results = []
         for i in range(iterations):
-            s0, s1 = 0.80 + 0.07*i, 1.20 - 0.07*i
+            s0, s1 = 0.90 + 0.03*i, 1.10 - 0.03*i
             d_min, d_max = int(d_opt * s0), int(d_opt * s1)
-            d_axis = np.linspace(d_min, d_max, 8) # 8
+            d_axis = np.linspace(d_min, d_max, 8)
 
             opt_results = []
             custom_format = f"{GREEN}{{l_bar}}{{bar}}{GREEN}{{r_bar}}{RESET}"
@@ -1750,10 +1766,12 @@ class DataSet:
             point = selected_meas.position
         elif point is not None:
             selected_meas = self.get_measurement(*point)
-            q_eval_res = self.q_space_eval(selected_meas, **kwargs)
         else:
             selected_meas = self.get_measurement_from_timestamp(timestamp)
             point = selected_meas.position
+
+        if self.options["enable_q_eval"]:
+            q_eval_res = self.q_space_eval(selected_meas, **kwargs)
 
         ref_meas = self.find_nearest_ref(selected_meas)
 
@@ -1832,7 +1850,7 @@ class DataSet:
                    "phi_corrected": phi_corrected, "t_amplitude": np.abs(t)}
         else:
             ret = q_eval_res
-        self._print_ret(ret, label)
+            self._print_ret(ret, label)
         if en_csv_export:
             self._export_as_csv(ret, file_app=label)
 
@@ -1952,12 +1970,6 @@ class DataSet:
         plt.ylabel("Phase difference (rad)")
 
     def plot_system_stability(self, climate_log_file=None, meas_set_kw=None):
-        if climate_log_file is not None:
-            climate_log_file = self._find_climate_log_file(climate_log_file)
-            if not climate_log_file:
-                logging.info("No matching climate logfile found")
-            else:
-                logging.info(f"Using climate logfile: {climate_log_file}")
         if meas_set_kw is not None:
             meas_set = []
             for meas in self.measurements["all"]:
@@ -2110,8 +2122,14 @@ class DataSet:
         plt.ylabel("1 + ln|pears_r|")
         plt.xlabel(f"Measurement time ({mt_unit})")
 
+        ret = {"meas_times": meas_times, "relative_delay": relative_delay}
+
         if climate_log_file is not None:
-            climate_meas_times, climate_value_dict = self.plot_climate(climate_log_file, unit=(mt_unit, conv_factor))
+            climate_plot_ret = self.plot_climate(climate_log_file, unit=(mt_unit, conv_factor))
+            if climate_plot_ret is not None:
+                climate_meas_times, climate_value_dict = climate_plot_ret
+            else:
+                return ret
             # climate_value_dict = key: sensor_id, dict[key] = [original_val_arr, smooth_val_arr]
 
             thz_meas_times = [meas.meas_time for meas in meas_set]
@@ -2130,8 +2148,8 @@ class DataSet:
                 highest_correlation = [0, None]
                 # for idx_shift in np.arange(-70, 71, 1):
                 for idx_shift in np.arange(0, 1, 1):
-                    # r = pearsonr(np.diff(plotted_climate_vals[k]), np.roll(relative_delay[1:], idx_shift))
-                    r = pearsonr(plotted_climate_vals[k], np.roll(relative_delay, idx_shift))
+                    r = pearsonr(np.diff(plotted_climate_vals[k]), np.roll(relative_delay[1:], idx_shift))
+                    # r = pearsonr(plotted_climate_vals[k], np.roll(relative_delay, idx_shift))
 
                     if np.abs(r.statistic) > np.abs(highest_correlation[0]):
                         highest_correlation = [r.statistic, idx_shift]
@@ -2148,7 +2166,7 @@ class DataSet:
             plt.ylabel("Pulse shift (fs)")
             plt.xlabel("Temperature (°C)")
 
-        return {"meas_times": meas_times, "relative_delay": relative_delay}
+        return ret
 
     def plot_frequency_noise(self):
         ref_meas_set = self.measurements["refs"]
@@ -2168,6 +2186,15 @@ class DataSet:
         plt.ylabel("Amplitude (dB)")
 
     def plot_climate(self, log_file, unit=None, quantity=ClimateQuantity.Temperature):
+        if log_file is not None:
+            log_file = self._find_climate_log_file(log_file)
+            if not log_file:
+                logging.info("No matching climate logfile found")
+                return None
+            else:
+                logging.info(f"Using climate logfile: {log_file}")
+        else:
+            return None
         is_rp_log = False
         if "pitaya" in str(log_file):
             is_rp_log = True
@@ -2236,7 +2263,7 @@ class DataSet:
             dy_label = r"$\partial \theta / \partial t_m$" + f" (°C/{mt_unit[0]})"
         else:
             quant = humidity
-            y_label = "Humidity (\\%)"
+            y_label = "Humidity (%)"
             dy_label = f"$\Delta$Humidity (\\%/{mt_unit[0]})"
 
         meas_time_diff *= conv_factor
@@ -2262,10 +2289,13 @@ class DataSet:
             smooth_vals = moving_average(vals, iterations=sas[0], n=sas[1])
             quant_values["Arduino"] = np.array([vals, smooth_vals])
 
-        for k in quant_values:
-            offset = np.mean(quant_values[k][0])
-            quant_values[k][0] -= offset
-            quant_values[k][1] -= offset
+        if self.options["plot_opt"]["subtract_mean"]:
+            for k in quant_values:
+                offset = np.mean(quant_values[k][0])
+                std_quant = np.std(quant_values[k][0])
+                quant_values[k][0] -= offset
+                quant_values[k][1] -= offset
+                print(k, offset, std_quant)
 
         line_colors = ["r", "b", "g", "c", "m", "y", "k"]
         line_labels = {"Redp idx 0": r"$\theta_{system}$", "Redp idx 1": r"$\theta_{air}$",
@@ -2478,6 +2508,7 @@ class DataSet:
                 measurements, coords = self.get_line(line_coord, None)
                 actual_const_coord = measurements[0].position[0]
 
+            logging.info("Calculating line values")
             vals = []
             for i, measurement in enumerate(measurements):
                 msg =  f"{round(100 * i / len(measurements), 2)} % done. "
