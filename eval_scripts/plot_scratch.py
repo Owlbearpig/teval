@@ -52,6 +52,8 @@ options = {
 },
 "plot_opt": {"shift_sam2ref": False, "stability_plot_rel_change": True, "disable_legend": [],
              "temp_sensor_idx": None, "subtract_mean": True,
+             "redp_sensor_labels": {"Redp idx 0": r"$\theta_{system\,fiber}$", "Redp idx 1": r"$\theta_{delay\,line}$",
+                                    "Redp idx 2": r"$\theta_{table\,fiber}$", "Redp idx 3": r"$\theta_{box}$"},
              },
 "enable_q_eval": False,
 "shown_plots": {
@@ -103,20 +105,24 @@ options = {
 
 # pulse monitoring mod
 if "nt" in os.name:
-    dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set1"
-    dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\test\set4_test"
-    dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set4_subset"
+    # dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set1"
+    # dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\test\set4_test"
+    # dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set4_subset"
     dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set5_subset"
 else:
-    dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4_subset"
-    dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4"
-    dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4_subset"
-    dataset_path = r"/home/ftpuser/ftp/Data/Stability/TeraK15_comparison/set1"
-    dataset_path = r"/home/ftpuser/ftp/Data/Stability/TeraK15_comparison/set2_subset"
-    dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set5_subset"
-    dataset_path = r"/home/ftpuser/ftp/Data/Stability/18052026_systemcover"
-    dataset_path = r"/home/ftpuser/ftp/Data/Stability/18052026_terasaat"
-    dataset_path = r"/home/ftpuser/ftp/Data/Stability/19052026_terasaat_largerwindow"
+    # dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4_subset"
+    # dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4"
+    # dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4_subset"
+    # dataset_path = r"/home/ftpuser/ftp/Data/Stability/TeraK15_comparison/set1"
+    # dataset_path = r"/home/ftpuser/ftp/Data/Stability/TeraK15_comparison/set2_subset"
+    # dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set5_subset"
+    # dataset_path = r"/home/ftpuser/ftp/Data/Stability/18052026_systemcover"
+    # dataset_path = r"/home/ftpuser/ftp/Data/Stability/18052026_terasaat"
+    # dataset_path = r"/home/ftpuser/ftp/Data/Stability/19052026_terasaat_largerwindow"
+    # dataset_path = r"/home/ftpuser/ftp/Data/Stability/20052026_terasaat_dlineheating"
+    dataset_path = r"/home/ftpuser/ftp/Data/Stability/20052026_terasaat_dlineheating_subset"
+
+
 
 dataset = DataSet(dataset_path, options)
 
@@ -132,7 +138,10 @@ dataset.select_freq(0.5)
 # dataset.system_stability_diff_plot()
 # dataset.plot_system_stability(climate_log_file=r"2026-04-16 14-12-08_log_pitaya_subset_0start.txt") # set5
 # dataset.plot_system_stability(climate_log_file=r"2026-05-18 11-13-04_log_pitaya_start0.txt") # systemcover
-dataset.plot_system_stability(climate_log_file=r"2026-05-18 11-13-04_log_pitaya_terasaat_widerrange_start0.txt") # terasaat
+# dataset.plot_system_stability(climate_log_file=r"2026-05-18 11-13-04_log_pitaya_terasaat_start0.txt") # terasaat
+# dataset.plot_system_stability(climate_log_file=r"2026-05-18 11-13-04_log_pitaya_terasaat_widerrange_start0.txt") # terasaat
+dataset.plot_system_stability(climate_log_file=r"2026-05-20 11-32-11_log_pitaya_start0.txt") # dline heating
+
 # dataset.plot_climate(log_file="2026-04-17 00-00-00_log_subset.txt", quantity=ClimateQuantity.Humidity)
 
 # dataset.plot_system_stability(climate_log_file="2026-04-22 11-58-34_log_pitaya.txt")

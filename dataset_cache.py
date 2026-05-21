@@ -51,7 +51,7 @@ class DatasetCache:
             data_fd = np.load(str(self.path / "_fd_cache.npy"))
             shape_match = (data_td.shape == td_cache_shape) * (data_fd.shape == fd_cache_shape)
             if not shape_match:
-                logging.error("Data <-> cache shape mismatch. Rebuilding cache.")
+                logging.error("Data <-> cache shape mismatch. Reloading data:")
                 raise FileNotFoundError
         except FileNotFoundError:
             data_td = np.zeros(td_cache_shape, dtype=y_td.dtype)

@@ -24,7 +24,6 @@ import logging
 import colorlog
 from datetime import datetime
 from dataset_cache import DatasetCache
-from streamlit import toast
 from tqdm import tqdm
 import pandas as pd
 from scipy.signal import correlate
@@ -36,6 +35,7 @@ TODOs:
 - How are measurements mapped when multiple measurements are performed at the same x-y coordinates?
 - Setting cbar lims sucks... set lims based on area min max?
 - Fix runtime / use cache for t calc?
+- check if filesizes? match when making npy array
 - window function (fuctions.py): allow negative values (wrap around) + fix plot (clipping)
 - Logging is messy, also fix log levels and RuntimeWarnings
 - freq_range variable in transmission function (and other functions?)
@@ -141,22 +141,25 @@ class LogLevel(Enum):
     error = logging.ERROR
     critical = logging.CRITICAL
 
-handler = colorlog.StreamHandler()
-formatter = colorlog.ColoredFormatter(
-    "%(log_color)s%(levelname)s: %(message)s",
-    log_colors={
-        'INFO': 'green',
-        'WARNING': 'yellow',
-        'ERROR': 'red',
-        'CRITICAL': 'red,bg_white',
-    }
-)
+def logger_config(options_):
+    handler = colorlog.StreamHandler()
+    formatter = colorlog.ColoredFormatter(
+        "%(log_color)s%(levelname)s: %(message)s",
+        log_colors={
+            'INFO': 'green',
+            'WARNING': 'yellow',
+            'ERROR': 'red',
+            'CRITICAL': 'red,bg_white',
+        }
+    )
 
-handler.setFormatter(formatter)
+    handler.setFormatter(formatter)
 
-logger = logging.getLogger()
-logger.addHandler(handler)
-logger.setLevel(logging.INFO)
+    logger = logging.getLogger()
+    logger.addHandler(handler)
+
+    log_level = options_["log_level"].value
+    logger.setLevel(log_level)
 
 class DataSet:
     def __init__(self, data_path=None, options_=None):
@@ -305,7 +308,7 @@ class DataSet:
         new_rc_params = {"savefig.directory": self.options["result_dir"]}
 
         mpl.rcParams.update(mpl_style_params(new_rc_params))
-        logging.basicConfig(level=self.options["log_level"].value)
+        logger_config(self.options)
 
     def _read_data_dir(self):
         glob = self.data_path.glob("**/*.txt")
@@ -690,14 +693,12 @@ class DataSet:
 
         n = len(y0) + len(y1)
 
-        # FFT
         Y0 = np.fft.fft(y0, n * upsample)
         Y1 = np.fft.fft(y1, n * upsample)
 
         corr = np.fft.ifft(Y1 * np.conj(Y0))
         corr = np.abs(np.fft.fftshift(corr))
 
-        # lag axis
         lags = np.arange(-len(corr) // 2, len(corr) // 2)
 
         k = np.argmax(corr)
@@ -2055,7 +2056,7 @@ class DataSet:
         phi_fft = np.fft.rfft(angle_arr)
         phi_fft_f = np.fft.rfftfreq(len(angle_arr), d=meas_interval * 3600)
 
-        plt.plot(phi_fft_f[1:], np.abs(phi_fft)[1:])
+        plt.plot(3600*phi_fft_f[1:], np.abs(phi_fft)[1:])
         plt.xlabel("Frequency (1/hour)")
         plt.ylabel("Magnitude")
 
@@ -2322,10 +2323,11 @@ class DataSet:
                 quant_values[k][1] -= offset
                 print(k, offset, std_quant)
 
-        line_colors = ["r", "b", "g", "c", "m", "y", "k"]
         line_labels = {"Redp idx 0": r"$\theta_{system}$", "Redp idx 1": r"$\theta_{air}$",
                        "Redp idx 2": r"$\theta_{fiber}$", "Redp idx 3": r"$\theta_{box}$"}
+        line_labels = self.options["plot_opt"].get("redp_sensor_labels", line_labels)
 
+        line_colors = ["r", "b", "g", "c", "m", "y", "k"]
         stability_figs = ["Reference zero crossing", "Stability amplitude", "Stability phase"]
         stability_figs.extend(["Reference delay", "Interpolation zero crossing"])
         for fig_label in stability_figs:
@@ -2346,7 +2348,7 @@ class DataSet:
                     # label = None
                     ax0.plot(meas_time_diff, quant_values[k][0], c=c, alpha=0.15)
                     ax0.plot(meas_time_diff, quant_values[k][1], c=c, label=label)
-                ax0.set_yticks([-0.25, 0, 0.25])
+                # ax0.set_yticks([-0.25, 0, 0.25])
                 ax0.set_ylabel(y_label)
                 ax0.grid(True)
 
@@ -2356,7 +2358,7 @@ class DataSet:
                     label = line_labels.get(k, k)
                     label = None
                     ax1.plot(meas_time_diff, dqdt, c=c, label=label)
-                ax1.set_yticks([-2.6, 0, 1.6])
+                # ax1.set_yticks([-2.6, 0, 1.6])
                 ax1.set_ylabel(dy_label)
                 ax1.grid(True)
                 ax1.tick_params(axis="y")
@@ -2368,7 +2370,8 @@ class DataSet:
                     # c = line.get_color()
                     ax2.plot(x_data, y_data, color=c, label=line.get_label())
                 if "delay" in fig_label:
-                    ax2.set_yticks([0, -50, -100])
+                    # ax2.set_yticks([0, -50, -100])
+                    pass
                 ax2.tick_params(axis="y", colors=c)
                 ax2.set_ylabel(ax_list[0].get_ylabel(), c=c)
                 # ax0.grid(c="blue")
@@ -2384,6 +2387,7 @@ class DataSet:
                 fig.align_ylabels([ax0, ax1, ax2])
                 axes = [ax0, ax1, ax2]
                 labels = ["a)", "b)", "c)"]
+                labels = []
 
                 box_style = dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.95, lw=0)
                 for ax, label in zip(axes, labels):
