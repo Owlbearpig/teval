@@ -121,6 +121,7 @@ else:
     # dataset_path = r"/home/ftpuser/ftp/Data/Stability/19052026_terasaat_largerwindow"
     # dataset_path = r"/home/ftpuser/ftp/Data/Stability/20052026_terasaat_dlineheating"
     dataset_path = r"/home/ftpuser/ftp/Data/Stability/20052026_terasaat_dlineheating_subset"
+    # dataset_path = r"/home/ftpuser/ftp/Data/Stability/21052026_terasaat_dlineheating_nosystemlid"
 
 
 
@@ -141,6 +142,7 @@ dataset.select_freq(0.5)
 # dataset.plot_system_stability(climate_log_file=r"2026-05-18 11-13-04_log_pitaya_terasaat_start0.txt") # terasaat
 # dataset.plot_system_stability(climate_log_file=r"2026-05-18 11-13-04_log_pitaya_terasaat_widerrange_start0.txt") # terasaat
 dataset.plot_system_stability(climate_log_file=r"2026-05-20 11-32-11_log_pitaya_start0.txt") # dline heating
+# dataset.plot_system_stability(climate_log_file=r"2026-05-21 11-41-56_log_pitaya.txt") # dline heating no lid
 
 # dataset.plot_climate(log_file="2026-04-17 00-00-00_log_subset.txt", quantity=ClimateQuantity.Humidity)
 
