@@ -40,7 +40,7 @@ options = {
              "area_fit": False,
              "sub_bounds": [(3.05, 3.14), (0.000, 0.0165)],
              "film_bounds": [(1, 25), (0, 25)],
-             # "d_opt_axis": [],
+             "d_opt_axis": [523.2, 523.25, 523.30, 523.35, 523.40, 523.45, 523.50],
              },
 "sim_opt": {"enabled": True,
             "n_sub": 3.05 + 0.005j,

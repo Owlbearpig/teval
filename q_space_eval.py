@@ -200,10 +200,9 @@ class QSpaceEval:
                         "d": d_, "n": n_opt_res_.real,
                         "k": n_opt_res_.imag, "alpha": alpha_, "n0": n0_}
             # fp_spacing_estimate = ...
-            opt_res_["q_val"] = calc_q_val(opt_res_, en_plot=False)
+            opt_res_["q_val"] = calc_q_val(opt_res_, en_plot=True)
 
             t_mod_ = model_1layer(n_opt_res_, d=d_, f=freq_axis, n1=1, shift_=0)
-            t_mod_ = model_1layer(3.44 + 0.003j, d=d_, f=freq_axis, n1=1, shift_=0)
 
             opt_res_["t_mod"] = t_mod_
             opt_res_["sam_mod"] = self.meas_quants["ref_fd"][f_idx_range_, 1] * t_mod_
@@ -214,11 +213,15 @@ class QSpaceEval:
         f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.options["plot_opt"]["plot_range"])
 
         opt_results = []
-        def opt_d_axis(d_axis_):
+        def opt_d_axis(d_axis_, it_prog=None):
             custom_format = f"{GREEN}{{l_bar}}{{bar}}{GREEN}{{r_bar}}{RESET}"
             pbar_ = tqdm(d_axis_, total=len(d_axis_), colour="green", bar_format=custom_format)
             for d in pbar_:
-                desc = f"Step {i + 1}/{iterations}: Optimizing thickness {np.round(d, 2)} µm"
+                desc = ""
+                if it_prog:
+                    desc += f"Step {it_prog[0] + 1}/{it_prog[1]}: "
+
+                desc += f"Optimizing thickness {np.round(d, 2)} µm"
                 desc += f" of {d_axis_}"
                 pbar_.set_description(desc)
                 opt_res = model_opt(d, f_idx_fit_range)
@@ -240,7 +243,7 @@ class QSpaceEval:
                 d_min, d_max = d0 - step_size[i], d0 + step_size[i]
                 d_axis = np.linspace(d_min, d_max, 5)
 
-                opt_d_axis(d_axis)
+                opt_d_axis(d_axis, it_prog=(i, iterations))
 
         opt_results = sorted(opt_results, key=lambda res: res["d"])
 
@@ -257,10 +260,9 @@ class QSpaceEval:
 
         delta_n, delta_alpha = best_res["delta_n"], best_res["delta_alpha"]
 
-        d_opt = np.round(d_opt, 0)
         fig_num = "Optimal result"
         if not plt.fignum_exists(fig_num):
-            fig, (ax0, ax1) = plt.subplots(2, 1, num=fig_num, sharex=True, gridspec_kw={'hspace': 0})
+            fig, (ax0, ax1) = plt.subplots(2, 1, num=fig_num, sharex=True, gridspec_kw={"hspace": 0})
             ax1.set_xlabel("Frequency (THz)")
             ax0.set_ylabel("Refractive index")
             ax1.set_ylabel("Extinction coefficient")
