@@ -4,8 +4,9 @@ import logging
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
-from functions import WindowTypes
+from functions import WindowTypes, f_axis_idx_map
 import gc
+from consts import c_thz, eps0_thz
 
 if "nt" in os.name:
     figure_dir = r"C:\Users\alexj\Mega\AG\Projects\Conductivity\Calibration test samples - Andreone\Results"
@@ -89,8 +90,32 @@ dataset.select_quantity(QuantityEnum.P2P)
 # dataset.select_quantity(QuantityEnum.P2P)
 
 # dataset.select_quantity(QuantityEnum.Phase)
-res, meas_quants = dataset.plot_meas((105, -8))
-print(meas_quants["t_exp"])
+res_sub, mq_sub = dataset.plot_meas((105, -8))
+res_sam, mq_sam = dataset.plot_meas((98, -8))
+freq_axis = mq_sub["freq_axis"]
+f_idx_range = f_axis_idx_map(freq_axis, freq_range=options["plot_opt"]["plot_range"])
+freq_axis = freq_axis[f_idx_range]
+t_sub = mq_sub["t_exp"][f_idx_range, 1]
+t_sam = mq_sam["t_exp"][f_idx_range, 1] * np.exp(-1j * 2*np.pi * freq_axis * 0.025)
+n_sub = res_sub["n"]
+d_film = 0.010 # µm
+
+sig_tink = (t_sub/t_sam - 1) * eps0_thz * c_thz * (1 + n_sub) / (d_film * 1e-4)
+
+fig, (ax0, ax1) = plt.subplots(nrows=2, ncols=1, num="Conductivity", sharex=True)
+ax0.set_title("Real part")
+ax0.plot(freq_axis, sig_tink.real, label="measured")
+
+ax1.set_title("Imaginary part")
+ax1.plot(freq_axis, sig_tink.imag, label="measured")
+
+ax0.set_ylabel("Conductivity (S/cm)")
+ax1.set_ylabel("Conductivity (S/cm)")
+ax1.set_xlabel("Frequency (THz)")
+
+ax0.legend()
+ax1.legend()
+
 # dataset.plot_meas(timestamp="2026-04-22T20-53-54.638573")
 # dataset.plot_image()
 
