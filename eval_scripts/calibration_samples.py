@@ -7,15 +7,17 @@ import matplotlib.pyplot as plt
 from functions import WindowTypes
 import gc
 
-
-figure_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/Calibration test samples - Andreone")
+if "nt" in os.name:
+    figure_dir = r"C:\Users\alexj\Mega\AG\Projects\Conductivity\Calibration test samples - Andreone\Results"
+else:
+    figure_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/Calibration test samples - Andreone")
 
 options = {
 "ref_pos": (10, None),
 
 # "ref_threshold": 0.90,
 "pixel_interpolation": PixelInterpolation.none,
-"dist_func": Dist.Position,
+"dist_func": Dist.Time,
 "img_title": "",
 "save_plots": False,
 "save_plots_settings": {"path": figure_dir, "filetype": "png", "suffix": "", "dpi": 300, "bbox_inches": "tight",
@@ -31,24 +33,29 @@ options = {
            "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
            "remove_dc": True,
            },
-"eval_opt": {"shift_sub": 0, # ref <-> sam pulse shift in fs
-             "shift_film": 0,
-             "sub_pnt": (32, 5), #(35, 5) # (30, 5) # (32, 5)
+"eval_opt": {#"fit_range": (0.35, 2.50),
+             #"q-space_range": (1.00, 2.50), # "q-space_range": (0.75, 2.00),
+             "phi_fit_range": (0.25, 0.55), # "phi_fit_range": (0.47, 1.05),
+             "average": False,
              "fit_range_film": (0.65, 3.2),
              "fit_range_sub": (0.5, 3.5), # (0.10, 3.0)
              "nfp": 2, # number of fp pulses contained in window ("inf" or 0=main pulse only, 1, ..., N),
              "area_fit": False,
              "sub_bounds": [(3.05, 3.14), (0.000, 0.0165)],
              "film_bounds": [(1, 25), (0, 25)],
-             "d_opt_axis": [523.2, 523.25, 523.30, 523.35, 523.40, 523.45, 523.50],
+             # "d_opt_axis": [523.2, 523.25, 523.30, 523.35, 523.40, 523.45, 523.50],
              },
 "sim_opt": {"enabled": True,
             "n_sub": 3.05 + 0.005j,
             "shift_sim": 0,
             "nfp_sim": 0,
 },
-"plot_opt": {"shift_sam2ref": False, "stability_plot_rel_change": True, "disable_legend": [],
-             "temp_sensor_idx": None, "subtract_mean": True, "plot_range": (0.25, 3.00),
+"plot_opt": {"shift_sam2ref": False,
+             "stability_plot_rel_change": True,
+             "disable_legend": [],
+             "temp_sensor_idx": None,
+             "subtract_mean": True,
+             "plot_range": (0.65, 3.00),
              },
 "shown_plots": {
     "Window": True,
@@ -74,13 +81,16 @@ else:
 dataset = DataSet(dataset_path, options)
 
 dataset.select_freq(2.0)
-dataset.select_quantity(QuantityEnum.TransmissionAmp)
-dataset.plot_line(line_coords=-8)
+dataset.select_quantity(QuantityEnum.P2P)
+#dataset.plot_line(line_coords=-8)
+#dataset.plot_line(line_coords=-12)
+#dataset.plot_line(line_coords=-14)
 # dataset.select_quantity(QuantityEnum.TransmissionPhase)
 # dataset.select_quantity(QuantityEnum.P2P)
 
 # dataset.select_quantity(QuantityEnum.Phase)
-dataset.plot_meas((105, -8))
+res, meas_quants = dataset.plot_meas((105, -8))
+print(meas_quants["t_exp"])
 # dataset.plot_meas(timestamp="2026-04-22T20-53-54.638573")
 # dataset.plot_image()
 

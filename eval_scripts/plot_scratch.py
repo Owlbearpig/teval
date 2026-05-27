@@ -7,8 +7,6 @@ import matplotlib.pyplot as plt
 from functions import WindowTypes
 import gc
 
-from teval import ClimateQuantity
-
 figure_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/ErrorAnalysis/ManuscriptFigures")
 
 options = {
@@ -109,6 +107,7 @@ if "nt" in os.name:
     # dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\test\set4_test"
     # dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set4_subset"
     dataset_path = r"C:\Users\alexj\Data\monitoring_pulse_mod\set5_subset"
+    dataset_path = r"C:\Users\alexj\Data\Stability\21052026_terasaat_dlineheating_nosystemlid"
 else:
     # dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4_subset"
     # dataset_path = r"/home/ftpuser/ftp/Data/Stability/monitoring_pulse_mod/set4"

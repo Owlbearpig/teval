@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy
-from functions import f_axis_idx_map
+from functions import f_axis_idx_map, moving_average
 from transfer_functions import model_1layer, transferfunction_error, dtdn, dtdd
 from consts import c_thz, GREEN, RESET
 from tqdm import tqdm
@@ -143,9 +143,11 @@ class QSpaceEval:
         t_exp = self.meas_quants["t_exp"]
 
         def model_opt(d_, f_idx_range_):
-            t_exp_ = t_exp[f_idx_range_, 1]
             freq_axis = self.freq_axis[f_idx_range_]
+            t_exp_ = t_exp[f_idx_range_, 1] #* np.exp(1j * 2*np.pi*freq_axis*0.150)
             n0_ = n0[f_idx_range_]
+            phi_corrected = self.ana_eval_res["phi_corrected"][f_idx_range_]
+            # t_exp_ = np.abs(t_exp_) * np.exp(1j * phi_corrected)
 
             n_opt_res_ = np.zeros_like(freq_axis, dtype=complex)
             for f_idx, f_ in enumerate(freq_axis):
@@ -154,6 +156,7 @@ class QSpaceEval:
                     t_mod_ = model_1layer(n3_, d=d_, f=f_, n1=1, shift_=0)
 
                     return np.abs(t_exp_[f_idx] - t_mod_) ** 2
+
 
                 n0_f_idx = n0_[f_idx]
                 n_min, n_max = 0.90 * n0_f_idx.real, 1.10 * n0_f_idx.real
@@ -200,7 +203,7 @@ class QSpaceEval:
                         "d": d_, "n": n_opt_res_.real,
                         "k": n_opt_res_.imag, "alpha": alpha_, "n0": n0_}
             # fp_spacing_estimate = ...
-            opt_res_["q_val"] = calc_q_val(opt_res_, en_plot=True)
+            opt_res_["q_val"] = calc_q_val(opt_res_, en_plot=False)
 
             t_mod_ = model_1layer(n_opt_res_, d=d_, f=freq_axis, n1=1, shift_=0)
 
@@ -259,6 +262,11 @@ class QSpaceEval:
         best_res = self.calc_uncertainties(best_res)
 
         delta_n, delta_alpha = best_res["delta_n"], best_res["delta_alpha"]
+
+        sas = (5, 20)
+        smoothed_quantities = ["n", "k", "alpha"]
+        for q in smoothed_quantities:
+            best_res[q] = moving_average(best_res[q], iterations=sas[0], n=sas[1])
 
         fig_num = "Optimal result"
         if not plt.fignum_exists(fig_num):

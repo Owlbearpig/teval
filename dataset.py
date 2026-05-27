@@ -206,7 +206,7 @@ class DataSet:
                            "ref_pos": (None, None),
                            "ref_threshold": 0.95,
                            "fix_ref": False, # idx of reference measurement
-                           "dist_func": Dist.Position,
+                           "dist_func": Dist.Time,
                            "pp_opt": {
                                "window_opt": {"enabled": False, "win_width": None, "win_start": None,
                                               "shift": None, "slope": 0.15, "en_plot": False,
@@ -893,8 +893,8 @@ class DataSet:
         self.options["pp_opt"]["window_opt"]["win_start"] = None
         self.options["pp_opt"]["window_opt"]["en_plot"] = False
 
-        ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Frequency)
-        sam_fd = self._get_data(meas_, Domain.Frequency)
+        ref_td, ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Both)
+        sam_td, sam_fd = self._get_data(meas_, Domain.Both)
 
         self.options["pp_opt"]["window_opt"] = og_win_setting
 
@@ -904,8 +904,9 @@ class DataSet:
         phi_sam = np.unwrap(np.angle(sam_fd[:, 1]))
 
         phi = - (phi_sam - phi_ref)
-        phi_corrected = phase_correction(freq_axis, phi)
-        # phi_corrected = phi
+        phi_corrected = self._calc_phi(ref_td, sam_td, ref_fd, sam_fd)
+        phi_corrected = np.abs(phi_corrected)
+        # phi_corrected = phase_correction(freq_axis, phi, extrapolate=False)
 
         if freq_range is None:
             freq_idx = f_axis_idx_map(freq_axis, freq_range=self.selected_freq)
@@ -1151,7 +1152,6 @@ class DataSet:
         closest_ref, best_fit_val = None, np.inf
         for ref_meas in self.measurements["refs"]:
             dist_val = dist_func(ref_meas, meas_)
-
             if np.abs(dist_val) < np.abs(best_fit_val):
                 best_fit_val = dist_val
                 closest_ref = ref_meas
@@ -1635,7 +1635,7 @@ class DataSet:
             plt.xlabel("Frequency (THz)")
             plt.ylabel("Conductivity (S/cm)")
 
-        return ret
+        return ret, meas_quants
 
     def plot_meas_phi_diff(self, pnt0, pnt1, label=""):
         plot_range = self.options["plot_opt"]["plot_range"]
