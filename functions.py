@@ -165,7 +165,10 @@ def window(data_td, win_width=None, win_start=None, shift=None, en_plot=False, s
 
     if "type" in k:
         window_function = k["type"]
-        window_arr = window_function(win_width)
+        if window_function == WindowTypes.tukey:
+            window_arr = window_function(win_width, slope)
+        else:
+            window_arr = window_function(win_width)
     else:
         window_function = WindowTypes.tukey
         window_arr = window_function(win_width, slope)
@@ -498,3 +501,23 @@ def smooth_temp_values(meas_time, temp, humidity):
     # smooth()
 
     return meas_time, temp, humidity
+
+def arr_statistics(arr):
+    def _std(data_):
+        if np.iscomplex(data_).any():
+            a = np.std(data_.real, ddof=1, axis=0)
+            b = np.std(data_.imag, ddof=1, axis=0)
+            return a + 1j * b
+        else:
+            return np.std(data_, ddof=1, axis=0)
+
+    if arr.ndim <= 2:
+        avg = arr
+        std = np.zeros_like(arr)
+    else:
+        avg = np.mean(arr, axis=0)
+        std = _std(arr)
+
+    return avg, std
+
+

@@ -20,12 +20,12 @@ options = {
 "save_plots": False,
 "save_plots_settings": {"path": figure_dir, "filetype": "png", "suffix": "", "dpi": 300, "bbox_inches": "tight",
                         "pad_inches": 0, "set_size_inches": (19, 9)},
-"sample_properties": {"d": 534, "fp_spacing": 12.0},
+"sample_properties": {"d": 520, "fp_spacing": 12.0},
 "enable_q_eval": True,
-"pp_opt": {"window_opt": {"enabled": False,
-                          # "slope": 0.01, # 0.999, # 0.99
+"pp_opt": {"window_opt": {"enabled": True,
+                          "slope": 0.05, # 0.999, # 0.99
                           #"win_start": 27, # 11,
-                          "win_width": 11, # 18,#2*32,# 38*2, # 5*15 # 36
+                          "win_width": 61, # 18,#2*32,# 38*2, # 5*15 # 36
                           "type": WindowTypes.tukey,
                           },
            "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
@@ -40,6 +40,7 @@ options = {
              "area_fit": False,
              "sub_bounds": [(3.05, 3.14), (0.000, 0.0165)],
              "film_bounds": [(1, 25), (0, 25)],
+             # "d_opt_axis": [],
              },
 "sim_opt": {"enabled": True,
             "n_sub": 3.05 + 0.005j,

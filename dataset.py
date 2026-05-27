@@ -12,14 +12,14 @@ from numpy import array
 from pathlib import Path
 import numpy as np
 from functions import unwrap, window, local_minima_1d, check_dict_values, WindowTypes, butter_filt
+from functions import phase_correction, do_fft, do_ifft, f_axis_idx_map, remove_offset, moving_average
+from functions import arr_statistics
 from measurements import MeasurementType, Measurement, Domain, meas_id_func
 from mpl_settings import mpl_style_params
 import matplotlib as mpl
-from functions import phase_correction, do_fft, do_ifft, f_axis_idx_map, remove_offset, moving_average
-from consts import c_thz, eps0_thz, GREEN, RESET
+from consts import c_thz, eps0_thz
 from scipy.optimize import shgo
 from scipy.special import erfc
-from enum import Enum
 import logging
 import colorlog
 from datetime import datetime
@@ -28,7 +28,8 @@ from tqdm import tqdm
 import pandas as pd
 from scipy.signal import correlate
 from scipy.stats import pearsonr
-from transfer_functions import model_1layer, transferfunction_error, dtdn, dtdd
+from q_space_eval import QSpaceEval
+from enums import *
 
 """
 TODOs: 
@@ -56,44 +57,6 @@ New ideas: add teralyzer evaluation (time consuming)
 [l] = µm, [t] = ps, [alpha] = 1/cm (absorption coe.), [sigma] = S/cm, [eps0] = Siemens * ps,
 [f] = THz (1/ps), [c_thz] = µm/ps
 """
-
-
-class PixelInterpolation(Enum):
-    # imshow(interpolation=pixel_interpolation)
-    none = None
-    antialiased = 'antialiased'
-    nearest = 'nearest'
-    bilinear = 'bilinear'
-    bicubic = 'bicubic'
-    spline16 = 'spline16'
-    spline36 = 'spline36'
-    hanning = 'hanning'
-    hamming = 'hamming'
-    hermite = 'hermite'
-    kaiser = 'kaiser'
-    quadric = 'quadric'
-    catrom = 'catrom'
-    gaussian = 'gaussian'
-    bessel = 'bessel'
-    mitchell = 'mitchell'
-    sinc = 'sinc'
-    lanczos = 'lanczos'
-    blackman = 'blackman'
-
-class ClimateQuantity(Enum):
-    Temperature = 0
-    Humidity = 1
-
-
-class Dist(Enum):
-    Position = lambda meas1, meas2: (abs(meas1.position[0] - meas2.position[0]) +
-                                     abs(meas1.position[1] - meas2.position[1]))
-    Time = lambda meas1, meas2: (meas1.meas_time - meas2.meas_time).total_seconds()
-
-
-class Direction(Enum):
-    Horizontal = 0
-    Vertical = 1
 
 
 class Quantity:
@@ -262,6 +225,7 @@ class DataSet:
                                         "delta_d": 2.0,
                                         "phi_offset_correction": True,
                                         "printed_freqs": None,
+                                        "d_opt_axis": None,
                                         },
                            "enable_q_eval": False,
                            "only_shown_figures": [],
@@ -291,6 +255,11 @@ class DataSet:
                                           # use first and last reference measurement to estimate uncertainty
                                         "plot_zero_crossing": False,
                                         "disable_legend": [], # list of fig_nums for which to disable legends
+                                        "redp_sensor_labels":
+                                            {"Redp idx 0": r"$\theta_{system}$",
+                                             "Redp idx 1": r"$\theta_{air}$",
+                                             "Redp idx 2": r"$\theta_{fiber}$",
+                                             "Redp idx 3": r"$\theta_{box}$"},
                                         }
                            }
         if "sample_properties" in options_:
@@ -870,26 +839,9 @@ class DataSet:
 
         return phi
 
-    def _data_statistics(self, data):
-        def _std(data_):
-            if np.iscomplex(data_).any():
-                a = np.std(data_.real, ddof=1, axis=0)
-                b = np.std(data_.imag, ddof=1, axis=0)
-                return a + 1j * b
-            else:
-                return np.std(data_, ddof=1, axis=0)
-
-        if data.ndim <= 2:
-            avg = data
-            std = np.zeros_like(data)
-        else:
-            avg = np.mean(data, axis=0)
-            std = _std(data)
-
-        return avg, std
-
     def _calc_meas_quantities(self, ref_meas_, meas_):
         meas_quants = {}
+        meas_quants["freq_axis"] = self.freq_axis
 
         is_avg_eval = self.options["eval_opt"]["average"]
         if not is_avg_eval:
@@ -913,61 +865,20 @@ class DataSet:
             ref_td, ref_fd = self._get_multi_data(ref_meas_list, Domain.Both)
             sam_td, sam_fd = self._get_multi_data(sam_meas_list, Domain.Both)
 
-        meas_quants["ref_td"], meas_quants["ref_td_std"] = self._data_statistics(ref_td)
-        meas_quants["sam_td"], meas_quants["sam_td_std"] = self._data_statistics(sam_td)
-        meas_quants["ref_fd"], meas_quants["ref_fd_std"] = self._data_statistics(ref_fd)
-        meas_quants["sam_fd"], meas_quants["sam_fd_std"] = self._data_statistics(sam_fd)
+        meas_quants["ref_td"], meas_quants["ref_td_std"] = arr_statistics(ref_td)
+        meas_quants["sam_td"], meas_quants["sam_td_std"] = arr_statistics(sam_td)
+        meas_quants["ref_fd"], meas_quants["ref_fd_std"] = arr_statistics(ref_fd)
+        meas_quants["sam_fd"], meas_quants["sam_fd_std"] = arr_statistics(sam_fd)
 
         t_exp_amp = self._calc_ndim_quant(sam_fd, ref_fd, op=lambda a, b: np.abs(np.divide(a[:, 1], b[:, 1])))
         t_exp_phi = self._calc_ndim_quant(ref_td, sam_td, ref_fd, sam_fd, op=self._calc_phi, out_like=ref_fd)
         t_exp = self._calc_ndim_quant(t_exp_amp, t_exp_phi, op=lambda a, b: a[:, 1] * np.exp(-1j*b[:, 1]))
 
-        meas_quants["t_exp_amp"], meas_quants["t_exp_amp_std"] = self._data_statistics(t_exp_amp)
-        meas_quants["t_exp_phi"], meas_quants["t_exp_phi_std"] = self._data_statistics(t_exp_phi)
-        meas_quants["t_exp"], meas_quants["t_exp_std"] = self._data_statistics(t_exp)
+        meas_quants["t_exp_amp"], meas_quants["t_exp_amp_std"] = arr_statistics(t_exp_amp)
+        meas_quants["t_exp_phi"], meas_quants["t_exp_phi_std"] = arr_statistics(t_exp_phi)
+        meas_quants["t_exp"], meas_quants["t_exp_std"] = arr_statistics(t_exp)
 
         return meas_quants
-
-    def _calc_uncertainties(self, meas_quantities, result):
-        uncertainties = {**result}
-
-        f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.options["plot_opt"]["plot_range"])
-
-        sam_fd_, sam_fd_std = meas_quantities["sam_fd"], meas_quantities["sam_fd_std"]
-        ref_fd_, ref_fd_std = meas_quantities["ref_fd"], meas_quantities["ref_fd_std"]
-        delta_amp = meas_quantities["t_exp_amp_std"][f_idx_plot_range, 1]
-        delta_phi = meas_quantities["t_exp_phi_std"][f_idx_plot_range, 1]
-        amp = meas_quantities["t_exp_amp"][f_idx_plot_range, 1]
-        phi = meas_quantities["t_exp_phi"][f_idx_plot_range, 1]
-
-
-        f_axis = self.freq_axis[f_idx_plot_range]
-        w = 2 * np.pi * f_axis
-
-        delta_t = transferfunction_error(sam_fd_, ref_fd_, ref_fd_std, sam_fd_std, noise_freq=5.0)
-        delta_t = delta_t[f_idx_plot_range]
-        n, d = result["n"] + 1j * result["k"], result["d"]
-
-        dtdn_ = dtdn(n, d, f_axis)
-        dtdd_ = dtdd(n, d, f_axis)
-
-        delta_d = self.options["eval_opt"]["delta_d"]
-
-        uncertainties["delta_n"] = np.sqrt(((1 / dtdn_) * delta_t) ** 2 + ((1 / dtdn_) * dtdd_ * delta_d) ** 2)
-        uncertainties["delta_alpha"] = (4 * np.pi * f_axis / (1e-4 * c_thz)) * uncertainties["delta_n"].imag
-
-        delta_k_term1 = delta_phi * -(c_thz / (w * d)) ** 2 * (n.real - 1) / (n.real * (n.real + 1))
-        delta_k_term2 = delta_amp * (c_thz / (w * d)) * (1 / amp)
-        delta_k_term3 = delta_d * (c_thz/(w*d**2)) * np.log(amp*(1+n.real)**2/(4*n))
-        delta_k = np.sqrt(np.abs(delta_k_term1)**2 + np.abs(delta_k_term2)**2 + np.abs(delta_k_term3)**2)
-
-        delta_n_term1 = delta_phi * c_thz / (w * d)
-        delta_n_term2 = delta_d * (-phi*c_thz)/(w*d**2)
-
-        uncertainties["delta_alpha"] = np.abs(4*np.pi*f_axis*delta_k / (1e-4 * c_thz))
-        uncertainties["delta_n"] = np.sqrt(np.abs(delta_n_term1)**2 + np.abs(delta_n_term2)**2) + 1j * delta_k
-
-        return uncertainties
 
     def single_layer_eval(self, meas_, freq_range=None):
         if self.options["sample_properties"]["default_values"]:
@@ -1024,238 +935,6 @@ class DataSet:
                }
 
         return ret
-
-    def q_space_eval(self, meas_, fit_range=None, q_space_range=None, **kwargs):
-        if fit_range is None:
-            fit_range = self.options["eval_opt"]["fit_range"]
-        if q_space_range is None:
-            q_space_range = self.options["eval_opt"]["q-space_range"]
-
-        minimizer_kwargs = {"method": "Nelder-Mead",
-                      "options": {
-                          "maxev": np.inf,
-                          "maxiter": 200,
-                          "tol": 1e-8,
-                          "fatol": 1e-8,
-                          "xatol": 1e-8,
-                      }
-                      }
-        shgo_options = {
-            # "maxfev": np.inf,
-            # "f_tol": 1e-12,
-            # "maxiter": 4000,
-            # "ftol": 1e-12,
-            # "xtol": 1e-12,
-            # "maxev": 4000,
-            # "minimize_every_iter": True,
-            # "disp": True
-        }
-
-        def calc_q_val(opt_res_, en_plot=False):
-            q_space_idx_range = f_axis_idx_map(opt_res_["freq_axis"], q_space_range)
-
-            dt = np.mean(np.diff(opt_res_["freq_axis"][q_space_idx_range]))
-            # y = opt_res_["n"][q_space_idx_range]
-            y = opt_res_["k"][q_space_idx_range]
-            y = y - np.mean(y)
-
-            y = scipy.signal.detrend(y, type="linear")
-
-            y = np.array([opt_res_["freq_axis"][q_space_idx_range], y]).T
-            # y = window(y, win_width=len(y), win_start=0, shift=40, en_plot=True, type=WindowTypes.hann)
-
-            y = y[:, 1]
-
-            y = np.concatenate([np.zeros(3*len(y)), y, np.zeros(3*len(y))])
-
-            y_ft = np.fft.rfft(y)
-            t_axis = np.fft.rfftfreq(len(y), d=dt)
-
-            q_val = np.abs(y_ft)[0:]
-            t_axis = t_axis[0:]
-
-            fp_spacing = self.options["sample_properties"]["fp_spacing"]
-            t0 = np.argmin(np.abs(t_axis - (fp_spacing - 2)))
-            t1 = np.argmin(np.abs(t_axis - (fp_spacing + 2)))
-            if en_plot:
-                plt.figure("qval")
-                plt.plot(t_axis, q_val, label=opt_res_["d"] + " µm")
-                plt.axvline(x=t_axis[t0], color='r', linestyle='--', linewidth=2)
-                plt.axvline(x=t_axis[t1], color='r', linestyle='--', linewidth=2)
-                # plt.plot(q_val, label=opt_res_["d"])
-                plt.xlabel("ps")
-                plt.legend()
-                plt.show()
-
-            #t0, t1 = 0.85*3*t_diff, 1.15*3*t_diff
-            #t0_idx, t1_idx = np.argmin(np.abs(t0-t_axis)), np.argmin(np.abs(t1-t_axis))
-            #print(t_axis[t0_idx], t_axis[t1_idx], t_diff)
-            #t_diff = np.abs(self._delay_from_phaseslope(meas_, ref_meas_))
-            # exit()
-
-            return np.max(q_val[t0:t1])
-
-        ref_meas_ = self.find_nearest_ref(meas_, dist_func=Dist.Time)
-
-        simple_eval_res = self.single_layer_eval(meas_, freq_range="full")
-
-        n0 = simple_eval_res["refr_idx"]
-
-        """ # TODO add to final result dict and plot
-        for k in simple_eval_res:
-            plt.figure()
-            plt.plot(self.freq_axis, simple_eval_res[k], label=k)
-            plt.legend()
-        plt.show()
-        """
-        quants = self._calc_meas_quantities(ref_meas_, meas_)
-
-        t_exp = quants["t_exp"]
-
-        def model_opt(d_, f_idx_range_):
-            t_exp_ = t_exp[f_idx_range_, 1]
-            freq_axis = self.freq_axis[f_idx_range_]
-            n0_ = n0[f_idx_range_]
-
-            n_opt_res_ = np.zeros_like(freq_axis, dtype=complex)
-            for f_idx, f_ in enumerate(freq_axis):
-                def cost_fun(p):
-                    n3_ = p[0] + 1j * p[1]
-                    t_mod_ = model_1layer(n3_, d=d_, f=f_, n1=1, shift_=0)
-
-                    return np.abs(t_exp_[f_idx] - t_mod_) ** 2
-
-                n0_f_idx = n0_[f_idx]
-                n_min, n_max = 0.90 * n0_f_idx.real, 1.10 * n0_f_idx.real
-                k_min, k_max = 0.10 * n0_f_idx.imag, 1.10 * n0_f_idx.imag
-                bounds = [(n_min, n_max), (k_min, k_max)]
-
-                conv, i_ = False, 0
-                while not conv:
-                    i_ += 1
-                    shgo_opt_res_ = shgo(cost_fun,
-                                         bounds=bounds,
-                                         minimizer_kwargs=minimizer_kwargs,
-                                         options=shgo_options,
-                                         # n=1, iters=200,
-                                         )
-
-                    x = shgo_opt_res_.x
-                    n_opt_res_[f_idx] = x[0] + 1j * x[1]
-                    if f_idx == 0:
-                        break
-
-                    diff = (n_opt_res_[f_idx].real - n_opt_res_[f_idx - 1].real)
-                    if np.abs(diff) < 0.10:
-                        conv = True
-                    else:
-                        c0, c1 = 0.90 + i_ * 0.02, 1.10 - i_ * 0.02
-                        n_bounds = (n0_f_idx.real * c0, n0_f_idx.real * c1)
-                        k_bounds = (n0_f_idx.imag * c0, n0_f_idx.imag * c1)
-
-                        bounds = [(min(n_bounds), max(n_bounds)), (min(k_bounds), max(k_bounds))]
-                    if i_ > 4:
-                        n_prev = n_opt_res_[f_idx - 1]
-                        c0, c1 = 0.90 + i_ * 0.01, 1.10 - i_ * 0.01
-                        n_bounds = (n_prev.real * c0, n_prev.real * c1)
-                        k_bounds = (n_prev.imag * c0, n_prev.imag * c1)
-
-                        bounds = [(min(n_bounds), max(n_bounds)), (min(k_bounds), max(k_bounds))]
-                    if i_ > 5:
-                        break
-
-            alpha_ = freq_axis * 4 * np.pi * n_opt_res_.imag / (1e-4 * c_thz)
-
-            opt_res_ = {"freq_axis": freq_axis,
-                        "d": d_, "n": n_opt_res_.real,
-                        "k": n_opt_res_.imag, "alpha": alpha_, "n0": n0_}
-            # fp_spacing_estimate = ...
-            opt_res_["q_val"] = calc_q_val(opt_res_, en_plot=False)
-
-            return opt_res_
-
-        f_idx_fit_range = f_axis_idx_map(self.freq_axis, fit_range)
-        f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.options["plot_opt"]["plot_range"])
-
-        iterations = 3
-        d_opt = float(self.options["sample_properties"]["d"])
-        iter_results = []
-        step_size = [20, 5, 1]
-        for i in range(iterations):
-            #s0, s1 = 0.95 + 0.01*i, 1.05 - 0.01*i
-            #d_min, d_max = int(d_opt * s0), int(d_opt * s1)
-            d_min, d_max = d_opt - step_size[i], d_opt + step_size[i]
-            d_axis = np.linspace(d_min, d_max, 5)
-
-            opt_results = []
-            custom_format = f"{GREEN}{{l_bar}}{{bar}}{GREEN}{{r_bar}}{RESET}"
-            pbar_ = tqdm(d_axis, total=len(d_axis), colour="green", bar_format=custom_format)
-            for d in pbar_:
-                desc = f"Step {i+1}/{iterations}: Optimizing thickness {np.round(d, 2)} µm"
-                desc += f" of {d_axis}"
-                pbar_.set_description(desc)
-                opt_res = model_opt(d, f_idx_fit_range)
-                opt_results.append(opt_res)
-
-            q_vals = np.array([res["q_val"] for res in opt_results])
-            q_vals = q_vals / np.max(q_vals)
-
-            min_d_res = opt_results[np.argmin(q_vals)]
-            d_opt = np.round(min_d_res["d"], 2)
-
-            iter_result = (d_opt, d_axis, q_vals)
-            iter_results.append(iter_result)
-
-        d_opt, d_axis, q_vals = iter_results[-1]
-        best_res = model_opt(d_opt, f_idx_plot_range)
-
-        best_res = self._calc_uncertainties(quants, best_res)
-
-        best_res.update(quants)
-
-        delta_n, delta_alpha = best_res["delta_n"], best_res["delta_alpha"]
-
-        d_opt = np.round(d_opt, 0)
-        fig_num = "Optimal result"
-        if not plt.fignum_exists(fig_num):
-            fig, (ax0, ax1) = plt.subplots(2, 1, num=fig_num, sharex=True, gridspec_kw={'hspace': 0})
-            ax1.set_xlabel("Frequency (THz)")
-            ax0.set_ylabel("Refractive index")
-            ax1.set_ylabel("Extinction coefficient")
-        else:
-            fig = plt.figure(fig_num)
-            ax0, ax1 = fig.get_axes()
-        if "label" in kwargs:
-            label = kwargs["label"] + f" ({d_opt} µm)"
-        else:
-            label = f"{d_opt} µm"
-
-        ax0.plot(best_res["freq_axis"], best_res["n"], label=label)
-        ax0.fill_between(best_res["freq_axis"],
-                         best_res["n"] + delta_n.real,
-                         best_res["n"] - delta_n.real, alpha=0.3)
-
-        ax1.plot(best_res["freq_axis"], best_res["k"], label=label)
-        ax1.fill_between(best_res["freq_axis"],
-                         best_res["k"] + delta_n.imag,
-                         best_res["k"] - delta_n.imag, alpha=0.3)
-
-        plt.figure("Absorption coefficient optimum")
-        plt.plot(best_res["freq_axis"], best_res["alpha"], label=label)
-        plt.fill_between(best_res["freq_axis"],
-                         best_res["alpha"] + delta_alpha,
-                         best_res["alpha"] - delta_alpha, alpha=0.3)
-        plt.xlabel("Frequency (THz)")
-        plt.ylabel("Absorption coefficient (1/cm)")
-
-        plt.figure("Q-Space maxima")
-        plt.plot(d_axis, q_vals)
-        plt.xlabel("Thickness (µm)")
-        plt.ylabel("Maximum of q-space")
-        # plt.legend()
-        # plt.show()
-
-        return best_res
 
     def _refractive_idx(self, meas_):
         return np.mean(np.real(self.single_layer_eval(meas_)["refr_idx"]))
@@ -1776,10 +1455,15 @@ class DataSet:
             selected_meas = self.get_measurement_from_timestamp(timestamp)
             point = selected_meas.position
 
-        if self.options["enable_q_eval"]:
-            q_eval_res = self.q_space_eval(selected_meas, **kwargs)
-
         ref_meas = self.find_nearest_ref(selected_meas)
+
+        meas_quants = self._calc_meas_quantities(ref_meas, selected_meas)
+
+        if self.options["enable_q_eval"]:
+            ana_eval_res = self.single_layer_eval(selected_meas, freq_range="full")
+
+            q_eval = QSpaceEval(self.options, meas_quants, ana_eval_res)
+            q_eval_res = q_eval.q_space_eval(**kwargs)
 
         logging.info(f"Plotting point {point}")
         logging.info(f"Reference measurement: {ref_meas}")
@@ -1796,10 +1480,9 @@ class DataSet:
         #ref_fd[:, 1] = np.abs(ref_fd[:, 1]) * np.exp(-1j*np.angle(ref_fd[:, 1]))
         #ref_td = do_ifft(ref_fd, conj=False)
         self.options["pp_opt"]["window_opt"]["fig_label"] = "sam"
-        sam_td, sam_fd = self._get_data(selected_meas, domain=Domain.Both)
-        if q_eval_res is not None:
-            sam_td, sam_fd = q_eval_res["sam_td"], q_eval_res["sam_fd"]
-            ref_td, ref_fd = q_eval_res["ref_td"], q_eval_res["ref_fd"]
+
+        sam_td, sam_fd = meas_quants["sam_td"], meas_quants["sam_fd"]
+        ref_td, ref_fd = meas_quants["ref_td"], meas_quants["ref_fd"]
 
         if self.options["plot_opt"]["shift_sam2ref"]:
             shift_t = np.abs(np.argmax(ref_td[:, 1]) - np.argmax(sam_td[:, 1]))
@@ -1810,6 +1493,7 @@ class DataSet:
         if remove_t_offset:
             sam_td[:, 0] -= sam_td[0, 0]
 
+        # TODO is this needed? Get error bars from arr_stat function ?
         err_bar_range = None
         if std_limits:
             meas_line, coords = self.get_line(y=0, limits=std_limits)
@@ -1851,6 +1535,7 @@ class DataSet:
         phi_corrected = simple_eval_res["phi_corrected"]
         refr_idx = simple_eval_res["refr_idx"]
 
+        # TODO FIX correct return of measurement quantities and calculated quantities
         if q_eval_res is None:
             ret = {"freq_axis": freq_axis, "absorb": absorb, "t": t, "ref_fd": ref_fd, "sam_fd": sam_fd, "phi": phi,
                    "phi_corrected": phi_corrected, "t_amplitude": np.abs(t)}
@@ -2178,17 +1863,18 @@ class DataSet:
 
                 plt.plot(shift_arr * meas_interval, r_vals, label=k)
 
+            label_map = self.options["plot_opt"]["redp_sensor_labels"]
             plt.figure("Climate correlation plot")
             for k in plotted_climate_vals:
                 x = np.gradient(plotted_climate_vals[k], 0.012186554258538694)
-                if "2" in k:
+                x = plotted_climate_vals[k]
+                if "0" in k:
                     y = relative_delay
                     p = np.polyfit(x, y, 1)
                     y = x*p[0]+p[1]
-                    plt.plot(x, y, label=f"linear fit {k}")
+                    plt.plot(x, y, label=f"linear fit {label_map[k]}")
                     print(p)
-                plt.scatter(x, relative_delay, label=k)
-                # plt.scatter(plotted_climate_vals[k], relative_delay, label=k)
+                plt.scatter(x, relative_delay, label=label_map[k])
             plt.ylabel("Pulse shift (fs)")
             plt.xlabel("Temperature (°C)")
 
@@ -2323,9 +2009,8 @@ class DataSet:
                 quant_values[k][1] -= offset
                 print(k, offset, std_quant)
 
-        line_labels = {"Redp idx 0": r"$\theta_{system}$", "Redp idx 1": r"$\theta_{air}$",
-                       "Redp idx 2": r"$\theta_{fiber}$", "Redp idx 3": r"$\theta_{box}$"}
-        line_labels = self.options["plot_opt"].get("redp_sensor_labels", line_labels)
+
+        line_labels = self.options["plot_opt"]["redp_sensor_labels"]
 
         line_colors = ["r", "b", "g", "c", "m", "y", "k"]
         stability_figs = ["Reference zero crossing", "Stability amplitude", "Stability phase"]

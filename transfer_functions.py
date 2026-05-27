@@ -21,7 +21,7 @@ def model_1layer(n3_, d, f, n1=1, shift_=0):
     #"""
     exp1 = np.exp(1j * (d * w_ / c_thz) * (n3_ - 1))
     exp2 = np.exp(1j * 2 * (d * w_ / c_thz) * n3_)
-    m = 15
+    m = 3
     s = 0
     for i in range(m):
         s += (r_as**2 * exp2)**i
