@@ -6,18 +6,9 @@ from datetime import datetime
 from numpy.fft import fft, fftfreq, rfft, rfftfreq
 from functions import window, remove_offset
 from enum import Enum
+from config import MeasurementType
 
 meas_id_func = lambda meas_datetime: int((meas_datetime - datetime.min).total_seconds() * 1e6)
-
-class Domain(Enum):
-    Time = 0
-    Frequency = 1
-    Both = 2
-
-
-class MeasurementType(Enum):
-    REF = 1
-    SAM = 2
 
 
 class Measurement:

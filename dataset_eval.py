@@ -21,8 +21,8 @@ class DataSetType(Enum):
 
 class DatasetEval(DataSet):
 
-    def __init__(self, dataset_path, sub_dataset_path=None, options_=None):
-        super().__init__(dataset_path, options_)
+    def __init__(self, dataset_path, sub_dataset_path=None, settings=None):
+        super().__init__(dataset_path, settings)
         self._check_options()
         self._link_sub_dataset(sub_dataset_path)
         self._opt_consts = {}

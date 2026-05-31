@@ -1,4 +1,6 @@
-from dataset import Dist, QuantityEnum, PixelInterpolation, Direction, DataSet, ClimateQuantity
+from common.components import ComponentBase
+from config import Dist, QuantityEnum, WindowOpt, PpOpt, AppSettings, SavePlotsSettings
+from dataset import DataSet
 import os
 import logging
 from pathlib import Path
@@ -6,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from functions import WindowTypes, f_axis_idx_map
 import gc
-from consts import c_thz, eps0_thz
+from common.consts import c_thz, eps0_thz
 
 if "nt" in os.name:
     figure_dir = r"C:\Users\alexj\Mega\AG\Projects\Conductivity\Calibration test samples - Andreone\Results"
@@ -14,13 +16,6 @@ else:
     figure_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/Calibration test samples - Andreone")
 
 options = {
-"ref_pos": (10, None),
-
-# "ref_threshold": 0.90,
-"pixel_interpolation": PixelInterpolation.none,
-"dist_func": Dist.Time,
-"img_title": "",
-"save_plots": False,
 "save_plots_settings": {"path": figure_dir, "filetype": "png", "suffix": "", "dpi": 300, "bbox_inches": "tight",
                         "pad_inches": 0, "set_size_inches": (19, 9)},
 "sample_properties": {"d": 520, "fp_spacing": 12.0},
@@ -79,7 +74,12 @@ if "nt" in os.name:
 else:
     dataset_path = r"/home/ftpuser/ftp/Data/CalibrationSamples/Graphene"
 
-dataset = DataSet(dataset_path, options)
+dataset = DataSet(dataset_path)
+
+class AppRoot(ComponentBase):
+    def __init__(self):
+        pass
+
 
 dataset.select_freq(2.0)
 dataset.select_quantity(QuantityEnum.P2P)
@@ -88,7 +88,9 @@ dataset.select_quantity(QuantityEnum.P2P)
 #dataset.plot_line(line_coords=-14)
 # dataset.select_quantity(QuantityEnum.TransmissionPhase)
 # dataset.select_quantity(QuantityEnum.P2P)
-
+dataset.plot_system_stability()
+dataset.plt_show()
+"""
 # dataset.select_quantity(QuantityEnum.Phase)
 res_sub, mq_sub = dataset.plot_meas((105, -8))
 res_sam, mq_sam = dataset.plot_meas((98, -8))
@@ -129,4 +131,4 @@ ax1.legend()
 # dataset.plot_ref(ref_idx=1250)
 
 dataset.plt_show()
-
+"""

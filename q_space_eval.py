@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import scipy
 from functions import f_axis_idx_map, moving_average
 from transfer_functions import model_1layer, transferfunction_error, dtdn, dtdd
-from consts import c_thz, GREEN, RESET
+from common.consts import c_thz, GREEN, RESET
 from tqdm import tqdm
 from scipy.optimize import shgo
 
@@ -59,12 +59,53 @@ class QSpaceEval:
 
         return uncertainties
 
-    def q_space_eval(self, fit_range=None, q_space_range=None, **kwargs):
-        if fit_range is None:
-            fit_range = self.options["eval_opt"]["fit_range"]
-        if q_space_range is None:
-            q_space_range = self.options["eval_opt"]["q-space_range"]
+    def calc_q_val(self, opt_res_, en_plot=False):
+        q_space_range = self.options["eval_opt"]["q-space_range"]
+        q_space_idx_range = f_axis_idx_map(opt_res_["freq_axis"], q_space_range)
 
+        dt = np.mean(np.diff(opt_res_["freq_axis"][q_space_idx_range]))
+        # y = opt_res_["n"][q_space_idx_range]
+        y = opt_res_["k"][q_space_idx_range]
+        y = y - np.mean(y)
+
+        y = scipy.signal.detrend(y, type="linear")
+
+        y = np.array([opt_res_["freq_axis"][q_space_idx_range], y]).T
+        # y = window(y, win_width=len(y), win_start=0, shift=40, en_plot=True, type=WindowTypes.hann)
+
+        y = y[:, 1]
+
+        y = np.concatenate([np.zeros(3 * len(y)), y, np.zeros(3 * len(y))])
+
+        y_ft = np.fft.rfft(y)
+        t_axis = np.fft.rfftfreq(len(y), d=dt)
+
+        q_val = np.abs(y_ft)[0:]
+        t_axis = t_axis[0:]
+
+        fp_spacing = self.options["sample_properties"]["fp_spacing"]
+        t0 = np.argmin(np.abs(t_axis - (fp_spacing - 2)))
+        t1 = np.argmin(np.abs(t_axis - (fp_spacing + 2)))
+        if en_plot:
+            plt.figure("qval")
+            plt.plot(t_axis, q_val, label=str(opt_res_["d"]) + " µm")
+            plt.axvline(x=t_axis[t0], color='r', linestyle='--', linewidth=2)
+            plt.axvline(x=t_axis[t1], color='r', linestyle='--', linewidth=2)
+            # plt.plot(q_val, label=opt_res_["d"])
+            plt.xlabel("Time (ps)")
+            plt.ylabel("Oscillation amplitude")
+            plt.legend()
+            plt.show()
+
+        # t0, t1 = 0.85*3*t_diff, 1.15*3*t_diff
+        # t0_idx, t1_idx = np.argmin(np.abs(t0-t_axis)), np.argmin(np.abs(t1-t_axis))
+        # print(t_axis[t0_idx], t_axis[t1_idx], t_diff)
+        # t_diff = np.abs(self._delay_from_phaseslope(meas_, ref_meas_))
+        # exit()
+
+        return np.max(q_val[t0:t1])
+
+    def model_opt(self, d_, f_idx_range_):
         minimizer_kwargs = {"method": "Nelder-Mead",
                             "options": {
                                 "maxev": np.inf,
@@ -85,52 +126,83 @@ class QSpaceEval:
             # "disp": True
         }
 
-        def calc_q_val(opt_res_, en_plot=False):
-            q_space_idx_range = f_axis_idx_map(opt_res_["freq_axis"], q_space_range)
-
-            dt = np.mean(np.diff(opt_res_["freq_axis"][q_space_idx_range]))
-            # y = opt_res_["n"][q_space_idx_range]
-            y = opt_res_["k"][q_space_idx_range]
-            y = y - np.mean(y)
-
-            y = scipy.signal.detrend(y, type="linear")
-
-            y = np.array([opt_res_["freq_axis"][q_space_idx_range], y]).T
-            # y = window(y, win_width=len(y), win_start=0, shift=40, en_plot=True, type=WindowTypes.hann)
-
-            y = y[:, 1]
-
-            y = np.concatenate([np.zeros(3 * len(y)), y, np.zeros(3 * len(y))])
-
-            y_ft = np.fft.rfft(y)
-            t_axis = np.fft.rfftfreq(len(y), d=dt)
-
-            q_val = np.abs(y_ft)[0:]
-            t_axis = t_axis[0:]
-
-            fp_spacing = self.options["sample_properties"]["fp_spacing"]
-            t0 = np.argmin(np.abs(t_axis - (fp_spacing - 2)))
-            t1 = np.argmin(np.abs(t_axis - (fp_spacing + 2)))
-            if en_plot:
-                plt.figure("qval")
-                plt.plot(t_axis, q_val, label=str(opt_res_["d"]) + " µm")
-                plt.axvline(x=t_axis[t0], color='r', linestyle='--', linewidth=2)
-                plt.axvline(x=t_axis[t1], color='r', linestyle='--', linewidth=2)
-                # plt.plot(q_val, label=opt_res_["d"])
-                plt.xlabel("Time (ps)")
-                plt.ylabel("Oscillation amplitude")
-                plt.legend()
-                plt.show()
-
-            # t0, t1 = 0.85*3*t_diff, 1.15*3*t_diff
-            # t0_idx, t1_idx = np.argmin(np.abs(t0-t_axis)), np.argmin(np.abs(t1-t_axis))
-            # print(t_axis[t0_idx], t_axis[t1_idx], t_diff)
-            # t_diff = np.abs(self._delay_from_phaseslope(meas_, ref_meas_))
-            # exit()
-
-            return np.max(q_val[t0:t1])
+        freq_axis = self.freq_axis[f_idx_range_]
 
         n0 = self.ana_eval_res["refr_idx"]
+        n0_ = n0[f_idx_range_]
+
+        t_exp = self.meas_quants["t_exp"]
+        t_exp_ = t_exp[f_idx_range_, 1]  # * np.exp(1j * 2*np.pi*freq_axis*0.150)
+
+        # phi_corrected = self.ana_eval_res["phi_corrected"][f_idx_range_]
+        # t_exp_ = np.abs(t_exp_) * np.exp(1j * phi_corrected)
+
+        n_opt_res_ = np.zeros_like(freq_axis, dtype=complex)
+        for f_idx, f_ in enumerate(freq_axis):
+            def cost_fun(p):
+                n3_ = p[0] + 1j * p[1]
+                t_mod_ = model_1layer(n3_, d=d_, f=f_, n1=1, shift_=0)
+
+                return np.abs(t_exp_[f_idx] - t_mod_) ** 2
+
+
+            n0_f_idx = n0_[f_idx]
+            n_min, n_max = 0.90 * n0_f_idx.real, 1.10 * n0_f_idx.real
+            k_min, k_max = 0.10 * n0_f_idx.imag, 1.10 * n0_f_idx.imag
+            bounds = [(n_min, n_max), (k_min, k_max)]
+
+            conv, i_ = False, 0
+            while not conv:
+                i_ += 1
+                shgo_opt_res_ = shgo(cost_fun,
+                                     bounds=bounds,
+                                     minimizer_kwargs=minimizer_kwargs,
+                                     options=shgo_options,
+                                     # n=1, iters=200,
+                                     )
+
+                x = shgo_opt_res_.x
+                n_opt_res_[f_idx] = x[0] + 1j * x[1]
+                if f_idx == 0:
+                    break
+
+                diff = (n_opt_res_[f_idx].real - n_opt_res_[f_idx - 1].real)
+                if np.abs(diff) < 0.10:
+                    conv = True
+                else:
+                    c0, c1 = 0.90 + i_ * 0.02, 1.10 - i_ * 0.02
+                    n_bounds = (n0_f_idx.real * c0, n0_f_idx.real * c1)
+                    k_bounds = (n0_f_idx.imag * c0, n0_f_idx.imag * c1)
+
+                    bounds = [(min(n_bounds), max(n_bounds)), (min(k_bounds), max(k_bounds))]
+                if i_ > 4:
+                    n_prev = n_opt_res_[f_idx - 1]
+                    c0, c1 = 0.90 + i_ * 0.01, 1.10 - i_ * 0.01
+                    n_bounds = (n_prev.real * c0, n_prev.real * c1)
+                    k_bounds = (n_prev.imag * c0, n_prev.imag * c1)
+
+                    bounds = [(min(n_bounds), max(n_bounds)), (min(k_bounds), max(k_bounds))]
+                if i_ > 5:
+                    break
+
+        alpha_ = freq_axis * 4 * np.pi * n_opt_res_.imag / (1e-4 * c_thz)
+
+        opt_res_ = {"freq_axis": freq_axis,
+                    "d": d_, "n": n_opt_res_.real,
+                    "k": n_opt_res_.imag, "alpha": alpha_, "n0": n0_}
+        # fp_spacing_estimate = ...
+        opt_res_["q_val"] = self.calc_q_val(opt_res_, en_plot=False)
+
+        t_mod_ = model_1layer(n_opt_res_, d=d_, f=freq_axis, n1=1, shift_=0)
+
+        opt_res_["t_mod"] = t_mod_
+        opt_res_["sam_mod"] = self.meas_quants["ref_fd"][f_idx_range_, 1] * t_mod_
+
+        return opt_res_
+
+    def q_space_eval(self, fit_range=None, q_space_range=None, **kwargs):
+        if fit_range is None:
+            fit_range = self.options["eval_opt"]["fit_range"]
 
         """ # TODO add to final result dict and plot
         for k in simple_eval_res:
@@ -139,78 +211,6 @@ class QSpaceEval:
             plt.legend()
         plt.show()
         """
-
-        t_exp = self.meas_quants["t_exp"]
-
-        def model_opt(d_, f_idx_range_):
-            freq_axis = self.freq_axis[f_idx_range_]
-            t_exp_ = t_exp[f_idx_range_, 1] #* np.exp(1j * 2*np.pi*freq_axis*0.150)
-            n0_ = n0[f_idx_range_]
-            phi_corrected = self.ana_eval_res["phi_corrected"][f_idx_range_]
-            # t_exp_ = np.abs(t_exp_) * np.exp(1j * phi_corrected)
-
-            n_opt_res_ = np.zeros_like(freq_axis, dtype=complex)
-            for f_idx, f_ in enumerate(freq_axis):
-                def cost_fun(p):
-                    n3_ = p[0] + 1j * p[1]
-                    t_mod_ = model_1layer(n3_, d=d_, f=f_, n1=1, shift_=0)
-
-                    return np.abs(t_exp_[f_idx] - t_mod_) ** 2
-
-
-                n0_f_idx = n0_[f_idx]
-                n_min, n_max = 0.90 * n0_f_idx.real, 1.10 * n0_f_idx.real
-                k_min, k_max = 0.10 * n0_f_idx.imag, 1.10 * n0_f_idx.imag
-                bounds = [(n_min, n_max), (k_min, k_max)]
-
-                conv, i_ = False, 0
-                while not conv:
-                    i_ += 1
-                    shgo_opt_res_ = shgo(cost_fun,
-                                         bounds=bounds,
-                                         minimizer_kwargs=minimizer_kwargs,
-                                         options=shgo_options,
-                                         # n=1, iters=200,
-                                         )
-
-                    x = shgo_opt_res_.x
-                    n_opt_res_[f_idx] = x[0] + 1j * x[1]
-                    if f_idx == 0:
-                        break
-
-                    diff = (n_opt_res_[f_idx].real - n_opt_res_[f_idx - 1].real)
-                    if np.abs(diff) < 0.10:
-                        conv = True
-                    else:
-                        c0, c1 = 0.90 + i_ * 0.02, 1.10 - i_ * 0.02
-                        n_bounds = (n0_f_idx.real * c0, n0_f_idx.real * c1)
-                        k_bounds = (n0_f_idx.imag * c0, n0_f_idx.imag * c1)
-
-                        bounds = [(min(n_bounds), max(n_bounds)), (min(k_bounds), max(k_bounds))]
-                    if i_ > 4:
-                        n_prev = n_opt_res_[f_idx - 1]
-                        c0, c1 = 0.90 + i_ * 0.01, 1.10 - i_ * 0.01
-                        n_bounds = (n_prev.real * c0, n_prev.real * c1)
-                        k_bounds = (n_prev.imag * c0, n_prev.imag * c1)
-
-                        bounds = [(min(n_bounds), max(n_bounds)), (min(k_bounds), max(k_bounds))]
-                    if i_ > 5:
-                        break
-
-            alpha_ = freq_axis * 4 * np.pi * n_opt_res_.imag / (1e-4 * c_thz)
-
-            opt_res_ = {"freq_axis": freq_axis,
-                        "d": d_, "n": n_opt_res_.real,
-                        "k": n_opt_res_.imag, "alpha": alpha_, "n0": n0_}
-            # fp_spacing_estimate = ...
-            opt_res_["q_val"] = calc_q_val(opt_res_, en_plot=False)
-
-            t_mod_ = model_1layer(n_opt_res_, d=d_, f=freq_axis, n1=1, shift_=0)
-
-            opt_res_["t_mod"] = t_mod_
-            opt_res_["sam_mod"] = self.meas_quants["ref_fd"][f_idx_range_, 1] * t_mod_
-
-            return opt_res_
 
         f_idx_fit_range = f_axis_idx_map(self.freq_axis, fit_range)
         f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.options["plot_opt"]["plot_range"])
@@ -227,7 +227,7 @@ class QSpaceEval:
                 desc += f"Optimizing thickness {np.round(d, 2)} µm"
                 desc += f" of {d_axis_}"
                 pbar_.set_description(desc)
-                opt_res = model_opt(d, f_idx_fit_range)
+                opt_res = self.model_opt(d, f_idx_fit_range)
                 opt_results.append(opt_res)
 
                 q_val = opt_res["q_val"]
@@ -257,7 +257,7 @@ class QSpaceEval:
         opt_d_res = opt_results[np.argmin(q_vals)]
         d_opt = np.round(opt_d_res["d"], 2)
 
-        best_res = model_opt(d_opt, f_idx_plot_range)
+        best_res = self.model_opt(d_opt, f_idx_plot_range)
 
         best_res = self.calc_uncertainties(best_res)
 

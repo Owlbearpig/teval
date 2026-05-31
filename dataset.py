@@ -1,9 +1,11 @@
 import itertools
+from common.components import ComponentBase
 import os
 import random
+from dataclasses import fields
+from config import Quantity, ClimateQuantity, Direction, Dist
 from copy import deepcopy
 from functools import partial
-import consts
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import scipy.signal
@@ -11,13 +13,13 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from numpy import array
 from pathlib import Path
 import numpy as np
-from functions import unwrap, window, local_minima_1d, check_dict_values, WindowTypes, butter_filt
+from functions import unwrap, window, local_minima_1d, WindowTypes, butter_filt
 from functions import phase_correction, do_fft, do_ifft, f_axis_idx_map, remove_offset, moving_average
 from functions import arr_statistics
-from measurements import MeasurementType, Measurement, Domain, meas_id_func
+from measurements import Measurement, meas_id_func
 from mpl_settings import mpl_style_params
 import matplotlib as mpl
-from consts import c_thz, eps0_thz
+from common.consts import c_thz, eps0_thz
 from scipy.optimize import shgo
 from scipy.special import erfc
 import logging
@@ -29,7 +31,7 @@ import pandas as pd
 from scipy.signal import correlate
 from scipy.stats import pearsonr
 from q_space_eval import QSpaceEval
-from enums import *
+from config import Domain, MeasurementType, QuantityEnum, AppSettings
 
 """
 TODOs: 
@@ -47,6 +49,7 @@ TODOs:
 - rename some keys in options dict e.g. "eval_opt" to "eval"
 - make Dataset(dict)?
 - q-eval: svmaf, estimate #FP reflections and FP spacing for q-space freq range
+- fix default_options["sample_properties"]["default_values"]
 
 New ideas: add teralyzer evaluation (time consuming)
 - Add plt_show here (done)
@@ -59,52 +62,7 @@ New ideas: add teralyzer evaluation (time consuming)
 """
 
 
-class Quantity:
-    func = None
-
-    def __init__(self, label="label", func=None, domain=None, unit=""):
-        self.label = label
-        if domain is None:
-            self.domain = Domain.Time
-        else:
-            self.domain = domain
-        if func is not None:
-            self.func = func
-        self.unit = bool(unit)*" (" + unit + bool(unit)*")"
-
-
-    def __repr__(self):
-        return self.label
-
-    def __call__(self, *args, **kwargs):
-        return self.func(*args, **kwargs)
-
-
-class QuantityEnum(Enum):
-    P2P = Quantity("Peak to peak")
-    Power = Quantity("Power", domain=Domain.Frequency)
-    Phase = Quantity("Phase", domain=Domain.Frequency, unit="rad")
-    MeasTimeDeltaRef2Sam = Quantity("Time delta Ref. to Sam.")
-    RefAmp = Quantity("Ref. Amp", domain=Domain.Frequency)
-    RefArgmax = Quantity("Ref. Argmax")
-    RefPhase = Quantity("Ref. Phase", domain=Domain.Frequency)
-    PeakCnt = Quantity("Peak Cnt")
-    ZeroCrossing = Quantity("Zero Crossing", domain=Domain.Time, unit="ps")
-    TimeOfFlight = Quantity("Time of Flight", domain=Domain.Time, unit="ps")
-    TransmissionAmp = Quantity("Amplitude transmission", domain=Domain.Frequency)
-    TransmissionPhase = Quantity("Phase transmission", domain=Domain.Frequency, unit="rad")
-    RefractiveIdx = Quantity("Refractive idx", domain=Domain.Frequency)
-    AbsorptionCoe = Quantity("Absorption coe", domain=Domain.Frequency, unit="1/cm")
-
-
-class LogLevel(Enum):
-    info = logging.INFO
-    debug = logging.DEBUG
-    warning = logging.WARNING
-    error = logging.ERROR
-    critical = logging.CRITICAL
-
-def logger_config(options_):
+def logger_config(settings):
     handler = colorlog.StreamHandler()
     formatter = colorlog.ColoredFormatter(
         "%(log_color)s%(levelname)s: %(message)s",
@@ -121,16 +79,16 @@ def logger_config(options_):
     logger = logging.getLogger()
     logger.addHandler(handler)
 
-    log_level = options_["log_level"].value
+    log_level = settings.log_level.value
     logger.setLevel(log_level)
 
-class DataSet:
-    def __init__(self, data_path=None, options_=None):
+class DataSet(ComponentBase):
+    def __init__(self, data_path=None):
+
         self.plotted_ref = False
         self.noise_floor = None
         self.time_axis = None
         self.freq_axis = None
-        self.options = {}
         self.img_properties = {}
         self.dataset_properties = {}
         self.selected_freq = None
@@ -142,11 +100,9 @@ class DataSet:
         self.sub_dataset = None
         self._is_sub_dataset = False
 
-        self.data_path = Path(data_path)
-        self._check_path()
+        self.data_path = self._set_path(data_path)
 
-        self._set_options(options_)
-        self._set_defaults()
+        self._set_settings()
 
         self._parse_measurements()
 
@@ -154,15 +110,18 @@ class DataSet:
 
         self._check_refs_exist()
 
-    def _check_path(self):
-        if self.data_path is None:
-            raise ValueError("Path cannot be None")
-        if not self.data_path.exists():
-            raise ValueError(f"Path {self.data_path} does not exist")
-        if not self.data_path.is_dir():
-            raise ValueError(f"Path {self.data_path} is not a directory")
-        if not list(self.data_path.glob("*")):
-            raise ValueError(f"Path {self.data_path} is empty")
+    def _set_path(self, data_path):
+        data_path = Path(data_path)
+        if data_path is None:
+            raise ValueError("DataSet requires a file path to the data directory")
+        if not data_path.exists():
+            raise ValueError(f"Path {data_path} does not exist")
+        if not data_path.is_dir():
+            raise ValueError(f"Path {data_path} is not a directory")
+        if not list(data_path.glob("*")):
+            raise ValueError(f"Path {data_path} is empty")
+
+        return data_path
 
     def _find_climate_log_file(self, climate_log_file):
         checked_dirs = [self.data_path, self.data_path.parent]
@@ -176,108 +135,22 @@ class DataSet:
 
         return None
 
-    def _set_defaults(self):
+    def _set_settings(self):
+        if not hasattr(self, "settings"):
+            self.settings = AppSettings()
+
         if self.selected_freq is None:
             self.selected_freq = 1.000
 
         if self.selected_quantity is None:
             self.select_quantity(QuantityEnum.P2P)
 
-    def _set_options(self, options_=None):
-        if options_ is None:
-            options_ = {}
-
-        # some color_map options: ['viridis', 'plasma', 'inferno', 'magma', 'cividis']
-        default_options = {"log_level": LogLevel.info,
-                           "result_dir": consts.result_dir,
-                           "save_plots": False,
-                           "save_plots_settings": {"path": consts.result_dir, "filetype": "pdf",
-                                                   "suffix": "", "bbox_inches": 'tight', "dpi": 300, "pad_inches": 0,
-                                                   "set_size_inches": (12, 9)},
-                           "excluded_areas": None,
-                           "cbar_lim": (None, None),
-                           "log_scale": False,
-                           "color_map": "autumn",
-                           "invert_x": False, "invert_y": False,
-                           "pixel_interpolation": PixelInterpolation.none,
-                           "fig_label": "",
-                           "img_title": "",
-                           "en_cbar_label": True,
-                           "ref_pos": (None, None),
-                           "ref_threshold": 0.95,
-                           "fix_ref": False, # idx of reference measurement
-                           "dist_func": Dist.Time,
-                           "pp_opt": {
-                               "window_opt": {"enabled": False, "win_width": None, "win_start": None,
-                                              "shift": None, "slope": 0.15, "en_plot": False,
-                                              "type": WindowTypes.tukey},
-                               "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
-                               "remove_dc": True,
-                               "dt": 0,
-                           },
-                           "sample_properties": {"d": 1000, "layers": 1, "default_values": True},
-                           "eval_opt": {"dt": 0,  # dt in fs
-                                        "sub_pnt": (0, 0),
-                                        "fit_range": (0.50, 2.20),
-                                        "q-space_range": (0.75, 2.00),
-                                        "phi_fit_range": (0.47, 1.05),
-                                        "average": False,
-                                        "delta_d": 2.0,
-                                        "phi_offset_correction": True,
-                                        "printed_freqs": None,
-                                        "d_opt_axis": None,
-                                        },
-                           "enable_q_eval": False,
-                           "only_shown_figures": [],
-                           "shown_plots": {
-                               "Window": True,
-                               "Time domain": True,
-                               "Spectrum": True,
-                               "Phase": True,
-                               "Phase slope": False,
-                               "Amplitude transmission": False,
-                               "Absorbance": False,
-                               "Refractive index": False,
-                               "Absorption coefficient": False,
-                               "Conductivity": False,
-                           },
-                           "plot_opt": {"plot_range": (0.05, 3.5),
-                                        "shift_sam2ref": False,
-                                        "label": "",
-                                        "sub_noise_floor": False,
-                                        "td_scale": 1,
-                                        "remove_t_offset": False,
-                                        "err_bar_limits": None,
-                                        "ref_err_bars": False,
-                                        "stability_plot_rel_change": False,
-                                        "subtract_mean": False,
-                                        "temp_sensor_idx": 0,
-                                          # use first and last reference measurement to estimate uncertainty
-                                        "plot_zero_crossing": False,
-                                        "disable_legend": [], # list of fig_nums for which to disable legends
-                                        "redp_sensor_labels":
-                                            {"Redp idx 0": r"$\theta_{system}$",
-                                             "Redp idx 1": r"$\theta_{air}$",
-                                             "Redp idx 2": r"$\theta_{fiber}$",
-                                             "Redp idx 3": r"$\theta_{box}$"},
-                                        }
-                           }
-        if "sample_properties" in options_:
-            default_options["sample_properties"]["default_values"] = False
-
-        check_dict_values(options_, default_options)
-
-        if not isinstance(options_["result_dir"], Path):
-            options_["result_dir"] = Path(options_["result_dir"])
-
-        self.options.update(options_)
-        self._apply_options()
 
     def _apply_options(self):
-        new_rc_params = {"savefig.directory": self.options["result_dir"]}
+        new_rc_params = {"savefig.directory": self.settings.result_dir}
 
         mpl.rcParams.update(mpl_style_params(new_rc_params))
-        logger_config(self.options)
+        logger_config(self.settings)
 
     def _read_data_dir(self):
         glob = self.data_path.glob("**/*.txt")
@@ -380,12 +253,12 @@ class DataSet:
             return
         logging.info(f"No explicit references in the dataset. Using ref_pos option")
 
-        threshold = self.options["ref_threshold"]
+        threshold = self.settings.ref_threshold
 
         max_amp_meas = self.measurements["max_amp_meas"]
         max_amp = np.max(np.abs(self._get_data(max_amp_meas)[:, 1]))
 
-        manual_pos = self.options["ref_pos"]
+        manual_pos = self.settings.ref_pos
 
         refs_ = []
         if (manual_pos[0] is not None) and (manual_pos[1] is not None):
@@ -502,8 +375,8 @@ class DataSet:
     def _update_fig_num(self):
         en_freq_label = Domain.Frequency == self.selected_quantity.domain
         fig_num = ""
-        if self.options["fig_label"]:
-            fig_num += self.options["fig_label"] + " "
+        if self.settings.fig_label:
+            fig_num += self.settings.fig_label + " "
         fig_num += str(self.selected_quantity)
 
         if isinstance(self.selected_freq, tuple):
@@ -538,19 +411,19 @@ class DataSet:
         return self.selected_freq_idx
 
     def _pre_process(self, meas_):
-        pp_opt = self.options["pp_opt"]
+        pp_opt = self.settings.pp_opt
 
         cache_idx = self.cache.id_map[meas_.identifier]
         data_td = self.cache.raw_data_td[cache_idx]
 
-        if pp_opt["remove_dc"]:
+        if pp_opt.remove_dc:
             data_td = remove_offset(data_td)
 
-        if pp_opt["window_opt"]["enabled"]:
-            data_td = window(data_td, **pp_opt["window_opt"])
+        if pp_opt.window_opt.enabled:
+            data_td = window(data_td, **pp_opt.window_opt)
 
-        if pp_opt["filter_opt"]["enabled"]:
-            data_td = butter_filt(data_td, **pp_opt["filter_opt"])
+        if pp_opt.filter_opt.enabled:
+            data_td = butter_filt(data_td, **pp_opt.filter_opt)
 
         return data_td
 
@@ -809,7 +682,7 @@ class DataSet:
         return val
 
     def _calc_phi(self, ref_td_, sam_td_, ref_fd_, sam_fd_):
-        phi_fit_range = self.options["eval_opt"]["phi_fit_range"]
+        phi_fit_range = self.settings.eval_opt.phi_fit_range
 
         t_axis, f_axis = ref_td_[:, 0], ref_fd_[:, 0].real
         w_axis = 2*np.pi*f_axis
@@ -832,7 +705,7 @@ class DataSet:
 
         phi0 = phi0_star - 2*np.pi * int(p[1] / (2*np.pi))
 
-        if not self.options["eval_opt"]["phi_offset_correction"]:
+        if not self.settings.eval_opt.phi_offset_correction:
             return phi0_star
 
         phi = phi0 - phi0_ref + phi0_sam + t_offset
@@ -843,7 +716,7 @@ class DataSet:
         meas_quants = {}
         meas_quants["freq_axis"] = self.freq_axis
 
-        is_avg_eval = self.options["eval_opt"]["average"]
+        is_avg_eval = self.settings.eval_opt.average
         if not is_avg_eval:
             logging.info("Single measurement evaluation")
             logging.info(f"Reference measurement: {ref_meas_}")
@@ -881,22 +754,22 @@ class DataSet:
         return meas_quants
 
     def single_layer_eval(self, meas_, freq_range=None):
-        if self.options["sample_properties"]["default_values"]:
-            logging.warning(f"Using default sample properties: {self.options['sample_properties']}")
+        if self.settings.sample_properties.default_values:
+            logging.warning(f"Using default sample properties: {self.settings.sample_properties}")
 
-        d = self.options["sample_properties"]["d"]
+        d = self.settings.sample_properties.d
 
-        og_win_setting = deepcopy(self.options["pp_opt"]["window_opt"])
+        og_win_setting = deepcopy(self.settings.pp_opt.window_opt)
 
-        self.options["pp_opt"]["window_opt"]["enabled"] = True
-        self.options["pp_opt"]["window_opt"]["win_width"] = 10
-        self.options["pp_opt"]["window_opt"]["win_start"] = None
-        self.options["pp_opt"]["window_opt"]["en_plot"] = False
+        self.settings.pp_opt.window_opt.enabled = True
+        self.settings.pp_opt.window_opt.win_width = 10
+        self.settings.pp_opt.window_opt.win_start = None
+        self.settings.pp_opt.window_opt.en_plot = False
 
         ref_td, ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Both)
         sam_td, sam_fd = self._get_data(meas_, Domain.Both)
 
-        self.options["pp_opt"]["window_opt"] = og_win_setting
+        self.settings.pp_opt.window_opt = og_win_setting
 
         freq_axis = self.freq_axis
 
@@ -957,7 +830,7 @@ class DataSet:
             return alph
 
     def _eval_sub(self):
-        sub_pnt = self.options["eval_opt"]["sub_pnt"]
+        sub_pnt = self.settings.eval_opt.sub_pnt
         sub_meas = self.sub_dataset.get_measurement(*sub_pnt)
         sub_res = self.sub_dataset.single_layer_eval(sub_meas, freq_range=(0, 10))
         sub_res["t_sub"] = self.sub_dataset.transmission(sub_meas, 1)
@@ -970,14 +843,14 @@ class DataSet:
 
         n_sub = sub_res["refr_idx"]
         t_sub = sub_res["t_sub"]
-        d_film = self.options["sample_properties"]["d_film"]
+        d_film = self.settings.sample_properties.d_film
 
         # [eps0_thz] = ps * Siemens / µm, [c_thz] = µm / ps, [1/d_film] = 1/um -> conversion: 1e4 (S/cm)
         # 1 / µm = 1 / (1e-6 m) = 1 / (1e-6 * 1e2 cm) = 1 / (1e-4 cm) = 1e4 * 1 / cm
         sigma = 1e4 * (1/d_film) * eps0_thz * c_thz * (1 + n_sub) * (t_sub/t_sam - 1)
 
         # phase correction, [dt] = fs
-        dt = self.options["eval_opt"]["dt"]
+        dt = self.settings.eval_opt.dt
         dt *= 1e-3
         sigma *= np.exp(-1j*dt*2*np.pi*self.freq_axis)
 
@@ -1071,13 +944,14 @@ class DataSet:
         return found_meas
 
     def _is_excluded(self, idx_tuple):
-        if self.options["excluded_areas"] is None:
+        excl_areas = self.settings.excluded_areas
+        if excl_areas is None:
             return False
 
-        if np.array(self.options["excluded_areas"]).ndim == 1:
-            areas = [self.options["excluded_areas"]]
+        if np.array(excl_areas).ndim == 1:
+            areas = [excl_areas]
         else:
-            areas = self.options["excluded_areas"]
+            areas = excl_areas
 
         for area in areas:
             x, y = self._idx_to_coords(*idx_tuple)
@@ -1147,7 +1021,7 @@ class DataSet:
 
     def find_nearest_ref(self, meas_, dist_func=None):
         if not dist_func:
-            dist_func = self.options["dist_func"]
+            dist_func = self.settings.dist_func
 
         closest_ref, best_fit_val = None, np.inf
         for ref_meas in self.measurements["refs"]:
@@ -1160,7 +1034,7 @@ class DataSet:
 
         logging.debug(f"Sam: {meas_})")
         logging.debug(f"Ref: {closest_ref})")
-        if self.options["dist_func"] == Dist.Time:
+        if self.settings.dist_func == Dist.Time:
             logging.debug(f"Time between ref and sample: {best_fit_val} seconds")
         else:
             logging.debug(f"Distance between ref and sample: {best_fit_val} mm")
@@ -1168,8 +1042,8 @@ class DataSet:
         return closest_ref
 
     def get_ref_data(self, domain=Domain.Time, point=None, ref_idx=None, ret_meas=False):
-        if self.options["fix_ref"] is not False:
-            chosen_ref = self.measurements["refs"][self.options["fix_ref"]]
+        if self.settings.fix_ref is not False:
+            chosen_ref = self.measurements["refs"][self.settings.fix_ref]
         elif point is not None:
             closest_sam = self.get_measurement(*point)
             chosen_ref = self.find_nearest_ref(closest_sam)
@@ -1315,7 +1189,7 @@ class DataSet:
         return (m2.meas_time - m1.meas_time).total_seconds() / 3600
 
     def _export_as_csv(self, dict_, file_app=""):
-        save_dir = self.options["result_dir"]
+        save_dir = self.settings.result_dir
         save_path = save_dir / f"plotted_data_{file_app}.csv"
         logging.info(f"Exporting data to {save_path}")
 
@@ -1336,16 +1210,16 @@ class DataSet:
         if label:
             logging.info(label)
         freq_axis = ret_["freq_axis"].real
-        if self.options["eval_opt"]["printed_freqs"] is None:
+        if self.settings.eval_opt.printed_freqs is None:
             f_idx_list = [self._selected_freq_idx()]
         else:
-            printed_freq_list = list(self.options["eval_opt"]["printed_freqs"])
+            printed_freq_list = list(self.settings.eval_opt.printed_freqs)
             f_idx_list = np.array([np.argmin(np.abs(f-freq_axis)) for f in printed_freq_list])
         if "k" in ret_:
             ret_["n"] = ret_["n"] + 1j * ret_["k"]
 
         printed_quantities = ["d", "n", "alpha"]
-        uncert_map = {"d": self.options["eval_opt"]["delta_d"], "n": ret_["delta_n"], "alpha": ret_["delta_alpha"]}
+        uncert_map = {"d": self.settings.eval_opt.delta_d, "n": ret_["delta_n"], "alpha": ret_["delta_alpha"]}
         for quantity in ret_:
             if quantity not in printed_quantities:
                 continue
@@ -1378,7 +1252,7 @@ class DataSet:
             logging.info(msg)
 
     def plot_ref(self, ref_meas_=None, timestamp=None, ref_idx=None, **kwargs_):
-        kwargs = {**self.options["plot_opt"]}
+        kwargs = {**self.settings.plot_opt}
         kwargs.update(kwargs_)
 
         fig_num_ext = kwargs.get("fig_num_ext", "")
@@ -1403,7 +1277,7 @@ class DataSet:
 
         ref_td, ref_fd = self._get_data(ref_meas_, domain=Domain.Both)
         freq_axis = ref_fd[:, 0].real
-        plot_range = self.options["plot_opt"]["plot_range"]
+        plot_range = self.settings.plot_opt.plot_range
         f_idx_range = f_axis_idx_map(self.freq_axis, plot_range)
 
         if kwargs["remove_t_offset"]:
@@ -1421,14 +1295,14 @@ class DataSet:
 
         plt.figure("Time domain" + fig_num_ext)
         plt.plot(ref_td[:, 0], ref_td[:, 1], label=label + " (Reference)")
-        if self.options["plot_opt"]["plot_zero_crossing"]:
+        if self.settings.plot_opt.plot_zero_crossing:
             plt.scatter(zero_crossing, 0, label="Zero-crossing", color="red")
         # plt.plot(ref_td[1:, 0], np.diff(np.abs(ref_td[:, 1])), label=label)
         plt.xlabel("Time (ps)")
         plt.ylabel("Amplitude (Arb. u.)")
 
     def plot_meas(self, point=None, timestamp=None, en_td_plot=True, **kwargs_):
-        kwargs = {**self.options["plot_opt"]}
+        kwargs = {**self.settings.plot_opt}
         kwargs.update(kwargs_)
 
         label = kwargs["label"]
@@ -1439,7 +1313,7 @@ class DataSet:
         en_csv_export = kwargs.get("en_csv_export", False)
         fig_num_ext = kwargs.get("fig_num_ext", "")
 
-        plot_range = self.options["plot_opt"]["plot_range"]
+        plot_range = self.settings.plot_opt.plot_range
         f_idx_range = f_axis_idx_map(self.freq_axis, plot_range)
         if (point is not None) and (timestamp is not None):
             logging.warning("either point or timestamp has to be None")
@@ -1459,10 +1333,10 @@ class DataSet:
 
         meas_quants = self._calc_meas_quantities(ref_meas, selected_meas)
 
-        if self.options["enable_q_eval"]:
+        if self.settings.enable_q_eval:
             ana_eval_res = self.single_layer_eval(selected_meas, freq_range="full")
 
-            q_eval = QSpaceEval(self.options, meas_quants, ana_eval_res)
+            q_eval = QSpaceEval(self.settings, meas_quants, ana_eval_res)
             q_eval_res = q_eval.q_space_eval(**kwargs)
 
         logging.info(f"Plotting point {point}")
@@ -1470,25 +1344,25 @@ class DataSet:
         logging.info(f"Sample measurement: {selected_meas}\n")
 
         # TODO redo window plotting
-        show_win_plot = deepcopy(self.options["pp_opt"]["window_opt"]["en_plot"])
-        if self.options["shown_plots"]["Window"]:
-            self.options["pp_opt"]["window_opt"]["en_plot"] = True
+        show_win_plot = deepcopy(self.settings.pp_opt.window_opt.en_plot)
+        if self.settings.shown_plots.Window:
+            self.settings.pp_opt.window_opt.en_plot = True
 
-        self.options["pp_opt"]["window_opt"]["fig_label"] = "ref"
+        self.settings.pp_opt.window_opt.fig_label = "ref"
         ref_td, ref_fd = self._get_data(ref_meas, domain=Domain.Both)
 
         #ref_fd[:, 1] = np.abs(ref_fd[:, 1]) * np.exp(-1j*np.angle(ref_fd[:, 1]))
         #ref_td = do_ifft(ref_fd, conj=False)
-        self.options["pp_opt"]["window_opt"]["fig_label"] = "sam"
+        self.settings.pp_opt.window_opt.fig_label = "sam"
 
         sam_td, sam_fd = meas_quants["sam_td"], meas_quants["sam_fd"]
         ref_td, ref_fd = meas_quants["ref_td"], meas_quants["ref_fd"]
 
-        if self.options["plot_opt"]["shift_sam2ref"]:
+        if self.settings.plot_opt.shift_sam2ref:
             shift_t = np.abs(np.argmax(ref_td[:, 1]) - np.argmax(sam_td[:, 1]))
             sam_td[:, 1] = np.roll(sam_td[:, 1], -shift_t)
 
-        self.options["pp_opt"]["window_opt"]["en_plot"] = show_win_plot
+        self.settings.pp_opt.window_opt.en_plot = show_win_plot
 
         if remove_t_offset:
             sam_td[:, 0] -= sam_td[0, 0]
@@ -1638,7 +1512,7 @@ class DataSet:
         return ret, meas_quants
 
     def plot_meas_phi_diff(self, pnt0, pnt1, label=""):
-        plot_range = self.options["plot_opt"]["plot_range"]
+        plot_range = self.settings.plot_opt.plot_range
 
         sam_meas0 = self.get_measurement(*pnt0)
         ref_meas0 = self.find_nearest_ref(sam_meas0)
@@ -1747,7 +1621,7 @@ class DataSet:
 
         angle_change = angle_arr[0] - angle_arr
         ampl_change = ampl_arr[0] - ampl_arr
-        if self.options["plot_opt"]["stability_plot_rel_change"]:
+        if self.settings.plot_opt.stability_plot_rel_change:
             ampl_change = 100 * ampl_change / ampl_arr[0]
             angle_change = 100 * angle_change / angle_arr[0]
 
@@ -1792,7 +1666,7 @@ class DataSet:
         plt.title(f"Amplitude of reference measurement at {selected_freq_} THz")
         plt.plot(meas_times, ampl_change)
         plt.xlabel(f"Measurement time ({mt_unit})")
-        if self.options["plot_opt"]["stability_plot_rel_change"]:
+        if self.settings.plot_opt.stability_plot_rel_change:
             plt.ylabel("$\Delta$A (%)")
         else:
             plt.ylabel("$\Delta$A (arb. u.)")
@@ -1801,7 +1675,7 @@ class DataSet:
         plt.title(f"Phase of reference measurement at {selected_freq_} THz")
         plt.plot(meas_times, angle_change)
         plt.xlabel(f"Measurement time ({mt_unit})")
-        if self.options["plot_opt"]["stability_plot_rel_change"]:
+        if self.settings.plot_opt.stability_plot_rel_change:
             plt.ylabel("$\Delta \phi$ (%)")
         else:
             plt.ylabel("$\Delta \phi$ (rad)")
@@ -1863,7 +1737,7 @@ class DataSet:
 
                 plt.plot(shift_arr * meas_interval, r_vals, label=k)
 
-            label_map = self.options["plot_opt"]["redp_sensor_labels"]
+            label_map = self.settings.plot_opt.redp_sensor_labels
             plt.figure("Climate correlation plot")
             for k in plotted_climate_vals:
                 x = np.gradient(plotted_climate_vals[k], 0.012186554258538694)
@@ -1910,7 +1784,7 @@ class DataSet:
         is_rp_log = False
         if "pitaya" in str(log_file):
             is_rp_log = True
-        temp_sensor_idx = self.options["plot_opt"]["temp_sensor_idx"]
+        temp_sensor_idx = self.settings.plot_opt.temp_sensor_idx
 
         def read_log_file(log_file_):
             meas_time_, temp_, humidity_ = [], [], []
@@ -2001,7 +1875,7 @@ class DataSet:
             smooth_vals = moving_average(vals, iterations=sas[0], n=sas[1])
             quant_values["Arduino"] = np.array([vals, smooth_vals])
 
-        if self.options["plot_opt"]["subtract_mean"]:
+        if self.settings.plot_opt.subtract_mean:
             for k in quant_values:
                 offset = np.mean(quant_values[k][0])
                 std_quant = np.std(quant_values[k][0])
@@ -2010,7 +1884,7 @@ class DataSet:
                 print(k, offset, std_quant)
 
 
-        line_labels = self.options["plot_opt"]["redp_sensor_labels"]
+        line_labels = self.settings.plot_opt.redp_sensor_labels
 
         line_colors = ["r", "b", "g", "c", "m", "y", "k"]
         stability_figs = ["Reference zero crossing", "Stability amplitude", "Stability phase"]
@@ -2110,7 +1984,7 @@ class DataSet:
         shown_grid_vals = shown_grid_vals[w0:w1, h0:h1]
         shown_grid_vals = self._exclude_pixels(shown_grid_vals)
 
-        if self.options["log_scale"]:
+        if self.settings.log_scale:
             shown_grid_vals = np.log10(shown_grid_vals)
 
         fig = plt.figure(self.img_properties["fig_num"])
@@ -2120,15 +1994,15 @@ class DataSet:
         if img_extent is None:
             img_extent = self.img_properties["extent"]
 
-        cbar_min, cbar_max = self.options["cbar_lim"]
+        cbar_min, cbar_max = self.settings.cbar_lim
         if cbar_min is None:
             cbar_min = np.min(shown_grid_vals)
         if cbar_max is None:
             cbar_max = np.max(shown_grid_vals)
 
-        if self.options["log_scale"]:
-            self.options["cbar_min"] = np.log10(cbar_min)
-            self.options["cbar_max"] = np.log10(cbar_max)
+        if self.settings.log_scale:
+            self.settings.cbar_min = np.log10(cbar_min)
+            self.settings.cbar_max = np.log10(cbar_max)
 
         axes_extent = (float(img_extent[0] - self.img_properties["dx"] / 2),
                        float(img_extent[1] + self.img_properties["dx"] / 2),
@@ -2137,13 +2011,13 @@ class DataSet:
         img_ = ax.imshow(shown_grid_vals.transpose((1, 0)),
                          vmin=cbar_min, vmax=cbar_max,
                          origin="lower",
-                         cmap=plt.get_cmap(self.options["color_map"]),
+                         cmap=plt.get_cmap(self.settings.color_map),
                          extent=axes_extent,
-                         interpolation=self.options["pixel_interpolation"].value
+                         interpolation=self.settings.pixel_interpolation.value
                          )
-        if self.options["invert_x"]:
+        if self.settings["invert_x"]:
             ax.invert_xaxis()
-        if self.options["invert_y"]:
+        if self.settings["invert_y"]:
             ax.invert_yaxis()
 
         ax.set_xlabel("x (mm)")
@@ -2152,7 +2026,7 @@ class DataSet:
         self._update_quantity_label()
         quantity_label = self.img_properties["quantity_label"]
 
-        img_title_option = str(self.options["img_title"])
+        img_title_option = str(self.settings.img_title)
         ax.set_title(" ".join([quantity_label, img_title_option]))
 
         divider = make_axes_locatable(ax)
@@ -2161,7 +2035,7 @@ class DataSet:
         cbar = fig.colorbar(img_, cax=cax)
         cbar.set_ticks(np.round(np.linspace(cbar_min, cbar_max, 4), 3))
 
-        if self.options["en_cbar_label"]:
+        if self.settings.en_cbar_label:
             cbar_label = self.selected_quantity.label + self.selected_quantity.unit
             cbar.set_label(cbar_label, rotation=270, labelpad=30)
 
@@ -2309,11 +2183,11 @@ class DataSet:
         return False
 
     def save_fig(self, fig_num_, filename=None, **kwargs):
-        save_dir = Path(self.options["result_dir"])
-        filetype = self.options["save_plots_settings"]["filetype"]
-        kwargs.setdefault("dpi", self.options["save_plots_settings"]["dpi"])
-        kwargs.setdefault("bbox_inches", self.options["save_plots_settings"]["bbox_inches"])
-        kwargs.setdefault("pad_inches", self.options["save_plots_settings"]["pad_inches"])
+        save_dir = Path(self.settings.result_dir)
+        filetype = self.settings.save_plots_settings.filetype
+        kwargs.setdefault("dpi", self.settings.save_plots_settings.dpi)
+        kwargs.setdefault("bbox_inches", self.settings.save_plots_settings.bbox_inches)
+        kwargs.setdefault("pad_inches", self.settings.save_plots_settings.pad_inches)
 
         fig = plt.figure(fig_num_)
 
@@ -2330,7 +2204,7 @@ class DataSet:
             filename_s = filename_s.replace(char, '')
         filename_s.replace(" ", "_")
 
-        w = self.options["save_plots_settings"]["set_size_inches"]
+        w = self.settings.save_plots_settings.set_size_inches
         fig.set_size_inches(w=w, forward=False)
         plt.subplots_adjust(wspace=0.3)
         plt.savefig(save_dir / (filename_s + f".{filetype}"), **kwargs)
@@ -2339,12 +2213,12 @@ class DataSet:
 
         # fig_labels = [plt.figure(fig_num).get_label() for fig_num in plt.get_fignums()]
         only_shown_fig_nums = []
-        if self.options["only_shown_figures"]:
-            only_shown_fig_nums = self.options["only_shown_figures"]
-            logging.warning(f"Only showing figures {self.options['only_shown_figures']}")
+        if self.settings.only_shown_figures:
+            only_shown_fig_nums = self.settings.only_shown_figures
+            logging.warning(f"Only showing figures {self.settings.only_shown_figures}")
 
-        if self.options["plot_opt"]["disable_legend"]:
-            figs_w_disabled_legends = self.options["plot_opt"]["disable_legend"]
+        if self.settings.plot_opt.disable_legend:
+            figs_w_disabled_legends = self.settings.plot_opt.disable_legend
             logging.warning(f"Legends disabled for figure: {figs_w_disabled_legends}")
 
         not_shown = []
@@ -2355,10 +2229,10 @@ class DataSet:
             if not any([ax.get_legend() for ax in axes]):
                 for ax in axes:
                     h, labels = ax.get_legend_handles_labels()
-                    if labels and not (fig_label in self.options["plot_opt"]["disable_legend"]):
+                    if labels and not (fig_label in self.settings.plot_opt.disable_legend):
                         ax.legend()
 
-            if self.options["save_plots"]:
+            if self.settings.save_plots:
                 save_file=None
                 if save_file_suffix:
                     save_file = str(fig_num) + "_" + save_file_suffix
@@ -2372,13 +2246,14 @@ class DataSet:
                 not_shown.append(fig_label)
                 plt.close(fig_num)
                 continue
-            for shown_plot_num in self.options["shown_plots"]:
-                if shown_plot_num == fig_label and (not self.options["shown_plots"][shown_plot_num]):
+            for shown_plot_num in fields(self.settings.shown_plots):
+                shown_plot_num = shown_plot_num.name
+                if shown_plot_num == fig_label and (not getattr(self.settings.shown_plots, shown_plot_num)):
                     not_shown.append(fig_label)
                     plt.close(fig_num)
             """
-            if fig_label in self.options["shown_plots"]:
-                if not self.options["shown_plots"][fig_label]:
+            if fig_label in self.settings.shown_plots:
+                if not self.settings.shown_plots[fig_label]:
                     not_shown.append(fig_label)
                     plt.close(fig_num)"""
 
@@ -2429,13 +2304,13 @@ class DataSet:
         x = system_stab_res_refs["meas_times"]
         y_ref = system_stab_res_refs["ref_relative_delay"]
 
-        self.options["pp_opt"]["window_opt"]["win_start"] = 11
+        self.settings.pp_opt.window_opt.win_start = 11
         system_stab_res_mon_pulse0 = self.plot_system_stability(meas_set_kw="-sub-")
         xp = system_stab_res_mon_pulse0["meas_times"]
         fp = system_stab_res_mon_pulse0["ref_relative_delay"]
         y_pulse0 = np.interp(x, xp, fp)
 
-        self.options["pp_opt"]["window_opt"]["win_start"] = 27
+        self.settings.pp_opt.window_opt.win_start = 27
         system_stab_res_mon_pulse1 = self.plot_system_stability(meas_set_kw="-sub-")
         xp = system_stab_res_mon_pulse1["meas_times"]
         fp = system_stab_res_mon_pulse1["ref_relative_delay"]

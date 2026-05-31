@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import pearsonr
 from numpy import array, nan_to_num, zeros, pi
-from consts import c0, THz
+from common.consts import c0, THz
 from numpy.fft import irfft, rfft, rfftfreq
 from scipy import signal
 from enum import Enum
@@ -19,13 +19,6 @@ class WindowTypes(Enum):
     gaussian = signal.windows.gaussian
     blackmanharris = signal.windows.blackmanharris
     blackman = signal.windows.blackman
-
-def check_dict_values(new_options, default):
-    for k in default:
-        if k not in new_options:
-            new_options[k] = default[k]
-        elif isinstance(default[k], dict) and isinstance(new_options[k], dict):
-            check_dict_values(new_options[k], default[k])
 
 def do_fft(data_td):
     data_td = nan_to_num(data_td)

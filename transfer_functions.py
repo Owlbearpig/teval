@@ -1,5 +1,5 @@
 import numpy as np
-from consts import c_thz
+from common.consts import c_thz
 
 
 def model_1layer(n3_, d, f, n1=1, shift_=0):

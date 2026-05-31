@@ -5,9 +5,6 @@ from numpy import pi
 import os
 from os import name as os_name
 
-ROOT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
-
-
 if 'posix' in os_name:
     result_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/ErrorAnalysis")
     # result_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/Pectin_NanoAg/Sample_set2/results/alex")
@@ -25,3 +22,5 @@ GREEN = "\033[32m"
 BLUE = "\033[34m"
 RESET = "\033[0m"
 
+class AppRoot:
+    pass
