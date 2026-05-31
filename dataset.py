@@ -2,7 +2,7 @@ import itertools
 from common.components import ComponentBase
 import os
 import random
-from dataclasses import fields
+from dataclasses import fields, dataclass
 from config import Quantity, ClimateQuantity, Direction, Dist
 from copy import deepcopy
 from functools import partial
@@ -83,7 +83,7 @@ def logger_config(settings):
     logger.setLevel(log_level)
 
 class DataSet(ComponentBase):
-    def __init__(self, data_path=None):
+    def __init__(self, data_path=None, settings=None):
 
         self.plotted_ref = False
         self.noise_floor = None
@@ -102,7 +102,7 @@ class DataSet(ComponentBase):
 
         self.data_path = self._set_path(data_path)
 
-        self._set_settings()
+        self._set_settings(settings)
 
         self._parse_measurements()
 
@@ -135,9 +135,16 @@ class DataSet(ComponentBase):
 
         return None
 
-    def _set_settings(self):
+    def _set_settings(self, settings=None):
         if not hasattr(self, "settings"):
-            self.settings = AppSettings()
+            if settings is None:
+                logging.info("No settings provided. Loading default settings")
+                self.settings = AppSettings()
+            else:
+                if isinstance(settings, AppSettings):
+                    self.settings = settings
+                else:
+                    logging.info("Settings must be an instance of AppSettings")
 
         if self.selected_freq is None:
             self.selected_freq = 1.000
