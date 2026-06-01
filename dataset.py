@@ -84,7 +84,7 @@ def logger_config(settings):
 
 class DataSet(ComponentBase):
     def __init__(self, data_path=None, settings=None):
-
+        super().__init__()
         self.plotted_ref = False
         self.noise_floor = None
         self.time_axis = None
@@ -136,15 +136,15 @@ class DataSet(ComponentBase):
         return None
 
     def _set_settings(self, settings=None):
-        if not hasattr(self, "settings"):
+        if self.settings is None:
             if settings is None:
-                logging.info("No settings provided. Loading default settings")
+                logging.info("No settings passed to initialization call. Loading default settings")
                 self.settings = AppSettings()
             else:
                 if isinstance(settings, AppSettings):
                     self.settings = settings
                 else:
-                    logging.info("Settings must be an instance of AppSettings")
+                    logging.info("Settings argument must be an instance of AppSettings")
 
         if self.selected_freq is None:
             self.selected_freq = 1.000
@@ -1798,7 +1798,7 @@ class DataSet(ComponentBase):
             if is_rp_log:
                 rp_data = pd.read_csv(log_file_)
                 meas_time_ = [datetime.strptime(t, "%Y-%m-%d %H:%M:%S") for t in rp_data.iloc[:, 0]]
-                if temp_sensor_idx is None:
+                if temp_sensor_idx < 0:
                     temp_ = rp_data.iloc[:, 1:]
                 else:
                     temp_ = rp_data.iloc[:, temp_sensor_idx+1]
@@ -1861,9 +1861,10 @@ class DataSet(ComponentBase):
 
         meas_time_diff *= conv_factor
 
-        meas_time = meas_time[:tf_idx]
-        meas_time_diff = meas_time_diff[:tf_idx]
-        quant = quant[:tf_idx]
+        if self.settings.plot_opt.clip_climate_data:
+            meas_time = meas_time[:tf_idx]
+            meas_time_diff = meas_time_diff[:tf_idx]
+            quant = quant[:tf_idx]
 
         sas = (40, 15) # smoothing_average_settings
         quant_values = {}

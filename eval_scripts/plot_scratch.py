@@ -1,4 +1,5 @@
-from dataset import Dist, QuantityEnum, PixelInterpolation, Direction, DataSet
+from config import Dist, QuantityEnum, Direction, PixelInterpolation
+from dataset import DataSet
 import os
 import logging
 from pathlib import Path
@@ -121,12 +122,12 @@ else:
     # dataset_path = r"/home/ftpuser/ftp/Data/Stability/20052026_terasaat_dlineheating"
     # dataset_path = r"/home/ftpuser/ftp/Data/Stability/20052026_terasaat_dlineheating_subset"
     # dataset_path = r"/home/ftpuser/ftp/Data/Stability/21052026_terasaat_dlineheating_nosystemlid"
-    # dataset_path = r"/home/ftpuser/ftp/Data/Stability/26052026_terasaat_dlineheating_sensor1_at_ring"
+    dataset_path = r"/home/ftpuser/ftp/Data/Stability/26052026_terasaat_dlineheating_sensor1_at_ring"
     # dataset_path = r"/media/storage/ArchivedData/Stability/31-10-2024_L1/air"
-    dataset_path = r"/home/ftpuser/ftp/Data/Stability/27052026_lab1_no_tlog"
+    # dataset_path = r"/home/ftpuser/ftp/Data/Stability/27052026_lab1_no_tlog"
 
 
-dataset = DataSet(dataset_path, options)
+dataset = DataSet(dataset_path)
 
 dataset.select_freq(0.5)
 # dataset.select_quantity(QuantityEnum.TransmissionPhase)
@@ -145,8 +146,8 @@ dataset.select_freq(0.5)
 # dataset.plot_system_stability(climate_log_file=r"2026-05-20 11-32-11_log_pitaya_start0.txt") # dline heating
 # dataset.plot_system_stability(climate_log_file=r"2026-05-21 11-41-56_log_pitaya.txt") # dline heating no lid
 # dataset.plot_system_stability(climate_log_file=r"2026-05-22 10-10-38_log_pitaya.txt") # dline heating no lid sensor1 at ring
-dataset.plot_system_stability() # lab1 data
-
+# dataset.plot_system_stability() # lab1 data
+dataset.plot_climate(r"2026-06-01 12-43-31_log_pitaya.txt")
 
 # dataset.plot_climate(log_file="2026-04-17 00-00-00_log_subset.txt", quantity=ClimateQuantity.Humidity)
 

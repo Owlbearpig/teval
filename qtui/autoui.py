@@ -1,12 +1,17 @@
 from PySide6 import QtWidgets, QtCore
 from dataclasses import fields, is_dataclass
 from enum import Enum
+from common.components import ComponentBase
+
+
+def is_component(x):
+    return issubclass(x.klass, ComponentBase)
 
 def build_form_from_component(component, parent_layout, widget_map=None):
     if widget_map is None:
         widget_map = {}
 
-    if not is_dataclass(component):
+    if not is_component(component):
         return widget_map
 
     all_fields = list(fields(component))
@@ -24,7 +29,7 @@ def build_form_from_component(component, parent_layout, widget_map=None):
 
         is_readonly = field.metadata.get("readonly", False)
 
-        if is_dataclass(field_value):
+        if is_component(field_value):
             group_box = QtWidgets.QGroupBox(label_text)
             group_layout = QtWidgets.QVBoxLayout(group_box)
             widget_map[field_name] = {}
@@ -68,7 +73,6 @@ def build_form_from_component(component, parent_layout, widget_map=None):
             widget.setRange(-999999, 999999)
             widget.setValue(field_value)
 
-            # SpinBoxes support setReadOnly (allows selecting/copying text, but no changing)
             if is_readonly:
                 widget.setReadOnly(True)
 
@@ -84,7 +88,6 @@ def build_form_from_component(component, parent_layout, widget_map=None):
             widget = QtWidgets.QLineEdit()
             widget.setText(str(field_value if field_value is not None else ""))
 
-            # LineEdits support setReadOnly perfectly
             if is_readonly:
                 widget.setReadOnly(True)
 
@@ -96,37 +99,58 @@ def build_form_from_component(component, parent_layout, widget_map=None):
     return widget_map
 
 def generate_ui(component):
-    """
-    Dynamically builds a UI window by inspecting a dataclass instance.
-    Returns: (Main Widget, QTextBrowser for logs)
-    """
-    main_window = QtWidgets.QWidget()
-    main_layout = QtWidgets.QHBoxLayout(main_window)
+    stack = QtWidgets.QStackedWidget()
 
-    # Left side: Form scroll area for the settings variables
+    def make_tree_items(component, name, depth, treeitem):
+        prettyName = component.objectName or name
+        newItem = QtWidgets.QTreeWidgetItem(treeitem)
+        newItem.setText(0, prettyName)
+        newItem.setExpanded(True)
+
+        widget = build_form_from_component(prettyName, component)
+        newItem.widgetId = stack.addWidget(widget)
+
+        for name, trait in sorted(component.attributes.items(),
+                                  key=lambda x: x[0]):
+            if not is_component(trait):
+                continue
+            cInst = getattr(component, name)
+            make_tree_items(cInst, name, depth + 1, newItem)
+
+    win = QtWidgets.QWidget()
+    win.setWindowTitle(getattr(component, "title", "Teval"))
+    windowLayout = QtWidgets.QHBoxLayout(win)
+
     scroll_area = QtWidgets.QScrollArea()
     scroll_area.setWidgetResizable(True)
     form_widget = QtWidgets.QWidget()
     form_layout = QtWidgets.QVBoxLayout(form_widget)
 
-    # Dynamically build inputs for the AppSettings (or any subclass) object
+    vSplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical, win)
+    windowLayout.addWidget(vSplitter)
+
+    splitter = QtWidgets.QSplitter()
+    splitter.setChildrenCollapsible(False)
+    vSplitter.addWidget(splitter)
+
+    #splitter.addWidget(tree)
+    #splitter.addWidget(stack)
+    #tree.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Minimum)
+    splitter.setStretchFactor(0, 0)
+    splitter.setStretchFactor(1, 1)
+
     build_form_from_component(component.settings, form_layout)
 
-    # Push everything up and set the scroll widget
     form_layout.addStretch()
     scroll_area.setWidget(form_widget)
-    main_layout.addWidget(scroll_area, stretch=3)
+    windowLayout.addWidget(scroll_area, stretch=3)
 
-    # Right side: The log window (QTextBrowser)
     log_group = QtWidgets.QGroupBox("Application Logs")
     log_layout = QtWidgets.QVBoxLayout(log_group)
     msg_browser = QtWidgets.QTextBrowser()
     log_layout.addWidget(msg_browser)
 
-    main_layout.addWidget(log_group, stretch=2)
+    windowLayout.addWidget(log_group, stretch=2)
 
-    # Set window title using dynamic attribute fallback
-    main_window.setWindowTitle(getattr(component, "title", "Configuration Panel"))
-
-    return main_window, msg_browser
+    return win, msg_browser
 

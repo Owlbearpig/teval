@@ -1,4 +1,5 @@
 from config import *
+from config import AppSettings
 import json
 
 class ComponentBase:
@@ -24,6 +25,10 @@ class ComponentBase:
 
     def loadConfiguration(self) -> AppSettings:
         config_path = Path(f"configs/{self._settings_file}.json")
+
+        if self._settings_file is None:
+            print(f"No config file path set. Loading global defaults.")
+            return AppSettings()
 
         if not config_path.exists():
             print(f"No custom config found for {self._settings_file}. Loading global defaults.")

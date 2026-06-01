@@ -178,9 +178,10 @@ class PlotOpt:
     ref_err_bars: bool = False
     stability_plot_rel_change: bool = False
     subtract_mean: bool = False
-    temp_sensor_idx: int = 0
+    temp_sensor_idx: int = -1
     plot_zero_crossing: bool = False
     disable_legend: List[int] = field(default_factory=list)
+    clip_climate_data: bool = False
     redp_sensor_labels: Dict[str, str] = field(
         default_factory=lambda: {
             "Redp idx 0": r"$\theta_{system}$",
@@ -196,7 +197,6 @@ class AppSettings:
     log_level: LogLevel = LogLevel.info
     result_dir: Path = common.consts.result_dir
     save_plots: bool = False
-    save_plots_settings: SavePlotsSettings = field(default_factory=SavePlotsSettings)
     excluded_areas: Optional[Any] = None
     cbar_lim: Tuple[Optional[float], Optional[float]] = (None, None)
     log_scale: bool = False
@@ -212,12 +212,14 @@ class AppSettings:
     fix_ref: bool = False
     dist_func: Dist = Dist.Time
 
+    save_plots_settings: SavePlotsSettings = field(default_factory=SavePlotsSettings)
     pp_opt: PpOpt = field(default_factory=PpOpt)
     sample_properties: SampleProperties = field(default_factory=SampleProperties)
     eval_opt: EvalOpt = field(default_factory=EvalOpt)
+    plot_opt: PlotOpt = field(default_factory=PlotOpt)
 
     enable_q_eval: bool = False
     only_shown_figures: List[Any] = field(default_factory=list)
     shown_plots: ShownPlots = field(default_factory=ShownPlots)
-    plot_opt: PlotOpt = field(default_factory=PlotOpt)
+
 

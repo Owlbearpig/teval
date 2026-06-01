@@ -24,6 +24,7 @@ options = {
                           "slope": 0.05, # 0.999, # 0.99
                           #"win_start": 27, # 11,
                           "win_width": 61, # 18,#2*32,# 38*2, # 5*15 # 36
+                          # "win_width": 11,
                           "type": WindowTypes.tukey,
                           },
            "filter_opt": {"enabled": False, "f_range": (0.3, 3.0), },
@@ -61,7 +62,7 @@ options = {
     "Phase slope": False,
     "Amplitude transmission": False,
     "Absorbance": False,
-    "Refractive index": False,
+    "Refractive index": True,
     "Absorption coefficient": False,
     "Conductivity": True,
     "Absorption coefficient optimum": True,
@@ -74,13 +75,16 @@ if "nt" in os.name:
 else:
     dataset_path = r"/home/ftpuser/ftp/Data/CalibrationSamples/Graphene"
 
-dataset = DataSet(dataset_path)
 
-class AppRoot(ComponentBase):
+class AppRoot(DataSet):
     def __init__(self):
-        pass
+        super().__init__(dataset_path)
+
+    
 
 
+"""
+dataset = DataSet(dataset_path)
 dataset.select_freq(2.0)
 dataset.select_quantity(QuantityEnum.P2P)
 #dataset.plot_line(line_coords=-8)
@@ -91,28 +95,54 @@ dataset.select_quantity(QuantityEnum.P2P)
 dataset.plot_system_stability()
 dataset.plt_show()
 """
+
+"""
 # dataset.select_quantity(QuantityEnum.Phase)
-res_sub, mq_sub = dataset.plot_meas((105, -8))
-res_sam, mq_sam = dataset.plot_meas((98, -8))
+res_sub, mq_sub = dataset.plot_meas((105, -12))
+dataset.plt_show()
+
+res_sam, mq_sam = dataset.plot_meas((99, -12))
+
 freq_axis = mq_sub["freq_axis"]
 f_idx_range = f_axis_idx_map(freq_axis, freq_range=options["plot_opt"]["plot_range"])
 freq_axis = freq_axis[f_idx_range]
 t_sub = mq_sub["t_exp"][f_idx_range, 1]
-t_sam = mq_sam["t_exp"][f_idx_range, 1] * np.exp(-1j * 2*np.pi * freq_axis * 0.025)
-n_sub = res_sub["n"]
+t_sam = mq_sam["t_exp"][f_idx_range, 1] # * np.exp(-1j * 2*np.pi * freq_axis * 0.025)
+
+try:
+    n_sub = np.load("n_sub_graphene.npy")
+except FileNotFoundError:
+    n_sub = res_sub["n"]
+    np.save("n_sub_graphene", n_sub)
+
+
 d_film = 0.010 # µm
 
 sig_tink = (t_sub/t_sam - 1) * eps0_thz * c_thz * (1 + n_sub) / (d_film * 1e-4)
 
 fig, (ax0, ax1) = plt.subplots(nrows=2, ncols=1, num="Conductivity", sharex=True)
 ax0.set_title("Real part")
-ax0.plot(freq_axis, sig_tink.real, label="measured")
+ax0.plot(freq_axis, sig_tink.real, label="x=97, y=-12")
 
 ax1.set_title("Imaginary part")
-ax1.plot(freq_axis, sig_tink.imag, label="measured")
+ax1.plot(freq_axis, sig_tink.imag, label="x=97, y=-12")
 
 ax0.set_ylabel("Conductivity (S/cm)")
 ax1.set_ylabel("Conductivity (S/cm)")
+ax1.set_xlabel("Frequency (THz)")
+
+ax0.legend()
+ax1.legend()
+
+fig, (ax0, ax1) = plt.subplots(nrows=2, ncols=1, num="Refractive index sub", sharex=True)
+ax0.set_title("Real part")
+ax0.plot(freq_axis, n_sub.real, label="substrate")
+
+ax1.set_title("Imaginary part")
+ax1.plot(freq_axis, n_sub.imag, label="substrate")
+
+ax0.set_ylabel("Refractive index")
+ax1.set_ylabel("Refractive index")
 ax1.set_xlabel("Frequency (THz)")
 
 ax0.legend()
