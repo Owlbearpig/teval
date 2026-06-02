@@ -5,7 +5,7 @@ from common.components import ComponentBase
 
 
 def is_component(x):
-    return issubclass(x.klass, ComponentBase)
+    return is_dataclass(x)#issubclass(x.klass, ComponentBase)
 
 def build_form_from_component(component, parent_layout, widget_map=None):
     if widget_map is None:
@@ -110,8 +110,7 @@ def generate_ui(component):
         widget = build_form_from_component(prettyName, component)
         newItem.widgetId = stack.addWidget(widget)
 
-        for name, trait in sorted(component.attributes.items(),
-                                  key=lambda x: x[0]):
+        for name, trait in sorted(component.attributes.items(), key=lambda x: x[0]):
             if not is_component(trait):
                 continue
             cInst = getattr(component, name)

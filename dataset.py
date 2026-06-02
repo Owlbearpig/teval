@@ -3,7 +3,7 @@ from common.components import ComponentBase
 import os
 import random
 from dataclasses import fields, dataclass
-from config import Quantity, ClimateQuantity, Direction, Dist
+from config import Quantity, ClimateQuantity, Direction, Dist, Config
 from copy import deepcopy
 from functools import partial
 import matplotlib.pyplot as plt
@@ -83,7 +83,7 @@ def logger_config(settings):
     logger.setLevel(log_level)
 
 class DataSet(ComponentBase):
-    def __init__(self, data_path=None, settings=None):
+    def __init__(self, data_path=None, settings_file=None):
         super().__init__()
         self.plotted_ref = False
         self.noise_floor = None
@@ -102,13 +102,21 @@ class DataSet(ComponentBase):
 
         self.data_path = self._set_path(data_path)
 
-        self._set_settings(settings)
+        self.settings = Config(settings_file).settings
+        self._apply_settings()
 
         self._parse_measurements()
 
         self._set_img_properties()
 
         self._check_refs_exist()
+
+    def _apply_settings(self):
+        if self.selected_freq is None:
+            self.selected_freq = 1.000
+
+        if self.selected_quantity is None:
+            self.select_quantity(QuantityEnum.P2P)
 
     def _set_path(self, data_path):
         data_path = Path(data_path)
@@ -134,24 +142,6 @@ class DataSet(ComponentBase):
                 return log_file
 
         return None
-
-    def _set_settings(self, settings=None):
-        if self.settings is None:
-            if settings is None:
-                logging.info("No settings passed to initialization call. Loading default settings")
-                self.settings = AppSettings()
-            else:
-                if isinstance(settings, AppSettings):
-                    self.settings = settings
-                else:
-                    logging.info("Settings argument must be an instance of AppSettings")
-
-        if self.selected_freq is None:
-            self.selected_freq = 1.000
-
-        if self.selected_quantity is None:
-            self.select_quantity(QuantityEnum.P2P)
-
 
     def _apply_options(self):
         new_rc_params = {"savefig.directory": self.settings.result_dir}

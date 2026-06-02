@@ -3,8 +3,10 @@ from enum import Enum
 from typing import Tuple, Optional, List, Dict, Any
 from pathlib import Path
 import logging
-
+import json
 import common.consts
+from common.components import ComponentBase
+
 
 class Domain(Enum):
     Time = 0
@@ -193,7 +195,7 @@ class PlotOpt:
 
 
 @dataclass
-class AppSettings:
+class AppSettings(ComponentBase):
     log_level: LogLevel = LogLevel.info
     result_dir: Path = common.consts.result_dir
     save_plots: bool = False
@@ -222,4 +224,42 @@ class AppSettings:
     only_shown_figures: List[Any] = field(default_factory=list)
     shown_plots: ShownPlots = field(default_factory=ShownPlots)
 
+class Config(ComponentBase):
+    def __init__(self, settings_file: Path = None):
+        super().__init__()
+        if settings_file is not None:
+            self._settings_file = settings_file
+        self.settings = self.loadConfiguration()
+
+    def saveConfiguration(self, ):
+        pass
+
+    def loadConfiguration(self) -> AppSettings:
+        config_path = Path(f"configs/{self._settings_file}.json")
+
+        if self._settings_file is None:
+            print(f"No config file path set. Loading global defaults.")
+            return AppSettings()
+
+        if not config_path.exists():
+            print(f"No custom config found for {self._settings_file}. Loading global defaults.")
+            return AppSettings()
+
+        with open(config_path, "r") as f:
+            settings_dict = json.load(f)
+
+        win_data = settings_dict["pp_opt"]["window_opt"]
+        window_obj = WindowOpt(**{**win_data, "type": WindowTypes(win_data["type"])})
+
+        pp_data = settings_dict["pp_opt"]
+        pp_obj = PpOpt(**{**pp_data, "window_opt": window_obj})
+
+        return AppSettings(
+            log_level=LogLevel(settings_dict["log_level"]),
+            pixel_interpolation=PixelInterpolation(settings_dict["pixel_interpolation"]),
+            dist_func=Dist(settings_dict["dist_func"]),
+            pp_opt=pp_obj,
+            **{k: v for k, v in settings_dict.items() if
+               k not in ["log_level", "pixel_interpolation", "dist_func", "pp_opt"]}
+        )
 

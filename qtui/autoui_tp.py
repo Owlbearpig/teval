@@ -1,6 +1,6 @@
 from PySide6 import QtWidgets, QtCore
 
-"""
+
 from PyQt5 import QtWidgets, QtCore
 from .changeindicatorspinbox import ChangeIndicatorSpinBox
 from .changeindicatorlineedit import ChangeIndicatorLineEdit
@@ -23,9 +23,9 @@ from common.traits import Quantity, Path as PathTrait
 from pathlib import Path
 import logging
 import numpy as np
-"""
 
-"""
+
+
 def run_action(func):
     ret = func()
     if asyncio.iscoroutine(ret):
@@ -448,12 +448,12 @@ def generate_component_ui(name, component):
 
     return splitter
 
-"""
+
 
 def generate_ui(component):
 
     stack = QtWidgets.QStackedWidget()
-    """
+
     def make_tree_items(component, name, depth, treeitem):
 
         prettyName = component.objectName or name
@@ -471,11 +471,9 @@ def generate_ui(component):
             cInst = getattr(component, name)
             make_tree_items(cInst, name, depth + 1, newItem)
 
-    """
 
     win = QtWidgets.QWidget()
     win.setWindowTitle(getattr(component, "title", "Teval"))
-    """
     tree = QtWidgets.QTreeWidget(win)
     tree.setColumnCount(1)
     tree.setHeaderHidden(True)
@@ -497,7 +495,7 @@ def generate_ui(component):
     splitter.setStretchFactor(1, 1)
 
     tree.itemClicked.connect(lambda x: stack.setCurrentIndex(x.widgetId))
-    """
+
     vSplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical, win)
     messagePane = QtWidgets.QGroupBox("Messages", win)
     vSplitter.addWidget(messagePane)
