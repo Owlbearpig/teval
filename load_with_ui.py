@@ -3,7 +3,7 @@ import sys
 from config import *
 from pathlib import Path
 import json
-from config import AppSettings
+from settings import AppSettings
 from qtui.autoui import generate_ui
 from PySide6 import QtCore, QtWidgets
 from os.path import basename, splitext
@@ -35,7 +35,7 @@ class QTextBrowserLoggingHandler(QtCore.QObject, logging.Handler):
 
 def run(globals, filename):
     rootClass = globals["AppRoot"]
-    rootClass._settings_file = filename
+    rootClass.script_name = filename
 
     with rootClass() as root:
         w, msgBrowser = generate_ui(root)

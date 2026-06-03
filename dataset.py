@@ -3,7 +3,8 @@ from common.components import ComponentBase
 import os
 import random
 from dataclasses import fields, dataclass
-from config import Quantity, ClimateQuantity, Direction, Dist, Config
+from default_appsettings import Quantity, ClimateQuantity, Direction, Dist
+from settings import Settings
 from copy import deepcopy
 from functools import partial
 import matplotlib.pyplot as plt
@@ -31,7 +32,7 @@ import pandas as pd
 from scipy.signal import correlate
 from scipy.stats import pearsonr
 from q_space_eval import QSpaceEval
-from config import Domain, MeasurementType, QuantityEnum, AppSettings
+from default_appsettings import Domain, MeasurementType, QuantityEnum, AppSettings
 
 """
 TODOs: 
@@ -83,7 +84,7 @@ def logger_config(settings):
     logger.setLevel(log_level)
 
 class DataSet(ComponentBase):
-    def __init__(self, data_path=None, settings_file=None):
+    def __init__(self, data_path : Path | str, settings : Settings):
         super().__init__()
         self.plotted_ref = False
         self.noise_floor = None
@@ -102,7 +103,7 @@ class DataSet(ComponentBase):
 
         self.data_path = self._set_path(data_path)
 
-        self.settings = Config(settings_file).settings
+        self.settings = settings
         self._apply_settings()
 
         self._parse_measurements()
@@ -120,8 +121,7 @@ class DataSet(ComponentBase):
 
     def _set_path(self, data_path):
         data_path = Path(data_path)
-        if data_path is None:
-            raise ValueError("DataSet requires a file path to the data directory")
+
         if not data_path.exists():
             raise ValueError(f"Path {data_path} does not exist")
         if not data_path.is_dir():

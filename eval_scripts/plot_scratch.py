@@ -1,4 +1,4 @@
-from config import Dist, QuantityEnum, Direction, PixelInterpolation
+from settings import Dist, QuantityEnum, Direction, PixelInterpolation
 from dataset import DataSet
 import os
 import logging

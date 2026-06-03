@@ -1,5 +1,5 @@
 from common.components import ComponentBase
-from config import Dist, QuantityEnum, WindowOpt, PpOpt, AppSettings, SavePlotsSettings
+from default_appsettings import Dist, QuantityEnum, WindowOpt, PpOpt, AppSettings, SavePlotsSettings
 from dataset import DataSet
 import os
 import logging
@@ -75,12 +75,16 @@ if "nt" in os.name:
 else:
     dataset_path = r"/home/ftpuser/ftp/Data/CalibrationSamples/Graphene"
 
+from settings import Settings
 
-class AppRoot(DataSet):
+class AppRoot(ComponentBase):
     def __init__(self):
-        super().__init__(dataset_path)
+        super().__init__()
+        self.settings = Settings()
+        self.dataset = DataSet(dataset_path, self.settings)
 
-    
+    # def __exit__(self, exc_type, exc_val, exc_tb):
+
 
 
 """

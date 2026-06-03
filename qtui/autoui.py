@@ -5,13 +5,13 @@ from common.components import ComponentBase
 
 
 def is_component(x):
-    return is_dataclass(x)#issubclass(x.klass, ComponentBase)
+    return issubclass(x, ComponentBase)
 
 def build_form_from_component(component, parent_layout, widget_map=None):
     if widget_map is None:
         widget_map = {}
 
-    if not is_component(component):
+    if not is_dataclass(component):
         return widget_map
 
     all_fields = list(fields(component))
@@ -29,7 +29,7 @@ def build_form_from_component(component, parent_layout, widget_map=None):
 
         is_readonly = field.metadata.get("readonly", False)
 
-        if is_component(field_value):
+        if is_dataclass(field_value):
             group_box = QtWidgets.QGroupBox(label_text)
             group_layout = QtWidgets.QVBoxLayout(group_box)
             widget_map[field_name] = {}
@@ -97,34 +97,42 @@ def build_form_from_component(component, parent_layout, widget_map=None):
         widget_map[field_name] = widget
 
     return widget_map
+    # return widget
 
 def generate_ui(component):
     stack = QtWidgets.QStackedWidget()
 
     def make_tree_items(component, name, depth, treeitem):
-        prettyName = component.objectName or name
+        prettyName = component.object_name or name
         newItem = QtWidgets.QTreeWidgetItem(treeitem)
         newItem.setText(0, prettyName)
         newItem.setExpanded(True)
 
-        widget = build_form_from_component(prettyName, component)
+        # widget = build_form_from_component(prettyName, component)
+        widget = QtWidgets.QGroupBox(prettyName, win)
         newItem.widgetId = stack.addWidget(widget)
 
-        for name, trait in sorted(component.attributes.items(), key=lambda x: x[0]):
+        for name, obj in component.__dict__.items():
+            if not isinstance(obj, ComponentBase):
+                continue
+
+            make_tree_items(obj, name, depth + 1, newItem)
+
+            """
             if not is_component(trait):
                 continue
             cInst = getattr(component, name)
             make_tree_items(cInst, name, depth + 1, newItem)
+            """
 
     win = QtWidgets.QWidget()
     win.setWindowTitle(getattr(component, "title", "Teval"))
+    tree = QtWidgets.QTreeWidget(win)
+    tree.setColumnCount(1)
+    tree.setHeaderHidden(True)
+    make_tree_items(component, "", 0, tree.invisibleRootItem())
+
     windowLayout = QtWidgets.QHBoxLayout(win)
-
-    scroll_area = QtWidgets.QScrollArea()
-    scroll_area.setWidgetResizable(True)
-    form_widget = QtWidgets.QWidget()
-    form_layout = QtWidgets.QVBoxLayout(form_widget)
-
     vSplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical, win)
     windowLayout.addWidget(vSplitter)
 
@@ -132,24 +140,41 @@ def generate_ui(component):
     splitter.setChildrenCollapsible(False)
     vSplitter.addWidget(splitter)
 
-    #splitter.addWidget(tree)
-    #splitter.addWidget(stack)
-    #tree.setSizePolicy(QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Minimum)
+    """
+    scroll_area = QtWidgets.QScrollArea()
+    scroll_area.setWidgetResizable(True)
+    form_widget = QtWidgets.QWidget()
+    form_layout = QtWidgets.QVBoxLayout(form_widget)
+    """
+
+    splitter.addWidget(tree)
+    splitter.addWidget(stack)
+    tree.setSizePolicy(QtWidgets.QSizePolicy.Minimum,
+                       QtWidgets.QSizePolicy.Minimum)
     splitter.setStretchFactor(0, 0)
     splitter.setStretchFactor(1, 1)
 
-    build_form_from_component(component.settings, form_layout)
+    tree.itemClicked.connect(lambda x: stack.setCurrentIndex(x.widgetId))
 
-    form_layout.addStretch()
-    scroll_area.setWidget(form_widget)
-    windowLayout.addWidget(scroll_area, stretch=3)
+    # build_form_from_component(component.settings, form_layout)
 
-    log_group = QtWidgets.QGroupBox("Application Logs")
-    log_layout = QtWidgets.QVBoxLayout(log_group)
-    msg_browser = QtWidgets.QTextBrowser()
-    log_layout.addWidget(msg_browser)
+    # form_layout.addStretch()
+    # scroll_area.setWidget(form_widget)
+    # windowLayout.addWidget(scroll_area, stretch=3)
 
-    windowLayout.addWidget(log_group, stretch=2)
+    # log_group = QtWidgets.QGroupBox("Application Logs")
+    # log_layout = QtWidgets.QVBoxLayout(log_group)
+    # msg_browser = QtWidgets.QTextBrowser()
+    # log_layout.addWidget(msg_browser)
 
-    return win, msg_browser
+    # windowLayout.addWidget(log_group, stretch=2)
+
+    messagePane = QtWidgets.QGroupBox("Messages", win)
+    vSplitter.addWidget(messagePane)
+
+    msgPaneLayout = QtWidgets.QVBoxLayout(messagePane)
+    msgBrowser = QtWidgets.QTextBrowser(messagePane)
+    msgPaneLayout.addWidget(msgBrowser)
+
+    return win, msgBrowser
 

@@ -494,7 +494,7 @@ def generate_ui(component):
     splitter.setStretchFactor(0, 0)
     splitter.setStretchFactor(1, 1)
 
-    tree.itemClicked.connect(lambda x: stack.setCurrentIndex(x.widgetId))
+    # tree.itemClicked.connect(lambda x: stack.setCurrentIndex(x.widgetId))
 
     vSplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical, win)
     messagePane = QtWidgets.QGroupBox("Messages", win)
