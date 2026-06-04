@@ -7,7 +7,8 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from functions import WindowTypes, f_axis_idx_map
-import gc
+from settings import Settings
+from traitlets import Instance
 from common.consts import c_thz, eps0_thz
 
 if "nt" in os.name:
@@ -75,9 +76,13 @@ if "nt" in os.name:
 else:
     dataset_path = r"/home/ftpuser/ftp/Data/CalibrationSamples/Graphene"
 
-from settings import Settings
+
 
 class AppRoot(ComponentBase):
+
+    settings = Instance(Settings)
+    dataset = Instance(DataSet)
+
     def __init__(self):
         super().__init__()
         self.settings = Settings()

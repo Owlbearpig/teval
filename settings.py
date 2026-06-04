@@ -1,33 +1,43 @@
 from pathlib import Path
 import json
+
+from fontTools.unicodedata import script_name
+
 from common.components import ComponentBase
 from default_appsettings import AppSettings, WindowOpt,  PpOpt
 from default_appsettings import WindowTypes, PixelInterpolation, Dist, LogLevel
+from traitlets import Instance
 
 
 class Settings(ComponentBase):
-    settings = None
+
+    script_name = None
+    app_settings = Instance(AppSettings)
 
     def __init__(self, settings_file: Path = None):
         super().__init__()
-        if self.script_name is None:
-            self._settings_file = settings_file
-        else:
-            self._settings_file = Path(f"configs/{self.script_name}.json")
 
-        self.settings = self.load_configuration()
+        if self.script_name is None:
+            self._settings_file = Path(settings_file).stem
+        else:
+            self._settings_file = Path(self.script_name).stem
+        self.app_settings = self.load_configuration()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.save_configuration()
 
         return False
 
+    def __enter__(self):
+        print("enter")
+        return self
+
     def save_configuration(self, ):
         print("saving settings")
-        self.settings = None
 
     def load_configuration(self) -> AppSettings:
         config_path = Path(f"configs/{self._settings_file}.json")
+        print(f"loading {config_path}")
 
         if self._settings_file is None:
             print(f"No config file path set. Loading global defaults.")

@@ -1,6 +1,23 @@
+from traitlets import HasTraits, Unicode, Bool, Int, Instance
+import traitlets
 
-class ComponentBase:
-    script_name = None
+def is_component_trait(x):
+    return isinstance(x, Instance) and issubclass(x.klass, ComponentBase)
+
+def _dumb_list_of_actions(inst):
+    for name in dir(inst):
+        try:
+            attr = getattr(inst, name, None)  # same as inst.name
+            if not attr._isAction:
+                continue
+
+            yield name, attr
+        except AttributeError:
+            pass
+        except traitlets.TraitError:
+            pass
+
+class ComponentBase(HasTraits):
 
     def __init__(self, object_name : str = None):
         self.is_initialized = False
@@ -9,20 +26,28 @@ class ComponentBase:
         if self.object_name is None:
             self.object_name = type(self).__name__
 
+        self.__actions = []
+        for name, memb in _dumb_list_of_actions(self):
+            self.__actions.append((name, memb))
+
     def __enter__(self):
         self.is_initialized = True
 
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, *args):
         self.is_initialized = False
+
+        for name, trait in self.traits().items():
+            if is_component_trait(trait):
+                trait.get(self).__exit__(*args)
 
         return False
 
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
+    @property
+    def actions(self):
+        return self.__actions
 
-        def default_post_init(self):
-            super(cls, self).__init__()
-
-        cls.__post_init__ = default_post_init
+    @property
+    def attributes(self):
+        return self.traits()

@@ -1,12 +1,13 @@
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Tuple, Optional, List, Dict, Any
-import common.consts
 import logging
 from pathlib import Path
+from enum import Enum
+from traitlets import (
+    HasTraits, Bool, Int, Float, Unicode, Tuple,
+    List as TList, Dict as TDict, Enum as TEnum, Instance, Any as TAny
+)
 
+import common.consts
 from common.components import ComponentBase
-
 
 class Domain(Enum):
     Time = 0
@@ -18,8 +19,8 @@ class MeasurementType(Enum):
     REF = 1
     SAM = 2
 
+
 class PixelInterpolation(Enum):
-    # imshow(interpolation=pixel_interpolation)
     none = None
     antialiased = 'antialiased'
     nearest = 'nearest'
@@ -40,6 +41,7 @@ class PixelInterpolation(Enum):
     lanczos = 'lanczos'
     blackman = 'blackman'
 
+
 class ClimateQuantity(Enum):
     Temperature = 0
     Humidity = 1
@@ -55,10 +57,12 @@ class Direction(Enum):
     Horizontal = 0
     Vertical = 1
 
+
 class WindowTypes(Enum):
     tukey = "tukey"
     hannin = "hanning"
     rectangular = "rectangular"
+
 
 class Quantity:
     func = None
@@ -73,12 +77,12 @@ class Quantity:
             self.func = func
         self.unit = bool(unit)*" (" + unit + bool(unit)*")"
 
-
     def __repr__(self):
         return self.label
 
     def __call__(self, *args, **kwargs):
         return self.func(*args, **kwargs)
+
 
 class QuantityEnum(Enum):
     P2P = Quantity("Peak to peak")
@@ -104,88 +108,89 @@ class LogLevel(Enum):
     error = logging.ERROR
     critical = logging.CRITICAL
 
-@dataclass
+
 class WindowOpt(ComponentBase):
-    enabled: bool = False
-    win_width: Optional[int] = None
-    win_start: Optional[int] = None
-    shift: Optional[float] = None
-    slope: float = 0.15
-    en_plot: bool = False
-    type: WindowTypes = WindowTypes.tukey
+    enabled = Bool(False)
+    win_width = Int(10)
+    shift = Float(0)
+    slope = Float(0.15)
+    en_plot = Bool(False)
+    type = TEnum(WindowTypes, default_value=WindowTypes.tukey)
 
-@dataclass
+
 class FilterOpt(ComponentBase):
-    enabled: bool = False
-    f_range: Tuple[float, float] = (0.3, 3.0)
+    enabled = Bool(False)
+    f_range = Tuple(Float(), Float(), default_value=(0.3, 3.0))
 
-@dataclass
+
 class EvalOpt(ComponentBase):
-    dt: int = 0  # dt in fs
-    sub_pnt: Tuple[float, float] = (0, 0)
-    fit_range: Tuple[float, float] = (0.50, 2.20)
-    q_space_range: Tuple[float, float] = (0.75, 2.00)
-    phi_fit_range: Tuple[float, float] = (0.47, 1.05)
-    average: bool = False
-    delta_d: float = 2.0
-    phi_offset_correction: bool = True
-    printed_freqs: Optional[List[float]] = None
-    d_opt_axis: Optional[Any] = None
+    dt = Int(0)
+    sub_pnt = Tuple(Float(), Float(), default_value=(0.0, 0.0))
+    fit_range = Tuple(Float(), Float(), default_value=(0.50, 2.20))
+    q_space_range = Tuple(Float(), Float(), default_value=(0.75, 2.00))
+    phi_fit_range = Tuple(Float(), Float(), default_value=(0.47, 1.05))
+    average = Bool(False)
+    delta_d = Float(2.0)
+    phi_offset_correction = Bool(True)
+    printed_freqs = TList(Float(), default_value=None, allow_none=True)
+    d_opt_axis = TAny(None, allow_none=True)
 
-@dataclass
+
 class PpOpt(ComponentBase):
-    window_opt: WindowOpt = field(default_factory=WindowOpt)
-    filter_opt: FilterOpt = field(default_factory=FilterOpt)
-    remove_dc: bool = True
-    dt: int = 0
+    window_opt = Instance(WindowOpt, args=())
+    filter_opt = Instance(FilterOpt, args=())
+    remove_dc = Bool(True)
+    dt = Int(0)
 
-@dataclass
+
 class SampleProperties(ComponentBase):
-    d: int = 1000
-    layers: int = 1
-    default_values: bool = True
+    d = Int(1000)
+    layers = Int(1)
+    default_values = Bool(True)
 
-@dataclass
+
 class SavePlotsSettings(ComponentBase):
-    path: Path = common.consts.result_dir
-    filetype: str = "pdf"
-    suffix: str = ""
-    bbox_inches: str = "tight"
-    dpi: int = 300
-    pad_inches: int = 0
-    set_size_inches: Tuple[float, float] = (12, 9)
+    path = Instance(Path, default_value=common.consts.result_dir)
+    filetype = Unicode("pdf")
+    suffix = Unicode("")
+    bbox_inches = Unicode("tight")
+    dpi = Int(300)
+    pad_inches = Int(0)
+    set_size_inches = Tuple(Float(), Float(), default_value=(12.0, 9.0))
 
-@dataclass
+
 class ShownPlots(ComponentBase):
-    window: bool = True
-    time_domain: bool = True
-    spectrum: bool = True
-    phase: bool = True
-    phase_slope: bool = False
-    amplitude_transmission: bool = False
-    absorbance: bool = False
-    refractive_index: bool = False
-    absorption_coefficient: bool = False
-    conductivity: bool = False
+    window = Bool(True)
+    time_domain = Bool(True)
+    spectrum = Bool(True)
+    phase = Bool(True)
+    phase_slope = Bool(False)
+    amplitude_transmission = Bool(False)
+    absorbance = Bool(False)
+    refractive_index = Bool(False)
+    absorption_coefficient = Bool(False)
+    conductivity = Bool(False)
 
-@dataclass
+
 class PlotOpt(ComponentBase):
-    plot_range: Tuple[float, float] = field(default=(0.05, 3.5), metadata={"priority": 1, "readonly": False})
-    shift_sam2ref: bool = False
-    label: str = ""
-    sub_noise_floor: bool = False
-    td_scale: int = 1
-    remove_t_offset: bool = False
-    err_bar_limits: Optional[Any] = None
-    ref_err_bars: bool = False
-    stability_plot_rel_change: bool = False
-    subtract_mean: bool = False
-    temp_sensor_idx: int = -1
-    plot_zero_crossing: bool = False
-    disable_legend: List[int] = field(default_factory=list)
-    clip_climate_data: bool = False
-    redp_sensor_labels: Dict[str, str] = field(
-        default_factory=lambda: {
+    plot_range = Tuple(Float(), Float(), default_value=(0.05, 3.5), metadata={"priority": 1, "readonly": False})
+    shift_sam2ref = Bool(False)
+    label = Unicode("")
+    sub_noise_floor = Bool(False)
+    td_scale = Int(1)
+    remove_t_offset = Bool(False)
+    err_bar_limits = TAny(None, allow_none=True)
+    ref_err_bars = Bool(False)
+    stability_plot_rel_change = Bool(False)
+    subtract_mean = Bool(False)
+    temp_sensor_idx = Int(-1)
+    plot_zero_crossing = Bool(False)
+    disable_legend = TList(Int(), default_value=[])
+    clip_climate_data = Bool(False)
+    redp_sensor_labels = TDict(
+        key_trait=Unicode(),
+        value_trait=Unicode(),
+        default_value={
             "Redp idx 0": r"$\theta_{system}$",
             "Redp idx 1": r"$\theta_{air}$",
             "Redp idx 2": r"$\theta_{fiber}$",
@@ -194,32 +199,31 @@ class PlotOpt(ComponentBase):
     )
 
 
-@dataclass
 class AppSettings(ComponentBase):
-    log_level: LogLevel = LogLevel.info
-    result_dir: Path = common.consts.result_dir
-    save_plots: bool = False
-    excluded_areas: Optional[Any] = None
-    cbar_lim: Tuple[Optional[float], Optional[float]] = (None, None)
-    log_scale: bool = False
-    color_map: str = "autumn"
-    invert_x: bool = False
-    invert_y: bool = False
-    pixel_interpolation: PixelInterpolation = PixelInterpolation.none
-    fig_label: str = ""
-    img_title: str = ""
-    en_cbar_label: bool = True
-    ref_pos: Tuple[Optional[float], Optional[float]] = (None, None)
-    ref_threshold: float = 0.95
-    fix_ref: bool = False
-    dist_func: Dist = Dist.Time
+    log_level = TEnum(LogLevel, default_value=LogLevel.info)
+    result_dir = Instance(Path, default_value=common.consts.result_dir)
+    save_plots = Bool(False)
+    excluded_areas = TAny(None, allow_none=True)
+    cbar_lim = Tuple(TAny(allow_none=True), TAny(allow_none=True), default_value=(None, None))
+    log_scale = Bool(False)
+    color_map = Unicode("autumn")
+    invert_x = Bool(False)
+    invert_y = Bool(False)
+    pixel_interpolation = TEnum(PixelInterpolation, default_value=PixelInterpolation.none)
+    fig_label = Unicode("")
+    img_title = Unicode("")
+    en_cbar_label = Bool(True)
+    ref_pos = Tuple(TAny(allow_none=True), TAny(allow_none=True), default_value=(None, None))
+    ref_threshold = Float(0.95)
+    fix_ref = Bool(False)
+    dist_func = TEnum(Dist, default_value=Dist.Time)
 
-    save_plots_settings: SavePlotsSettings = field(default_factory=SavePlotsSettings)
-    pp_opt: PpOpt = field(default_factory=PpOpt)
-    sample_properties: SampleProperties = field(default_factory=SampleProperties)
-    eval_opt: EvalOpt = field(default_factory=EvalOpt)
-    plot_opt: PlotOpt = field(default_factory=PlotOpt)
+    save_plots_settings = Instance(SavePlotsSettings, args=())
+    pp_opt = Instance(PpOpt, args=())
+    sample_properties = Instance(SampleProperties, args=())
+    eval_opt = Instance(EvalOpt, args=())
+    plot_opt = Instance(PlotOpt, args=())
 
-    enable_q_eval: bool = False
-    only_shown_figures: List[Any] = field(default_factory=list)
-    shown_plots: ShownPlots = field(default_factory=ShownPlots)
+    enable_q_eval = Bool(False)
+    only_shown_figures = TList(TAny(), default_value=[])
+    shown_plots = Instance(ShownPlots, args=())

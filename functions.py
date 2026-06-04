@@ -136,25 +136,18 @@ def flip_phase(data_fd):
     return np.array([freq_axis, y_amp_ * np.exp(-1j*y_phi_)]).T
 
 
-def window(data_td, win_width=None, win_start=None, shift=None, en_plot=False, slope=0.15, **k):
+def window(data_td, win_width=10, shift=0, en_plot=False, slope=0.15, **k):
     t, y = data_td[:, 0], data_td[:, 1]
     t -= t[0]
-    default_width = 10  # ps
     dt = np.mean(np.diff(t))
 
-    if win_width is None:
-        win_width = int(default_width / dt)
-    else:
-        win_width = int(win_width / dt)
+    win_width = int(win_width / dt)
 
     if win_width > len(y):
         win_width = len(y)
 
-    if win_start is None:
-        win_center = np.argmax(np.abs(y))
-        win_start = win_center - int(win_width / 2)
-    else:
-        win_start = int(win_start / dt)
+    win_center = np.argmax(np.abs(y))
+    win_start = win_center - int(win_width / 2)
 
     if "type" in k:
         window_function = k["type"]
@@ -173,8 +166,7 @@ def window(data_td, win_width=None, win_start=None, shift=None, en_plot=False, s
     if win_start < 0:
         window_mask[len(y)+win_start:] = 0
 
-    if shift is not None:
-        window_mask = np.roll(window_mask, int(shift / dt))
+    window_mask = np.roll(window_mask, int(shift / dt))
 
     y_win = y * window_mask
 

@@ -103,7 +103,7 @@ class DataSet(ComponentBase):
 
         self.data_path = self._set_path(data_path)
 
-        self.settings = settings
+        self.settings = settings.app_settings
         self._apply_settings()
 
         self._parse_measurements()
@@ -1649,7 +1649,7 @@ class DataSet(ComponentBase):
         plt.title(f"Reference delay\n(relative to first measurement)")
         plt.plot(meas_times, relative_delay, label="Pulse shift")
         plt.xlabel(f"Measurement time ({mt_unit})")
-        plt.ylabel("$\Delta$t (fs)")
+        plt.ylabel(r"$\Delta$t (fs)")
 
         plt.figure("Reference delay change")
         plt.title(f"Reference delay change")
@@ -1657,25 +1657,25 @@ class DataSet(ComponentBase):
         # phase_change = np.abs(np.diff(angle_change))
         # plt.plot(meas_times[1:], 1e3*phase_change/(2*3.1415*selected_freq_), label=t0)
         plt.xlabel(f"Measurement time ({mt_unit})")
-        plt.ylabel("$\Delta (\Delta$t) (fs)")
+        plt.ylabel(r"$\Delta (\Delta$t) (fs)")
 
         plt.figure("Stability amplitude")
         plt.title(f"Amplitude of reference measurement at {selected_freq_} THz")
         plt.plot(meas_times, ampl_change)
         plt.xlabel(f"Measurement time ({mt_unit})")
         if self.settings.plot_opt.stability_plot_rel_change:
-            plt.ylabel("$\Delta$A (%)")
+            plt.ylabel(r"$\Delta$A (%)")
         else:
-            plt.ylabel("$\Delta$A (arb. u.)")
+            plt.ylabel(r"$\Delta$A (arb. u.)")
 
         plt.figure("Stability phase")
         plt.title(f"Phase of reference measurement at {selected_freq_} THz")
         plt.plot(meas_times, angle_change)
         plt.xlabel(f"Measurement time ({mt_unit})")
         if self.settings.plot_opt.stability_plot_rel_change:
-            plt.ylabel("$\Delta \phi$ (%)")
+            plt.ylabel(r"$\Delta \phi$ (%)")
         else:
-            plt.ylabel("$\Delta \phi$ (rad)")
+            plt.ylabel(r"$\Delta \phi$ (rad)")
 
         plt.figure("Time between reference measurements")
         plt.title(f"Time between reference measurements")
@@ -1847,7 +1847,7 @@ class DataSet(ComponentBase):
         else:
             quant = humidity
             y_label = "Humidity (%)"
-            dy_label = f"$\Delta$Humidity (\\%/{mt_unit[0]})"
+            dy_label = fr"$\Delta$Humidity (\\%/{mt_unit[0]})"
 
         meas_time_diff *= conv_factor
 
