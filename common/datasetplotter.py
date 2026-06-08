@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from scipy.special import erfc
 from _shgo import shgo
-from traitlets import Float, observe
+from traitlets import Float, observe, Integer
 from common.traits import Q_, Quantity, ValueRange
 import itertools
 from scipy.stats import pearsonr
@@ -26,7 +26,7 @@ class DataSetPlotter(ComponentBase):
     sel_freq = Float(default_value=1.000)
     sel_freq_range_min = Float(default_value=1.0)
     sel_freq_range_max = Float(default_value=1.200)
-    sel_freq_range = ValueRange(default_value=[Float(1.000), Float(1.200)])
+    sel_freq_range = ValueRange(default_value=[Q_(1.000, "THz"), Q_(1.200, "THz")])
 
     def __init__(self, dataset : DataSet):
         super().__init__()

@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from enum import Enum
+from enum import Enum, member
 from traitlets import (
     HasTraits, Bool, Int, Float, Unicode, Tuple,
     List as TList, Dict as TDict, Enum as TEnum, Instance, Any as TAny
@@ -49,10 +49,9 @@ class ClimateQuantity(Enum):
 
 
 class Dist(Enum):
-    Position = lambda meas1, meas2: (abs(meas1.position[0] - meas2.position[0]) +
-                                     abs(meas1.position[1] - meas2.position[1]))
-    Time = lambda meas1, meas2: (meas1.meas_time - meas2.meas_time).total_seconds()
-
+    Position = member(lambda meas1, meas2: (abs(meas1.position[0] - meas2.position[0]) +
+                                     abs(meas1.position[1] - meas2.position[1])))
+    Time = member(lambda meas1, meas2: (meas1.meas_time - meas2.meas_time).total_seconds())
 
 class Direction(Enum):
     Horizontal = 0
@@ -124,7 +123,6 @@ class EvalOpt(ComponentBase):
     d_opt_axis = TAny(None, allow_none=True)
 
 class PpOpt(ComponentBase):
-    enabled = Bool(False)
     dt = Int(0)
 
     window_group = "Window options"

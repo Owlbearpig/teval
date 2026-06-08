@@ -14,14 +14,51 @@ from collections import OrderedDict
 from itertools import chain
 import numpy as np
 from qtui.flowlayout import FlowLayout
-
-
-def is_component_trait(x):
-    return (isinstance(x, Instance) and issubclass(x.klass, ComponentBase))
+from common.traits import Q_
 
 def is_component_trait(x):
     return (isinstance(x, Instance) and issubclass(x.klass, ComponentBase))
 
+def create_range_entry(component, name, trait):
+    inner_value = trait.get(component)
+
+    is_integer = isinstance(inner_value, int)
+    is_float = isinstance(inner_value, float)
+    is_quantity = isinstance(inner_value, Q_)
+    print(is_integer, is_float, is_quantity)
+    is_double_spinbox = not is_integer
+
+    def get_value_with_units():
+        range_ = trait.get(component)
+        return [range_[0].magnitude, range_[1].magnitude]
+
+    def get_value_without_units():
+        return trait.get(component)
+
+    get_value = (get_value_with_units if is_quantity
+                 else get_value_without_units)
+
+    layout = QtWidgets.QHBoxLayout()
+    spinbox_min = ChangeIndicatorSpinBox(is_double_spinbox=is_double_spinbox,
+                                     actual_value_getter=get_value)
+    spinbox_max = ChangeIndicatorSpinBox(is_double_spinbox=is_double_spinbox,
+                                     actual_value_getter=get_value)
+    spinbox.setToolTip(trait.help)
+
+    if is_integer:
+        spinbox.setMinimum(-2147483648 if trait.min is None else trait.min)
+        spinbox.setMaximum(2147483647 if trait.max is None else trait.max)
+    elif is_float:
+        spinbox.setMinimum(float('-inf') if trait.min is None
+                           else trait.min)
+        spinbox.setMaximum(float('inf') if trait.max is None
+                           else trait.max)
+    elif is_quantity:
+        spinbox.setMinimum(float('-inf') if trait.min is None
+                           else trait.min.magnitude)
+        spinbox.setMaximum(float('inf') if trait.max is None
+                           else trait.max.magnitude)
+    has_limits = not (np.isinf(spinbox.minimum()) or np.isinf(spinbox.maximum()))
 
 def create_spinbox_entry(component, name, trait):
     is_integer = isinstance(trait, Integer)
@@ -119,7 +156,7 @@ def create_spinbox_entry(component, name, trait):
     apply_value_to_spinbox = \
         (apply_value_to_spinbox_with_units if is_quantity
          else apply_value_to_spinbox_without_units)
-    print(trait, name, component)
+
     apply_value_to_spinbox(trait.get(component))
     component.observe(lambda c: apply_value_to_spinbox(c['new']), name)
 
@@ -278,17 +315,6 @@ def create_path_selector(component, name, prettyName, trait):
 
     return layout
 
-
-def create_range_entry(component, name, trait):
-    layout = QtWidgets.QHBoxLayout()
-    value = trait.get(component)
-
-    spinbox_min = create_spinbox_entry(component, name, value[0])
-    spinbox_max = create_spinbox_entry(component, name, value[1])
-
-    return spinbox_min, " to ", spinbox_max
-
-
 def _group(trait):
     return trait.metadata.get('group', 'General')
 
@@ -351,8 +377,9 @@ def generate_component_ui(name, component):
         group = _group(trait)
         layout = groups[group].layout()
         if (isinstance(trait, ValueRange)):
-            layout.addRow(prettyName + ": ",
-                          *create_range_entry(component, name, trait))
+            create_range_entry(component, name, trait)
+            #layout.addRow(prettyName + ": ",
+            #              create_range_entry(component, name, trait))
         if (isinstance(trait, Quantity)):
             layout.addRow(prettyName + ": ",
                           create_spinbox_entry(component, name, trait))

@@ -7,7 +7,7 @@ def is_component_trait(x):
 def _dumb_list_of_actions(inst):
     for name in dir(inst):
         try:
-            attr = getattr(inst, name, None)  # same as inst.name
+            attr = getattr(inst, name, None)
             if not attr._isAction:
                 continue
 

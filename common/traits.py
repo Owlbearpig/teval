@@ -19,7 +19,7 @@ along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 import traitlets
-from traitlets import TraitError, Undefined, TraitType, List as TList
+from traitlets import TraitError, Undefined, TraitType, List as TList, Float, Integer
 
 if float(traitlets.__version__[0]) <= 4:
     from traitlets import class_of
@@ -98,15 +98,22 @@ class Quantity(TraitType):
                                             self.min, self.max, value))
         return value
 
-class ValueRange(TList):
-
+class ValueRange(TraitType):
+    info_text = 'a value range'
+    default_value = [0.0, 1.0]
 
     def __init__(self, default_value=Undefined, allow_none=None, **kwargs):
-        kwargs.setdefault("maxlen", 2)
-        super().__init__(default_value=default_value, allow_none=allow_none,
-                         **kwargs)
         self.dimensionality = kwargs.pop('dimensionality', None)
         self.min = kwargs.pop('min', None)
         self.max = kwargs.pop('max', None)
 
+        super().__init__(default_value=default_value, allow_none=allow_none,
+                         **kwargs)
 
+    def validate(self, obj, value):
+        if not len(value) == 2:
+            self.error(obj, value)
+        if not type(value[0]) == type(value[1]):
+            self.error(obj, value)
+
+        return value
