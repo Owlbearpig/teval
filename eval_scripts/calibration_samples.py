@@ -1,15 +1,16 @@
 from common.components import ComponentBase
-from default_appsettings import Dist, QuantityEnum, WindowOpt, PpOpt, AppSettings, SavePlotsSettings
-from dataset import DataSet
+from common.dataset import DataSet
 import os
 import logging
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from functions import WindowTypes, f_axis_idx_map
-from settings import Settings
+from common.settings import Settings
 from traitlets import Instance
+from common.datasetplotter import DataSetPlotter
 from common.consts import c_thz, eps0_thz
+from common.components import action
 
 if "nt" in os.name:
     figure_dir = r"C:\Users\alexj\Mega\AG\Projects\Conductivity\Calibration test samples - Andreone\Results"
@@ -76,21 +77,26 @@ if "nt" in os.name:
 else:
     dataset_path = r"/home/ftpuser/ftp/Data/CalibrationSamples/Graphene"
 
-
+from common.traits import Q_
 
 class AppRoot(ComponentBase):
 
     settings = Instance(Settings)
     dataset = Instance(DataSet)
+    dataset_plotter = Instance(DataSetPlotter)
 
     def __init__(self):
         super().__init__()
         self.settings = Settings()
         self.dataset = DataSet(dataset_path, self.settings)
+        self.dataset_plotter = DataSetPlotter(self.dataset)
+        self.dataset_plotter.test = Q_(1000000.0, "THz")
 
-    # def __exit__(self, exc_type, exc_val, exc_tb):
-
-
+    @action("Take new measurement")
+    def takeMeasurement(self):
+        res = self.dataset_plotter.plot_system_stability()
+        self.dataset_plotter.plt_show()
+        # self.set_trait('someDataSet', dataSet)
 
 """
 dataset = DataSet(dataset_path)

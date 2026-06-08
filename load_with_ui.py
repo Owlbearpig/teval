@@ -2,7 +2,7 @@ import logging
 import sys
 from pathlib import Path
 import json
-import settings
+import common.settings as settings
 from qtui.autoui import generate_ui
 from PySide6 import QtCore, QtWidgets
 from os.path import basename, splitext
@@ -38,7 +38,7 @@ def run(globals, filename):
 
     with rootClass() as root:
         w, msgBrowser = generate_ui(root)
-        w.resize(1024, 480)
+        w.resize(1280, 720)
 
         logging.captureWarnings(True)
         handler = QTextBrowserLoggingHandler(msgBrowser)
@@ -60,6 +60,7 @@ def run(globals, filename):
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
+    app.setStyle('Fusion')
 
     filename = sys.argv[1]
     globals = {'__name__': splitext(basename(filename))[0]}

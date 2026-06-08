@@ -1,18 +1,11 @@
 from pathlib import Path
 import json
+from common.default_appsettings import AppSettings, PpOpt
+from common.default_appsettings import WindowTypes, PixelInterpolation, Dist, LogLevel
 
-from fontTools.unicodedata import script_name
-
-from common.components import ComponentBase
-from default_appsettings import AppSettings, WindowOpt,  PpOpt
-from default_appsettings import WindowTypes, PixelInterpolation, Dist, LogLevel
-from traitlets import Instance
-
-
-class Settings(ComponentBase):
+class Settings(AppSettings):
 
     script_name = None
-    app_settings = Instance(AppSettings)
 
     def __init__(self, settings_file: Path = None):
         super().__init__()

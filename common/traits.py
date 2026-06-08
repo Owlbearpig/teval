@@ -19,7 +19,7 @@ along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 import traitlets
-from traitlets import TraitError, Undefined, TraitType
+from traitlets import TraitError, Undefined, TraitType, List as TList
 
 if float(traitlets.__version__[0]) <= 4:
     from traitlets import class_of
@@ -97,3 +97,16 @@ class Quantity(TraitType):
                              "specified" % (self.name, class_of(obj),
                                             self.min, self.max, value))
         return value
+
+class ValueRange(TList):
+
+
+    def __init__(self, default_value=Undefined, allow_none=None, **kwargs):
+        kwargs.setdefault("maxlen", 2)
+        super().__init__(default_value=default_value, allow_none=allow_none,
+                         **kwargs)
+        self.dimensionality = kwargs.pop('dimensionality', None)
+        self.min = kwargs.pop('min', None)
+        self.max = kwargs.pop('max', None)
+
+

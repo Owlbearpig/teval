@@ -7,6 +7,7 @@ from traitlets import (
 )
 
 import common.consts
+from common import traits
 from common.components import ComponentBase
 
 class Domain(Enum):
@@ -64,7 +65,7 @@ class WindowTypes(Enum):
     rectangular = "rectangular"
 
 
-class Quantity:
+class QuantityFunc:
     func = None
 
     def __init__(self, label="label", func=None, domain=None, unit=""):
@@ -85,20 +86,20 @@ class Quantity:
 
 
 class QuantityEnum(Enum):
-    P2P = Quantity("Peak to peak")
-    Power = Quantity("Power", domain=Domain.Frequency)
-    Phase = Quantity("Phase", domain=Domain.Frequency, unit="rad")
-    MeasTimeDeltaRef2Sam = Quantity("Time delta Ref. to Sam.")
-    RefAmp = Quantity("Ref. Amp", domain=Domain.Frequency)
-    RefArgmax = Quantity("Ref. Argmax")
-    RefPhase = Quantity("Ref. Phase", domain=Domain.Frequency)
-    PeakCnt = Quantity("Peak Cnt")
-    ZeroCrossing = Quantity("Zero Crossing", domain=Domain.Time, unit="ps")
-    TimeOfFlight = Quantity("Time of Flight", domain=Domain.Time, unit="ps")
-    TransmissionAmp = Quantity("Amplitude transmission", domain=Domain.Frequency)
-    TransmissionPhase = Quantity("Phase transmission", domain=Domain.Frequency, unit="rad")
-    RefractiveIdx = Quantity("Refractive idx", domain=Domain.Frequency)
-    AbsorptionCoe = Quantity("Absorption coe", domain=Domain.Frequency, unit="1/cm")
+    P2P = QuantityFunc("Peak to peak", domain=Domain.Time)
+    Power = QuantityFunc("Power", domain=Domain.Frequency)
+    Phase = QuantityFunc("Phase", domain=Domain.Frequency, unit="rad")
+    MeasTimeDeltaRef2Sam = QuantityFunc("Time delta Ref. to Sam.", domain=Domain.Time)
+    RefAmp = QuantityFunc("Ref. Amp", domain=Domain.Frequency)
+    RefArgmax = QuantityFunc("Ref. Argmax", domain=Domain.Time)
+    RefPhase = QuantityFunc("Ref. Phase", domain=Domain.Frequency)
+    PeakCnt = QuantityFunc("Peak Cnt", domain=Domain.Time)
+    ZeroCrossing = QuantityFunc("Zero Crossing", domain=Domain.Time, unit="ps")
+    TimeOfFlight = QuantityFunc("Time of Flight", domain=Domain.Time, unit="ps")
+    TransmissionAmp = QuantityFunc("Amplitude transmission", domain=Domain.Frequency)
+    TransmissionPhase = QuantityFunc("Phase transmission", domain=Domain.Frequency, unit="rad")
+    RefractiveIdx = QuantityFunc("Refractive idx", domain=Domain.Frequency)
+    AbsorptionCoe = QuantityFunc("Absorption coe", domain=Domain.Frequency, unit="1/cm")
 
 
 class LogLevel(Enum):
@@ -108,19 +109,6 @@ class LogLevel(Enum):
     error = logging.ERROR
     critical = logging.CRITICAL
 
-
-class WindowOpt(ComponentBase):
-    enabled = Bool(False)
-    win_width = Int(10)
-    shift = Float(0)
-    slope = Float(0.15)
-    en_plot = Bool(False)
-    type = TEnum(WindowTypes, default_value=WindowTypes.tukey)
-
-
-class FilterOpt(ComponentBase):
-    enabled = Bool(False)
-    f_range = Tuple(Float(), Float(), default_value=(0.3, 3.0))
 
 
 class EvalOpt(ComponentBase):
@@ -132,16 +120,24 @@ class EvalOpt(ComponentBase):
     average = Bool(False)
     delta_d = Float(2.0)
     phi_offset_correction = Bool(True)
-    printed_freqs = TList(Float(), default_value=None, allow_none=True)
+    printed_freqs = TList(trait=Float(), default_value=[1.000, 2.000])
     d_opt_axis = TAny(None, allow_none=True)
 
-
 class PpOpt(ComponentBase):
-    window_opt = Instance(WindowOpt, args=())
-    filter_opt = Instance(FilterOpt, args=())
-    remove_dc = Bool(True)
+    enabled = Bool(False)
     dt = Int(0)
 
+    window_group = "Window options"
+    enabled = Bool(False, group=window_group)
+    win_width = Int(10, group=window_group)
+    shift = Float(0, group=window_group)
+    slope = Float(0.15, group=window_group)
+    en_plot = Bool(False, group=window_group)
+    type = TEnum(WindowTypes, default_value=WindowTypes.tukey, group=window_group)
+
+    filter_group = "Filter options"
+    f_range = Tuple(Float(), Float(), default_value=(0.3, 3.0), group=filter_group)
+    remove_dc = Bool(True, group=filter_group)
 
 class SampleProperties(ComponentBase):
     d = Int(1000)

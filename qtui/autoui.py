@@ -1,18 +1,20 @@
-from PySide6 import QtWidgets, QtCore
+from PySide6 import QtWidgets, QtCore, QtGui
 from dataclasses import fields, is_dataclass
 from enum import Enum
-from traitlets import Integer, Float, Unicode, Bool
+from traitlets import Integer, Float, Unicode, Bool, Tuple
 from qtui.changeindicatorspinbox import ChangeIndicatorSpinBox
 from qtui.changeindicatorlineedit import ChangeIndicatorLineEdit
 from common.components import ComponentBase
 from traitlets import Instance
-from common.traits import Quantity, Path as PathTrait
+from common.traits import Quantity, Path as PathTrait, ValueRange
 from pathlib import Path
+import types
 import logging
 from collections import OrderedDict
 from itertools import chain
 import numpy as np
 from qtui.flowlayout import FlowLayout
+
 
 def is_component_trait(x):
     return (isinstance(x, Instance) and issubclass(x.klass, ComponentBase))
@@ -26,6 +28,8 @@ def create_spinbox_entry(component, name, trait):
     is_float = isinstance(trait, Float)
     is_quantity = isinstance(trait, Quantity)
 
+    is_double_spinbox = not is_integer
+
     def get_value_with_units():
         return trait.get(component).magnitude
 
@@ -34,9 +38,8 @@ def create_spinbox_entry(component, name, trait):
 
     get_value = (get_value_with_units if is_quantity
                  else get_value_without_units)
-
     layout = QtWidgets.QHBoxLayout()
-    spinbox = ChangeIndicatorSpinBox(is_double_spinbox=not is_integer,
+    spinbox = ChangeIndicatorSpinBox(is_double_spinbox=is_double_spinbox,
                                      actual_value_getter=get_value)
     spinbox.setToolTip(trait.help)
 
@@ -53,6 +56,7 @@ def create_spinbox_entry(component, name, trait):
                            else trait.min.magnitude)
         spinbox.setMaximum(float('inf') if trait.max is None
                            else trait.max.magnitude)
+    has_limits = not (np.isinf(spinbox.minimum()) or np.isinf(spinbox.maximum()))
 
     spinbox.setReadOnly(trait.read_only)
     if trait.read_only:
@@ -62,6 +66,22 @@ def create_spinbox_entry(component, name, trait):
         units = (trait.metadata.get('preferred_units', None) or
                  trait.get(component).units)
         spinbox.setSuffix(" {:C~}".format(units))
+
+    if is_double_spinbox and not has_limits:
+        def sizeHint(self):
+            original_hint = QtWidgets.QDoubleSpinBox.sizeHint(self)
+            decimals = spinbox.decimals()
+            font_metrics = spinbox.fontMetrics()
+            text_width = font_metrics.horizontalAdvance(str(f"{get_value():.{decimals}f}"))
+            button_padding = 30
+            suffix_padding = font_metrics.horizontalAdvance(spinbox.suffix())
+
+            new_width = text_width + button_padding + suffix_padding
+
+            return QtCore.QSize(max(new_width, 20), original_hint.height())
+
+        spinbox.sizeHint = types.MethodType(sizeHint, spinbox)
+        spinbox.updateGeometry()
 
     layout.addWidget(spinbox)
     if not trait.read_only:
@@ -99,7 +119,7 @@ def create_spinbox_entry(component, name, trait):
     apply_value_to_spinbox = \
         (apply_value_to_spinbox_with_units if is_quantity
          else apply_value_to_spinbox_without_units)
-
+    print(trait, name, component)
     apply_value_to_spinbox(trait.get(component))
     component.observe(lambda c: apply_value_to_spinbox(c['new']), name)
 
@@ -139,10 +159,10 @@ def create_checkbox(component, name, prettyName, trait):
 
 
 def create_action(component, action):
-    qaction = QtWidgets.QAction(action.metadata.get('name', action.__name__), None)
+    qaction = QtGui.QAction(action.metadata.get('name', action.__name__), None)
     qaction.setToolTip(action.help)
 
-    qaction.triggered.connect(lambda: action)
+    qaction.triggered.connect(lambda: action())
 
     return qaction
 
@@ -259,6 +279,16 @@ def create_path_selector(component, name, prettyName, trait):
     return layout
 
 
+def create_range_entry(component, name, trait):
+    layout = QtWidgets.QHBoxLayout()
+    value = trait.get(component)
+
+    spinbox_min = create_spinbox_entry(component, name, value[0])
+    spinbox_max = create_spinbox_entry(component, name, value[1])
+
+    return spinbox_min, " to ", spinbox_max
+
+
 def _group(trait):
     return trait.metadata.get('group', 'General')
 
@@ -320,7 +350,9 @@ def generate_component_ui(name, component):
         prettyName = _prettyName(trait, name)
         group = _group(trait)
         layout = groups[group].layout()
-
+        if (isinstance(trait, ValueRange)):
+            layout.addRow(prettyName + ": ",
+                          *create_range_entry(component, name, trait))
         if (isinstance(trait, Quantity)):
             layout.addRow(prettyName + ": ",
                           create_spinbox_entry(component, name, trait))
@@ -388,7 +420,6 @@ def generate_ui(component):
         newItem.setExpanded(True)
 
         widget = generate_component_ui(prettyName, component)
-        # widget = QtWidgets.QGroupBox(prettyName)
         newItem.widgetId = stack.addWidget(widget)
 
         for name, trait in sorted(component.attributes.items(), key=lambda x: x[0]):

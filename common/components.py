@@ -17,6 +17,24 @@ def _dumb_list_of_actions(inst):
         except traitlets.TraitError:
             pass
 
+def action(name=None, help=None, **kwargs):
+    if name is None:
+        name = ''
+    if help is None:
+        help = ''
+
+    kwargs['name'] = name
+    kwargs['help'] = help
+
+    def action_impl(method):
+        method._isAction = True
+        method.metadata = kwargs
+        method.help = help
+        return method
+
+    return action_impl
+
+
 class ComponentBase(HasTraits):
 
     def __init__(self, object_name : str = None):
