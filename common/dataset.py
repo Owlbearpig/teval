@@ -87,11 +87,15 @@ class DataSet(ComponentBase):
 
         self.data_path = self._set_path(data_path)
 
-        self.settings = settings.app_settings
+        self.settings = settings
 
         self._parse_measurements()
 
         self._check_refs_exist()
+
+    @action("print settings")
+    def print_settings(self):
+        print(self.settings.pp_opt.filter_enabled)
 
     def _data_properties(self):
         sample_data_td, sample_data_fd = self.get_data(self.measurements["all"][0], domain=Domain.Both)
@@ -338,11 +342,11 @@ class DataSet(ComponentBase):
         if pp_opt.remove_dc:
             data_td = remove_offset(data_td)
 
-        if pp_opt.enabled:
-            data_td = window(data_td, **pp_opt.window_opt)
+        if pp_opt.window_enabled:
+            data_td = window(data_td, **pp_opt.traits())
 
-        if pp_opt.enabled:
-            data_td = butter_filt(data_td, **pp_opt)
+        if pp_opt.filter_enabled:
+            data_td = butter_filt(data_td, pp_opt.f_range)
 
         return data_td
 
@@ -669,17 +673,17 @@ class DataSet(ComponentBase):
 
         d = self.settings.sample_properties.d
 
-        og_win_setting = deepcopy(self.settings.pp_opt.window_opt)
+        og_pp_opt = deepcopy(self.settings.pp_opt)
 
-        self.settings.pp_opt.window_opt.enabled = True
-        self.settings.pp_opt.window_opt.win_width = 10
-        self.settings.pp_opt.window_opt.win_start = None
-        self.settings.pp_opt.window_opt.en_plot = False
+        self.settings.pp_opt.enabled = True
+        self.settings.pp_opt.win_width = 10
+        self.settings.pp_opt.win_start = None
+        self.settings.pp_opt.en_plot = False
 
         ref_td, ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Both)
         sam_td, sam_fd = self.get_data(meas_, Domain.Both)
 
-        self.settings.pp_opt.window_opt = og_win_setting
+        self.settings.pp_opt = og_pp_opt
 
         freq_axis = self.freq_axis
 
@@ -838,7 +842,7 @@ class DataSet(ComponentBase):
 
     def find_nearest_ref(self, meas_, dist_func=None) -> Measurement:
         if not dist_func:
-            dist_func = self.settings.dist_func
+            dist_func = self.settings.dist_func.value
 
         closest_ref, best_fit_val = None, np.inf
         for ref_meas in self.measurements["refs"]:

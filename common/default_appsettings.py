@@ -9,6 +9,7 @@ from traitlets import (
 import common.consts
 from common import traits
 from common.components import ComponentBase
+from common.traits import ValueRange
 
 class Domain(Enum):
     Time = 0
@@ -122,11 +123,12 @@ class EvalOpt(ComponentBase):
     printed_freqs = TList(trait=Float(), default_value=[1.000, 2.000])
     d_opt_axis = TAny(None, allow_none=True)
 
+
 class PpOpt(ComponentBase):
     dt = Int(0)
 
     window_group = "Window options"
-    enabled = Bool(False, group=window_group)
+    window_enabled = Bool(False, group=window_group, name="Enabled")
     win_width = Int(10, group=window_group)
     shift = Float(0, group=window_group)
     slope = Float(0.15, group=window_group)
@@ -134,6 +136,7 @@ class PpOpt(ComponentBase):
     type = TEnum(WindowTypes, default_value=WindowTypes.tukey, group=window_group)
 
     filter_group = "Filter options"
+    filter_enabled = Bool(False, group=filter_group, name="Enabled")
     f_range = Tuple(Float(), Float(), default_value=(0.3, 3.0), group=filter_group)
     remove_dc = Bool(True, group=filter_group)
 
@@ -171,10 +174,11 @@ class PlotOpt(ComponentBase):
     shift_sam2ref = Bool(False)
     label = Unicode("")
     sub_noise_floor = Bool(False)
-    td_scale = Int(1)
+    td_scale = Float(1.0)
     remove_t_offset = Bool(False)
-    err_bar_limits = TAny(None, allow_none=True)
+    err_bar_limits = ValueRange([90, 110])
     ref_err_bars = Bool(False)
+    fig_num_ext = Unicode("")
     stability_plot_rel_change = Bool(False)
     subtract_mean = Bool(False)
     temp_sensor_idx = Int(-1)
@@ -210,6 +214,7 @@ class AppSettings(ComponentBase):
     ref_pos = Tuple(TAny(allow_none=True), TAny(allow_none=True), default_value=(None, None))
     ref_threshold = Float(0.95)
     fix_ref = Bool(False)
+    en_csv_export = Bool(False)
     dist_func = TEnum(Dist, default_value=Dist.Time)
 
     save_plots_settings = Instance(SavePlotsSettings, args=())

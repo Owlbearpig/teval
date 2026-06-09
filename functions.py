@@ -105,8 +105,7 @@ def zero_pad(data_td, length=100):
 
     return array([new_t, new_y]).T
 
-def butter_filt(data_td, **options):
-    f_range = options["f_range"]
+def butter_filt(data_td, f_range):
 
     def butter_bandpass(lowcut, highcut, fs, order=5):
         nyq = 0.5 * fs

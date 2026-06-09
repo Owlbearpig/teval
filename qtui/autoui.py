@@ -10,6 +10,7 @@ from common.traits import Quantity, Path as PathTrait, ValueRange
 from pathlib import Path
 import types
 import logging
+from functools import partial
 from collections import OrderedDict
 from itertools import chain
 import numpy as np
@@ -19,46 +20,111 @@ from common.traits import Q_
 def is_component_trait(x):
     return (isinstance(x, Instance) and issubclass(x.klass, ComponentBase))
 
+
 def create_range_entry(component, name, trait):
-    inner_value = trait.get(component)
+    range_val = trait.get(component)
+    sb_cnt = len(range_val)
+    inner_value = range_val[0]
 
     is_integer = isinstance(inner_value, int)
     is_float = isinstance(inner_value, float)
     is_quantity = isinstance(inner_value, Q_)
-    print(is_integer, is_float, is_quantity)
     is_double_spinbox = not is_integer
 
-    def get_value_with_units():
-        range_ = trait.get(component)
-        return [range_[0].magnitude, range_[1].magnitude]
-
-    def get_value_without_units():
-        return trait.get(component)
-
-    get_value = (get_value_with_units if is_quantity
-                 else get_value_without_units)
-
-    layout = QtWidgets.QHBoxLayout()
-    spinbox_min = ChangeIndicatorSpinBox(is_double_spinbox=is_double_spinbox,
-                                     actual_value_getter=get_value)
-    spinbox_max = ChangeIndicatorSpinBox(is_double_spinbox=is_double_spinbox,
-                                     actual_value_getter=get_value)
-    spinbox.setToolTip(trait.help)
-
     if is_integer:
-        spinbox.setMinimum(-2147483648 if trait.min is None else trait.min)
-        spinbox.setMaximum(2147483647 if trait.max is None else trait.max)
+        min_val = -2147483648 if trait.min is None else trait.min
+        max_val = 2147483647 if trait.max is None else trait.max
     elif is_float:
-        spinbox.setMinimum(float('-inf') if trait.min is None
-                           else trait.min)
-        spinbox.setMaximum(float('inf') if trait.max is None
-                           else trait.max)
+        min_val = float('-inf') if trait.min is None else trait.min
+        max_val = float('inf') if trait.max is None else trait.max
     elif is_quantity:
-        spinbox.setMinimum(float('-inf') if trait.min is None
-                           else trait.min.magnitude)
-        spinbox.setMaximum(float('inf') if trait.max is None
-                           else trait.max.magnitude)
-    has_limits = not (np.isinf(spinbox.minimum()) or np.isinf(spinbox.maximum()))
+        min_val = float('-inf') if trait.min is None else trait.min.magnitude
+        max_val = float('inf') if trait.max is None else trait.max.magnitude
+
+    has_limits = not (np.isinf(min_val) or np.isinf(max_val))
+    layout = QtWidgets.QHBoxLayout()
+
+    spinboxes = []
+    def setup_single_spinbox(sb_idx):
+        def get_value():
+            range_val = trait.get(component)
+            return range_val[sb_idx].magnitude if is_quantity else range_val[sb_idx]
+
+        spinbox = ChangeIndicatorSpinBox(is_double_spinbox=is_double_spinbox,
+                                         actual_value_getter=get_value)
+        spinboxes.append(spinbox)
+        spinbox.setMinimum(min_val)
+        spinbox.setMaximum(max_val)
+        spinbox.setToolTip(trait.help)
+        spinbox.setReadOnly(trait.read_only)
+
+        if trait.read_only:
+            spinbox.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
+
+        units = None
+        if is_quantity:
+            range_val = trait.get(component)
+            units = trait.metadata.get('preferred_units', None) or range_val[sb_idx].units
+            spinbox.setSuffix(f" {units:C~}")
+
+        if is_double_spinbox and not has_limits:
+            def sizeHint(self):
+                original_hint = QtWidgets.QDoubleSpinBox.sizeHint(self)
+                decimals = spinbox.decimals()
+                font_metrics = spinbox.fontMetrics()
+                text_width = font_metrics.horizontalAdvance(f"{get_value():.{decimals}f}")
+                button_padding = 30
+                suffix_padding = font_metrics.horizontalAdvance(spinbox.suffix())
+                return QtCore.QSize(max(text_width + button_padding + suffix_padding, 20), original_hint.height())
+
+            spinbox.sizeHint = types.MethodType(sizeHint, spinbox)
+            spinbox.updateGeometry()
+
+        layout.addWidget(spinbox)
+
+        if not trait.read_only:
+            apply = QtWidgets.QToolButton()
+            apply.setFocusPolicy(QtCore.Qt.NoFocus)
+            apply.setText('✓')
+            apply.setAutoRaise(True)
+            layout.addWidget(apply)
+
+            def apply_value_to_component():
+                range_val = trait.get(component)
+
+                spinboxes[0].setMaximum(range_val[1].magnitude if is_quantity else range_val[1])
+                spinboxes[1].setMinimum(range_val[0].magnitude if is_quantity else range_val[0])
+
+                range_val[sb_idx] = spinbox.value() * units if is_quantity else spinbox.value()
+                setattr(component, name, range_val)
+
+            apply.clicked.connect(apply_value_to_component)
+            apply.clicked.connect(spinbox.check_changed)
+            spinbox.editingFinished.connect(apply_value_to_component)
+            spinbox.editingFinished.connect(spinbox.check_changed)
+
+        def update_spinbox_from_trait(new_val):
+            spinbox.blockSignals(True)
+            spinbox.setValue(new_val[sb_idx].to(units).magnitude if is_quantity else new_val[sb_idx])
+            spinbox.blockSignals(False)
+
+        update_spinbox_from_trait(trait.get(component))
+        component.observe(lambda c: update_spinbox_from_trait(c['new']), name)
+
+    for i in range(2):
+        setup_single_spinbox(sb_idx=i)
+
+        if i != sb_cnt-1:
+            separator_label = QtWidgets.QLabel("-")
+            separator_label.setAlignment(QtCore.Qt.AlignCenter)
+            separator_label.setStyleSheet("padding: 0 4px;")
+            layout.addWidget(separator_label)
+
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setStretch(0, 1)
+    layout.setStretch(1, 0)
+
+    return layout
 
 def create_spinbox_entry(component, name, trait):
     is_integer = isinstance(trait, Integer)
@@ -377,9 +443,9 @@ def generate_component_ui(name, component):
         group = _group(trait)
         layout = groups[group].layout()
         if (isinstance(trait, ValueRange)):
-            create_range_entry(component, name, trait)
-            #layout.addRow(prettyName + ": ",
-            #              create_range_entry(component, name, trait))
+            # create_range_entry(component, name, trait)
+            layout.addRow(prettyName + ": ",
+                          create_range_entry(component, name, trait))
         if (isinstance(trait, Quantity)):
             layout.addRow(prettyName + ": ",
                           create_spinbox_entry(component, name, trait))

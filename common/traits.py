@@ -110,10 +110,20 @@ class ValueRange(TraitType):
         super().__init__(default_value=default_value, allow_none=allow_none,
                          **kwargs)
 
+    def __getitem__(self, item):
+        if isinstance(item, int):
+            val = self.default_value[item]
+            return val
+
     def validate(self, obj, value):
         if not len(value) == 2:
             self.error(obj, value)
         if not type(value[0]) == type(value[1]):
             self.error(obj, value)
+        if isinstance(value[0], Q_) and value[0].units != value[1].units:
+            self.error(obj, value)
+        if not value[0] <= value[1]:
+            self.error(obj, value)
+
 
         return value

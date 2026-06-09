@@ -92,6 +92,10 @@ class AppRoot(ComponentBase):
         self.dataset_plotter = DataSetPlotter(self.dataset)
         self.dataset_plotter.test = Q_(1000000.0, "THz")
 
+    @action("print settings")
+    def print_settings(self):
+        print(self.settings.pp_opt.filter_enabled)
+
     @action("Take new measurement")
     def takeMeasurement(self):
         res = self.dataset_plotter.plot_system_stability()

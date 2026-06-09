@@ -338,19 +338,18 @@ class DataSetPlotter(ComponentBase):
         # self.plt_show()
 
     @action("Plot ref. meas", group="Plots")
-    def plot_ref(self, ref_meas_=None, timestamp=None, ref_idx=None, **kwargs_):
-        kwargs = {**self.settings.plot_opt.attributes}
-        kwargs.update(kwargs_)
+    def plot_ref(self, ref_meas_=None, timestamp=None, ref_idx=None):
 
-        fig_num_ext = kwargs.get("fig_num_ext", "")
+        fig_num_ext = self.settings.plot_opt.fig_num_ext
+        label = None
 
         if (ref_meas_ is None) and (timestamp is None):
             if isinstance(ref_idx, int):
                 ref_meas_ = self.measurements["refs"][ref_idx]
-                kwargs["label"] = f"Reference idx: {ref_idx}"
+                label = f"Reference idx: {ref_idx}"
             else:
                 ref_meas_ = self.measurements["refs"][0]
-                kwargs["label"] = "Reference idx: 0"
+                label = "Reference idx: 0"
         elif ref_meas_ is None:
             ref_meas_ = self.dataset.get_measurement_from_timestamp(timestamp)
             if ref_meas_ is None:
@@ -367,12 +366,12 @@ class DataSetPlotter(ComponentBase):
         plot_range = self.settings.plot_opt.plot_range
         f_idx_range = f_axis_idx_map(self.dataset.freq_axis, plot_range)
 
-        if kwargs["remove_t_offset"]:
+        if self.settings.plot_opt.remove_t_offset:
             ref_td[:, 0] -= ref_td[0, 0]
 
-        label = kwargs.get("label", f"Reference ({ref_meas_.meas_time})")
+        label = label if label else f"Reference ({ref_meas_.meas_time})"
 
-        sub_noise_floor = bool(kwargs["sub_noise_floor"])
+        sub_noise_floor = self.settings.plot_opt.sub_noise_floor
         noise_floor = np.mean(20 * np.log10(np.abs(ref_fd[ref_fd[:, 0] > 6.0, 1]))) * sub_noise_floor
 
         y_db = (20 * np.log10(np.abs(ref_fd[f_idx_range, 1])) - noise_floor).real
@@ -391,18 +390,20 @@ class DataSetPlotter(ComponentBase):
 
     @action("Plot meas", group="Plots")
     def plot_meas(self, point=None, timestamp=None, en_td_plot=True, **kwargs_):
-        kwargs = {**self.settings.plot_opt.attributes}
+        kwargs = {}
         kwargs.update(kwargs_)
 
-        label = kwargs["label"]
-        sub_noise_floor = kwargs["sub_noise_floor"]
-        td_scale = kwargs["td_scale"]
-        remove_t_offset = kwargs["remove_t_offset"]
-        std_limits = kwargs["err_bar_limits"] # limits of spatial coordinates to average over, for the err_bars
-        en_csv_export = kwargs.get("en_csv_export", False)
-        fig_num_ext = kwargs.get("fig_num_ext", "")
+        plot_opt = self.settings.plot_opt
+        label = plot_opt.label
+        sub_noise_floor = plot_opt.sub_noise_floor
+        td_scale = plot_opt.td_scale
+        remove_t_offset = plot_opt.remove_t_offset
+        std_limits = plot_opt.err_bar_limits # limits of spatial coordinates to average over, for the err_bars
+        en_csv_export = self.settings.en_csv_export
+        fig_num_ext = plot_opt.fig_num_ext
+        plot_range = plot_opt.plot_range
+        ref_err_bars = plot_opt.ref_err_bars
 
-        plot_range = self.settings.plot_opt.plot_range
         f_idx_range = f_axis_idx_map(self.dataset.freq_axis, plot_range)
         if (point is not None) and (timestamp is not None):
             logging.warning("either point or timestamp has to be None")
@@ -433,16 +434,16 @@ class DataSetPlotter(ComponentBase):
         logging.info(f"Sample measurement: {selected_meas}\n")
 
         # TODO redo window plotting
-        show_win_plot = deepcopy(self.settings.pp_opt.window_opt.en_plot)
-        if self.settings.shown_plots.Window:
-            self.settings.pp_opt.window_opt.en_plot = True
+        show_win_plot = deepcopy(self.settings.pp_opt.en_plot)
+        if self.settings.shown_plots.window:
+            self.settings.pp_opt.en_plot = True
 
-        self.settings.pp_opt.window_opt.fig_label = "ref"
+        self.settings.pp_opt.fig_label = "ref"
         ref_td, ref_fd = self.dataset.get_data(ref_meas, domain=Domain.Both)
 
         #ref_fd[:, 1] = np.abs(ref_fd[:, 1]) * np.exp(-1j*np.angle(ref_fd[:, 1]))
         #ref_td = do_ifft(ref_fd, conj=False)
-        self.settings.pp_opt.window_opt.fig_label = "sam"
+        self.settings.pp_opt.fig_label = "sam"
 
         sam_td, sam_fd = meas_quants["sam_td"], meas_quants["sam_fd"]
         ref_td, ref_fd = meas_quants["ref_td"], meas_quants["ref_fd"]
@@ -451,7 +452,7 @@ class DataSetPlotter(ComponentBase):
             shift_t = np.abs(np.argmax(ref_td[:, 1]) - np.argmax(sam_td[:, 1]))
             sam_td[:, 1] = np.roll(sam_td[:, 1], -shift_t)
 
-        self.settings.pp_opt.window_opt.en_plot = show_win_plot
+        self.settings.pp_opt.en_plot = show_win_plot
 
         if remove_t_offset:
             sam_td[:, 0] -= sam_td[0, 0]
@@ -467,7 +468,7 @@ class DataSetPlotter(ComponentBase):
                 t = sam_fd_line[:, 1] / ref_fd[:, 1]
                 absorbance_arrs.append(20*np.log10(np.abs(1/t)))
             err_bar_range = np.std(absorbance_arrs, axis=0)
-        if kwargs["ref_err_bars"]:
+        if ref_err_bars:
             all_ref_meas = self.measurements["refs"]
             ref_meas_first, ref_meas_last = all_ref_meas[0], all_ref_meas[-1]
             ref_fd_first = self.dataset.get_data(ref_meas_first, domain=Domain.Frequency)
@@ -493,7 +494,7 @@ class DataSetPlotter(ComponentBase):
         t = sam_fd[:, 1] / ref_fd[:, 1]
         absorb = np.abs(1/t)
 
-        simple_eval_res = self.dataset.single_layer_eval(selected_meas, (0, 10))
+        simple_eval_res = self.dataset.single_layer_eval(selected_meas)
         phi = simple_eval_res["phi"]
         phi_corrected = simple_eval_res["phi_corrected"]
         refr_idx = simple_eval_res["refr_idx"]
@@ -511,7 +512,7 @@ class DataSetPlotter(ComponentBase):
         phi = phi[f_idx_range]
         phi_corrected = phi_corrected[f_idx_range]
         refr_idx = refr_idx[f_idx_range]
-        alph = self.dataset.absorption_coef(selected_meas, plot_range)
+        alph = self.dataset.absorption_coef(selected_meas)
 
         if not self.dataset.plotted_ref:
             self.plot_ref(ref_meas, **kwargs)
@@ -584,7 +585,7 @@ class DataSetPlotter(ComponentBase):
         ax1.plot(freq_axis[f_idx_range], refr_idx.imag, label=label)
 
         plt.figure("Absorption coefficient" + fig_num_ext)
-        plt.plot(freq_axis[f_idx_range], alph, label=label)
+        plt.plot(freq_axis[f_idx_range], alph[f_idx_range], label=label)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Absorption coefficient (1/cm)")
 
