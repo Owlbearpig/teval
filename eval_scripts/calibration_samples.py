@@ -102,6 +102,10 @@ class AppRoot(ComponentBase):
         self.dataset_plotter.plt_show()
         # self.set_trait('someDataSet', dataSet)
 
+    @action("print log level")
+    def print_log_level(self):
+        print(self.settings.log_level)
+
 """
 dataset = DataSet(dataset_path)
 dataset.select_freq(2.0)

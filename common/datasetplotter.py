@@ -23,9 +23,6 @@ from copy import deepcopy
 
 class DataSetPlotter(ComponentBase):
 
-    sel_freq = Float(default_value=1.000)
-    sel_freq_range_min = Float(default_value=1.0)
-    sel_freq_range_max = Float(default_value=1.200)
     sel_freq_range = ValueRange(default_value=[Q_(1.000, "THz"), Q_(1.200, "THz")])
 
     def __init__(self, dataset : DataSet):
@@ -42,10 +39,9 @@ class DataSetPlotter(ComponentBase):
 
         self._apply_settings()
 
-
-    @observe("sel_freq")
+    @observe("sel_freq_range")
     def select_freq(self, change):
-        self.sel_freq = change["new"]
+        self.sel_freq_range = change["new"]
         self.selected_freq_idx = self.freq_idx()
         self._update_fig_num()
 
@@ -79,24 +75,19 @@ class DataSetPlotter(ComponentBase):
         return grid_vals
 
     def _apply_settings(self):
-        if self.sel_freq is None:
-            self.select_freq(1.000)
-
         if self.selected_quantity is None:
             self.select_quantity(QuantityEnum.P2P)
 
     def freq_idx(self, freq=None):
         if freq is None:
-            freq = self.sel_freq
-        selected_freq_idx = np.argmin(np.abs(self.dataset.freq_axis - freq))
+            freq = self.sel_freq_range[0]
+        selected_freq_idx = f_axis_idx_map(self.dataset.freq_axis, freq)
 
         return selected_freq_idx
 
     def select_quantity(self, quantity, label=""):
-        sel_freq_range = (self.sel_freq_range_min, self.sel_freq_range_max)
-
-        power_func = partial(self.dataset.power, freq_range=sel_freq_range)
-        peal_cnt_func = partial(self.dataset.simple_peak_cnt, threshold=2.5)
+        power_func = partial(self.dataset.power, freq_range=self.selected_freq_idx)
+        peak_cnt_func = partial(self.dataset.simple_peak_cnt, threshold=2.5)
 
         func_map = {QuantityEnum.P2P: self.dataset.p2p,
                     QuantityEnum.Phase: self.dataset.phase,
@@ -105,7 +96,7 @@ class DataSetPlotter(ComponentBase):
                     QuantityEnum.RefAmp: self.dataset.ref_max,
                     QuantityEnum.RefArgmax: self.dataset.get_ref_argmax,
                     QuantityEnum.RefPhase: self.dataset.ref_phase,
-                    QuantityEnum.PeakCnt: peal_cnt_func,
+                    QuantityEnum.PeakCnt: peak_cnt_func,
                     QuantityEnum.ZeroCrossing: self.dataset.get_zero_crossing,
                     QuantityEnum.TimeOfFlight: self.dataset.time_of_flight,
                     QuantityEnum.TransmissionAmp: self.dataset.amplitude_transmission,
@@ -168,11 +159,11 @@ class DataSetPlotter(ComponentBase):
             fig_num += self.settings.fig_label + " "
         fig_num += str(self.selected_quantity)
 
-        if isinstance(self.sel_freq, tuple):
-            f1, f2 = int(self.sel_freq[0] * 1e3), int(self.sel_freq[1] * 1e3)
+        if self.selected_quantity == QuantityEnum.Power:
+            f1, f2 = int(self.sel_freq_range[0].magnitude * 1e3), int(self.sel_freq_range[1].magnitude * 1e3)
             fig_num += en_freq_label * f" {f1}-{f2} GHz"
         else:
-            fig_num += en_freq_label * f" {int(self.sel_freq * 1e3)}GHz"
+            fig_num += en_freq_label * f" {int(self.sel_freq_range[0].magnitude * 1e3)}GHz"
         fig_num = fig_num.replace(" ", "_")
 
         self.img_properties["fig_num"] = fig_num + self.dataset.is_sub_dataset * "_subset"
@@ -181,10 +172,10 @@ class DataSetPlotter(ComponentBase):
 
     def _update_quantity_label(self):
         en_freq_label = Domain.Frequency == self.selected_quantity.domain
-        if isinstance(self.sel_freq, tuple):
-            freq_label = f"({self.sel_freq[0]}-{self.sel_freq[1]} THz)"
+        if self.selected_quantity == QuantityEnum.Power:
+            freq_label = f"({self.sel_freq_range[0]}-{self.sel_freq_range[1]})"
         else:
-            freq_label = f"({self.sel_freq} THz)"
+            freq_label = f"({self.sel_freq_range[0]})"
 
         self.img_properties["quantity_label"] = " ".join([str(self.selected_quantity),
                                                           freq_label * en_freq_label])
@@ -642,6 +633,7 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel(f"Frequency (THz)")
         plt.ylabel("Amplitude (dB)")
 
+    @action("Plot system stability", group="Plots")
     def plot_system_stability(self, climate_log_file=None, meas_set_kw=None):
         if meas_set_kw is not None:
             meas_set = []
@@ -656,9 +648,7 @@ class DataSetPlotter(ComponentBase):
             meas_set = self.measurements["refs"]
             logging.info("Using reference measurement set")
 
-        selected_freq_ = self.sel_freq
-        if isinstance(selected_freq_, tuple):
-            selected_freq_ = selected_freq_[0]
+        selected_freq_ = self.sel_freq_range[0].magnitude
         f_idx = np.argmin(np.abs(self.dataset.freq_axis - selected_freq_))
 
         ampl_arr, angle_arr, relative_delay, spec_similarity = np.zeros((4, len(meas_set)))
@@ -1273,11 +1263,8 @@ class DataSetPlotter(ComponentBase):
         plt.ylabel("Largest jump (fs)")
 
     def knife_edge(self, x=None, y=None, coord_slice=None):
-        if not isinstance(self.sel_freq, tuple):
-            raise ValueError("selected_freq must be a tuple")
-
         measurements, coords = self.dataset.get_line(x, y)
-        vals = np.array([self.dataset.power(meas_) for meas_ in measurements])
+        vals = np.array([self.dataset.power(meas_, self.sel_freq_range) for meas_ in measurements])
 
         pos_axis = coords[np.nonzero(vals)]
         vals = vals[np.nonzero(vals)]

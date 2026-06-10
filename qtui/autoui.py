@@ -1,7 +1,6 @@
 from PySide6 import QtWidgets, QtCore, QtGui
 from dataclasses import fields, is_dataclass
-from enum import Enum
-from traitlets import Integer, Float, Unicode, Bool, Tuple
+from traitlets import Integer, Float, Unicode, Bool, Tuple, Enum
 from qtui.changeindicatorspinbox import ChangeIndicatorSpinBox
 from qtui.changeindicatorlineedit import ChangeIndicatorLineEdit
 from common.components import ComponentBase
@@ -47,8 +46,8 @@ def create_range_entry(component, name, trait):
     spinboxes = []
     def setup_single_spinbox(sb_idx):
         def get_value():
-            range_val = trait.get(component)
-            return range_val[sb_idx].magnitude if is_quantity else range_val[sb_idx]
+            range_ = trait.get(component)
+            return range_[sb_idx].magnitude if is_quantity else range_[sb_idx]
 
         spinbox = ChangeIndicatorSpinBox(is_double_spinbox=is_double_spinbox,
                                          actual_value_getter=get_value)
@@ -57,14 +56,16 @@ def create_range_entry(component, name, trait):
         spinbox.setMaximum(max_val)
         spinbox.setToolTip(trait.help)
         spinbox.setReadOnly(trait.read_only)
+        spinbox.setAccessibleName(str(sb_idx))
+        print(spinbox.accessibleName())
 
         if trait.read_only:
             spinbox.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
 
         units = None
         if is_quantity:
-            range_val = trait.get(component)
-            units = trait.metadata.get('preferred_units', None) or range_val[sb_idx].units
+            trait_val = trait.get(component)
+            units = trait.metadata.get('preferred_units', None) or trait_val[sb_idx].units
             spinbox.setSuffix(f" {units:C~}")
 
         if is_double_spinbox and not has_limits:
@@ -90,13 +91,20 @@ def create_range_entry(component, name, trait):
             layout.addWidget(apply)
 
             def apply_value_to_component():
-                range_val = trait.get(component)
+                range_val_ = trait.get(component)
 
-                spinboxes[0].setMaximum(range_val[1].magnitude if is_quantity else range_val[1])
-                spinboxes[1].setMinimum(range_val[0].magnitude if is_quantity else range_val[0])
-
-                range_val[sb_idx] = spinbox.value() * units if is_quantity else spinbox.value()
-                setattr(component, name, range_val)
+                '''
+                if(spinbox.accessibleName()=='1'):
+                    if(range_val_[1]<range_val_[0]):
+                        spinboxes[0].setValue(range_val_[1].magnitude if is_quantity else range_val_[1])
+                if (spinbox.accessibleName() == '0'):
+                    if (range_val_[0] > range_val_[1]):
+                        spinboxes[1].setValue(range_val_[0].magnitude if is_quantity else range_val_[0])
+                #spinboxes[0].setMaximum(range_val_[1].magnitude if is_quantity else range_val_[1])
+                #spinboxes[1].setMinimum(range_val_[0].magnitude if is_quantity else range_val_[0])
+                '''
+                range_val_[sb_idx] = spinbox.value() * units if is_quantity else spinbox.value()
+                setattr(component, name, range_val_)
 
             apply.clicked.connect(apply_value_to_component)
             apply.clicked.connect(spinbox.check_changed)
@@ -395,6 +403,7 @@ traitPriority = {
     'Float': 1,
     'Int': 1,
     'Quantity': 1,
+    'ValueRange': 1,
     'Enum': 2,
     'Bool': 7,
     'Float_readonly': 10
@@ -443,13 +452,12 @@ def generate_component_ui(name, component):
         group = _group(trait)
         layout = groups[group].layout()
         if (isinstance(trait, ValueRange)):
-            # create_range_entry(component, name, trait)
             layout.addRow(prettyName + ": ",
                           create_range_entry(component, name, trait))
-        if (isinstance(trait, Quantity)):
+        elif (isinstance(trait, Quantity)):
             layout.addRow(prettyName + ": ",
                           create_spinbox_entry(component, name, trait))
-        if (isinstance(trait, Integer)):
+        elif (isinstance(trait, Integer)):
             layout.addRow(prettyName + ": ",
                           create_spinbox_entry(component, name, trait))
         elif isinstance(trait, Enum) and not trait.read_only:

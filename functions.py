@@ -350,7 +350,7 @@ def f_axis_idx_map(freqs, freq_range=None):
         f0_idx = int(np.argmin(np.abs(freqs - freq_range[0])))
         f1_idx = int(np.argmin(np.abs(freqs - freq_range[1])))
         f_idx = np.arange(f0_idx, f1_idx + 1)
-    elif isinstance(freq_range, tuple):
+    elif len(freq_range) == 2:
         f0_idx = int(np.argmin(np.abs(freqs - freq_range[0])))
         f1_idx = int(np.argmin(np.abs(freqs - freq_range[1])))
         f_idx = np.arange(f0_idx, f1_idx + 1)

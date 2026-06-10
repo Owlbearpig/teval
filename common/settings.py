@@ -2,7 +2,8 @@ from enum import Enum
 from pathlib import Path
 import json
 
-from traitlets import Instance, Tuple, List, Bool
+from common.traits import ValueRange
+from traitlets import Instance, Tuple, List, Bool, Integer, Float, Enum as TEnum
 from common.components import is_component_trait
 from common.default_appsettings import AppSettings, PpOpt
 from common.default_appsettings import WindowTypes, PixelInterpolation, Dist, LogLevel
@@ -18,7 +19,7 @@ class Settings(AppSettings):
             self._settings_file = Path(settings_file).stem
         else:
             self._settings_file = Path(self.script_name).stem
-        self.config_path = Path(f"configs/{self._settings_file}.json")
+        self.config_path = Path(f"config/{self._settings_file}.json")
 
         self.load_configuration()
 
@@ -27,11 +28,10 @@ class Settings(AppSettings):
 
         return False
 
-    def __enter__(self):
-        print("enter")
-        return self
+    def save_configuration(self):
+        if not self.config_path.parent.exists():
+            self.config_path.parent.mkdir()
 
-    def save_configuration(self, ):
         settings_dict = {}
         def make_dump_dict(dump_dict, instance):
             for k, trait in instance.attributes.items():
@@ -66,36 +66,32 @@ class Settings(AppSettings):
         #print(self.traits())
         #print("saving settings")
 
-    # TODO set traits?
-    def load_configuration(self) -> AppSettings:
+    def load_configuration(self):
         config_path = self.config_path
         print(f"loading {config_path}")
 
-        getattr(self, "pp_opt").set_trait("filter_enabled", True)
-
         if self._settings_file is None:
             print(f"No config file path set. Loading global defaults.")
-            return AppSettings()
+            return
 
         if not config_path.exists():
             print(f"No custom config found for {self._settings_file}. Loading global defaults.")
-            return AppSettings()
+            return
+
+        def parse_dict(instance, dict_):
+            for trait_name, val in dict_.items():
+                actual_type = type(getattr(instance.__class__, trait_name))
+                if actual_type == Instance:
+                    instance_class = getattr(instance, trait_name)
+                    parse_dict(instance_class, val)
+                elif issubclass(actual_type, (Bool, Integer, Float)):
+                    instance.set_trait(trait_name, val)
+                elif issubclass(actual_type, TEnum):
+                    enum_attr = getattr(instance, trait_name)
+                    instance.set_trait(trait_name, enum_attr)
+                elif issubclass(actual_type, Path):
+                    instance.set_trait(trait_name, Path(val))
 
         with open(config_path, "r") as f:
-            settings_dict = json.load(f)
-
-        win_data = settings_dict["pp_opt"]["window_opt"]
-        window_obj = WindowOpt(**{**win_data, "type": WindowTypes(win_data["type"])})
-
-        pp_data = settings_dict["pp_opt"]
-        pp_obj = PpOpt(**{**pp_data, "window_opt": window_obj})
-
-        return AppSettings(
-            log_level=LogLevel(settings_dict["log_level"]),
-            pixel_interpolation=PixelInterpolation(settings_dict["pixel_interpolation"]),
-            dist_func=Dist(settings_dict["dist_func"]),
-            pp_opt=pp_obj,
-            **{k: v for k, v in settings_dict.items() if
-               k not in ["log_level", "pixel_interpolation", "dist_func", "pp_opt"]}
-        )
-
+            json_dict = json.load(f)
+            parse_dict(self, json_dict)
