@@ -794,7 +794,7 @@ class DataSetPlotter(ComponentBase):
 
         ret = {"meas_times": meas_times, "relative_delay": relative_delay}
 
-        if climate_log_file is not None:
+        if climate_log_file is not None or self.settings.plot_opt.climate_file is not None:
             climate_plot_ret = self.plot_climate(climate_log_file, unit=(mt_unit, conv_factor))
             if climate_plot_ret is not None:
                 climate_meas_times, climate_value_dict = climate_plot_ret
@@ -853,18 +853,20 @@ class DataSetPlotter(ComponentBase):
 
         return ret
 
-    def plot_climate(self, log_file, unit=None, quantity=ClimateQuantity.Temperature):
-        if log_file is not None:
-            log_file = self.dataset.find_climate_log_file(log_file)
-            if not log_file:
-                logging.info("No matching climate logfile found")
-                return None
-            else:
-                logging.info(f"Using climate logfile: {log_file}")
-        else:
+    def plot_climate(self, log_file=None, unit=None, quantity=ClimateQuantity.Temperature):
+        log_file = log_file if log_file else self.settings.plot_opt.climate_file
+        if log_file is None:
             return None
+
+        full_log_path = self.dataset.find_climate_log_file(log_file)
+        if not full_log_path:
+            logging.info("No matching climate logfile found")
+            return None
+        else:
+            logging.info(f"Using climate logfile: {full_log_path}")
+
         is_rp_log = False
-        if "pitaya" in str(log_file):
+        if "pitaya" in str(full_log_path):
             is_rp_log = True
         temp_sensor_idx = self.settings.plot_opt.temp_sensor_idx
 
@@ -900,7 +902,7 @@ class DataSetPlotter(ComponentBase):
 
             return meas_time_, np.array(temp_), np.array(humidity_)
 
-        meas_time, temp, humidity = read_log_file(log_file)
+        meas_time, temp, humidity = read_log_file(full_log_path)
 
         if self.measurements["all"] is not None:
             t0 = self.measurements["all"][0].meas_time

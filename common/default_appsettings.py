@@ -364,6 +364,7 @@ class PlotOpt(ComponentBase):
     temp_sensor_idx = Int(-1)
     plot_zero_crossing = Bool(False)
     disable_legend = TList(Int(), default_value=[])
+    climate_file = Path()
     clip_climate_data = Bool(False)
     redp_sensor_labels = TDict(
         key_trait=Unicode(),

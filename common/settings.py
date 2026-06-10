@@ -31,7 +31,7 @@ class Settings(AppSettings):
         return False
 
     def _set_component_names(self):
-        self.plot_opt.object_name = AppSettings.plot_opt.object_name
+        # self.plot_opt.object_name = AppSettings.plot_opt.object_name
         for k, trait in self.attributes.items():
             if isinstance(trait, Instance):
                 instance = getattr(self, k)

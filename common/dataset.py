@@ -394,7 +394,6 @@ class DataSet(ComponentBase):
         data_fd_1 = self.get_data(meas_1, domain=Domain.Frequency)
 
         f_idx_range = f_axis_idx_map(self.freq_axis, (freq_min, freq_max))
-
         x, y = np.abs(data_fd_0[f_idx_range, 1]), np.abs(data_fd_1[f_idx_range, 1])
 
         return 1+np.log(np.abs(pearsonr(x, y).statistic))
