@@ -116,14 +116,12 @@ class ValueRange(TraitType):
             return val
 
     def validate(self, obj, value):
-        #"""
-        is_none = (value[0] is None) and (value[1] is None)
+
         if not len(value) == 2:
             self.error(obj, value)
         if not type(value[0]) == type(value[1]):
             self.error(obj, value)
         if isinstance(value[0], Q_) and value[0].units != value[1].units:
             self.error(obj, value)
-        #"""
 
         return value

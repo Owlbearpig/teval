@@ -56,8 +56,6 @@ def create_range_entry(component, name, trait):
         spinbox.setMaximum(max_val)
         spinbox.setToolTip(trait.help)
         spinbox.setReadOnly(trait.read_only)
-        spinbox.setAccessibleName(str(sb_idx))
-        print(spinbox.accessibleName())
 
         if trait.read_only:
             spinbox.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
@@ -93,16 +91,6 @@ def create_range_entry(component, name, trait):
             def apply_value_to_component():
                 range_val_ = trait.get(component)
 
-                '''
-                if(spinbox.accessibleName()=='1'):
-                    if(range_val_[1]<range_val_[0]):
-                        spinboxes[0].setValue(range_val_[1].magnitude if is_quantity else range_val_[1])
-                if (spinbox.accessibleName() == '0'):
-                    if (range_val_[0] > range_val_[1]):
-                        spinboxes[1].setValue(range_val_[0].magnitude if is_quantity else range_val_[0])
-                #spinboxes[0].setMaximum(range_val_[1].magnitude if is_quantity else range_val_[1])
-                #spinboxes[1].setMinimum(range_val_[0].magnitude if is_quantity else range_val_[0])
-                '''
                 range_val_[sb_idx] = spinbox.value() * units if is_quantity else spinbox.value()
                 setattr(component, name, range_val_)
 

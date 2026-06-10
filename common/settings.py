@@ -23,10 +23,23 @@ class Settings(AppSettings):
 
         self.load_configuration()
 
+        self._set_component_names()
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.save_configuration()
 
         return False
+
+    def _set_component_names(self):
+        self.plot_opt.object_name = AppSettings.plot_opt.object_name
+        for k, trait in self.attributes.items():
+            if isinstance(trait, Instance):
+                instance = getattr(self, k)
+                print(instance)
+                object_name = getattr(instance, "object_name", None)
+                print(object_name)
+                continue
+
 
     def save_configuration(self):
         if not self.config_path.parent.exists():
@@ -51,20 +64,6 @@ class Settings(AppSettings):
 
         with open(self.config_path, 'w') as fp:
             json.dump(settings_dict, fp, indent=4)
-
-        # json.dumps(settings_dict, self._settings_file, indent=4)
-        # print(settings_dict)
-
-        for k, trait in self.attributes.items():
-            if not type(trait) is Instance:
-                settings_dict[k] = trait.get(self)
-            else:
-                pass
-            # trait.get(self)
-            #print(k, trait.get(self), trait, type(trait) is Bool)
-            #print(trait, isinstance(trait, Instance), is_component_trait(trait), isinstance(trait, List))
-        #print(self.traits())
-        #print("saving settings")
 
     def load_configuration(self):
         config_path = self.config_path

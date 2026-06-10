@@ -159,11 +159,11 @@ class DataSetPlotter(ComponentBase):
             fig_num += self.settings.fig_label + " "
         fig_num += str(self.selected_quantity)
 
-        if self.selected_quantity == QuantityEnum.Power:
-            f1, f2 = int(self.sel_freq_range[0].magnitude * 1e3), int(self.sel_freq_range[1].magnitude * 1e3)
-            fig_num += en_freq_label * f" {f1}-{f2} GHz"
+        f1, f2 = int(self.sel_freq_range[0].magnitude * 1e3), int(self.sel_freq_range[1].magnitude * 1e3)
+        if np.isclose(self.sel_freq_range[0].magnitude, self.sel_freq_range[1].magnitude):
+            fig_num += en_freq_label * f" {f1} GHz"
         else:
-            fig_num += en_freq_label * f" {int(self.sel_freq_range[0].magnitude * 1e3)}GHz"
+            fig_num += en_freq_label * f" {f1}-{f2} GHz"
         fig_num = fig_num.replace(" ", "_")
 
         self.img_properties["fig_num"] = fig_num + self.dataset.is_sub_dataset * "_subset"
@@ -172,10 +172,10 @@ class DataSetPlotter(ComponentBase):
 
     def _update_quantity_label(self):
         en_freq_label = Domain.Frequency == self.selected_quantity.domain
-        if self.selected_quantity == QuantityEnum.Power:
-            freq_label = f"({self.sel_freq_range[0]}-{self.sel_freq_range[1]})"
-        else:
+        if np.isclose(self.sel_freq_range[0].magnitude, self.sel_freq_range[1].magnitude):
             freq_label = f"({self.sel_freq_range[0]})"
+        else:
+            freq_label = f"({self.sel_freq_range[0]}-{self.sel_freq_range[1]})"
 
         self.img_properties["quantity_label"] = " ".join([str(self.selected_quantity),
                                                           freq_label * en_freq_label])
