@@ -19,9 +19,16 @@ else:
 
 # pulse monitoring mod
 if "nt" in os.name:
-    dataset_path = r"C:\Users\alexj\Data\CalibrationSamples\Graphene"
+    dataset_path = r"C:\Users\alexj\Data\Stability\01062026_systemcover_subset"
 else:
     dataset_path = r"/home/ftpuser/ftp/Data/Stability/01062026_systemcover_subset"
+
+redp_labels = {
+    "Redp idx 0": "HHI air",
+    "Redp idx 1": "DelayL.",
+    "Redp idx 2": "Opt. Table",
+    "Redp idx 3": "Air"
+}
 
 class AppRoot(ComponentBase):
 
@@ -32,6 +39,7 @@ class AppRoot(ComponentBase):
     def __init__(self):
         super().__init__()
         self.settings = Settings()
+        self.settings.plot_opt.redp_sensor_labels = redp_labels
         self.dataset = DataSet(dataset_path, self.settings, object_name="Dataset")
         self.dataset_plotter = DataSetPlotter(self.dataset, object_name="Dataset Plotter")
 
