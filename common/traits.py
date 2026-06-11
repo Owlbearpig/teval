@@ -19,6 +19,7 @@ along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 import traitlets
+from common.consts import result_dir
 from traitlets import TraitError, Undefined, TraitType, List as TList, Float, Integer
 
 if float(traitlets.__version__[0]) <= 4:
@@ -115,8 +116,8 @@ class ValueRange(TraitType):
             val = self.default_value[item]
             return val
 
-    def validate(self, obj, value):
 
+    def validate(self, obj, value):
         if not len(value) == 2:
             self.error(obj, value)
         if not type(value[0]) == type(value[1]):

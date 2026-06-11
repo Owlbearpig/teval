@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from pathlib import Path
 import numpy as np
+from common.units import Q_
 from scipy.stats import pearsonr
 from numpy import array, nan_to_num, zeros, pi
 from common.consts import c0, THz
@@ -345,21 +346,24 @@ def filtering(data_td, wn=(0.001, 9.999), filt_type="bandpass", order=5):
 
 
 def f_axis_idx_map(freqs, freq_range=None):
-    if freq_range is None:
+    if isinstance(freq_range, (float, int, Q_)):
+        single_freq = freq_range.magnitude if isinstance(freq_range, Q_) else freq_range
+        f_idx = np.array([int(np.argmin(np.abs(freqs - single_freq)))])
+    elif freq_range is None:
         freq_range = (0.10, 4.00)
         f0_idx = int(np.argmin(np.abs(freqs - freq_range[0])))
         f1_idx = int(np.argmin(np.abs(freqs - freq_range[1])))
-        f_idx = np.arange(f0_idx, f1_idx + 1)
+        f_idx = np.arange(f0_idx, f1_idx + 1, dtype=int)
     elif len(freq_range) == 2:
+        if isinstance(freq_range[0], Q_):
+            freq_range = [freq_range[0].magnitude, freq_range[1].magnitude]
+
         sign = np.sign(freq_range[1] - freq_range[0])
         f0_idx = int(np.argmin(np.abs(freqs - freq_range[0])))
         f1_idx = int(np.argmin(np.abs(freqs - freq_range[1])))
         f_idx = np.arange(f0_idx, f1_idx + 1, sign, dtype=int)
-    elif freq_range == "full":
-        f_idx = np.ones_like(freqs, dtype=bool)
     else:
-        single_freq = freq_range
-        f_idx = np.array([int(np.argmin(np.abs(freqs - single_freq)))])
+        f_idx = np.ones_like(freqs, dtype=bool)
 
     return f_idx
 

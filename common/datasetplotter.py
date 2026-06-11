@@ -12,9 +12,10 @@ from datetime import datetime
 from pathlib import Path
 from scipy.special import erfc
 from _shgo import shgo
-from traitlets import Float, observe, Integer
+from traitlets import Float, observe, Integer, Unicode
 from common.traits import Q_, Quantity, ValueRange
-import itertools
+from mpl_settings import mpl_style_params
+import matplotlib as mpl
 from scipy.stats import pearsonr
 from tqdm import tqdm
 import pandas as pd
@@ -23,10 +24,14 @@ from copy import deepcopy
 
 class DataSetPlotter(ComponentBase):
 
-    sel_freq_range = ValueRange(default_value=[Q_(1.000, "THz"), Q_(1.200, "THz")])
+    sel_freq_range = ValueRange(default_value=[Q_(1.000, "THz"), Q_(1.200, "THz")]).tag(
+        name="Selected frequency range"
+    )
+    sel_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point (x, y)")
+    sel_timestamp = Unicode("").tag(name="Selected timestamp")
 
-    def __init__(self, dataset : DataSet):
-        super().__init__()
+    def __init__(self, dataset : DataSet, **kwargs):
+        super().__init__(**kwargs)
         self.dataset = dataset
         self.img_properties = {}
 
@@ -41,7 +46,7 @@ class DataSetPlotter(ComponentBase):
 
     @observe("sel_freq_range")
     def select_freq(self, change):
-        self.sel_freq_range = change["new"]
+        self.set_trait("sel_freq_range", change["new"])
         self.selected_freq_idx = self.freq_idx()
         self._update_fig_num()
 
@@ -77,6 +82,8 @@ class DataSetPlotter(ComponentBase):
     def _apply_settings(self):
         if self.selected_quantity is None:
             self.select_quantity(QuantityEnum.P2P)
+
+        mpl.rcParams.update(mpl_style_params())
 
     def freq_idx(self, freq=None):
         if freq is None:
@@ -283,7 +290,7 @@ class DataSetPlotter(ComponentBase):
 
         return ret
 
-    @action("Reference difference plot", group="Plots")
+    @action("Reference difference", group="Plots")
     def ref_difference_plot(self):
         ref1, ref2 = self.measurements["refs"][11], self.measurements["refs"][16]
 
@@ -328,7 +335,7 @@ class DataSetPlotter(ComponentBase):
 
         # self.plt_show()
 
-    @action("Plot ref. meas", group="Plots")
+    @action("Reference measurement", group="Plots")
     def plot_ref(self, ref_meas_=None, timestamp=None, ref_idx=None):
 
         fig_num_ext = self.settings.plot_opt.fig_num_ext
@@ -379,10 +386,10 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel("Time (ps)")
         plt.ylabel("Amplitude (Arb. u.)")
 
-    @action("Plot meas", group="Plots")
-    def plot_meas(self, point=None, timestamp=None, en_td_plot=True, **kwargs_):
-        kwargs = {}
-        kwargs.update(kwargs_)
+    @action("Measurement", group="Plots")
+    def plot_meas(self, timestamp=None, en_td_plot=True):
+        if timestamp is None:
+            timestamp = self.sel_timestamp
 
         plot_opt = self.settings.plot_opt
         label = plot_opt.label
@@ -396,29 +403,24 @@ class DataSetPlotter(ComponentBase):
         ref_err_bars = plot_opt.ref_err_bars
 
         f_idx_range = f_axis_idx_map(self.dataset.freq_axis, plot_range)
-        if (point is not None) and (timestamp is not None):
-            logging.warning("either point or timestamp has to be None")
-            return None
-
-        q_eval_res = None
-        if point is None and timestamp is None:
-            selected_meas = self.measurements["all"][0]
-            point = selected_meas.position
-        elif point is not None:
-            selected_meas = self.dataset.get_measurement(*point)
-        else:
+        if timestamp:
+            logging.info(f"Plotting measurement with timestamp: {timestamp}")
             selected_meas = self.dataset.get_measurement_from_timestamp(timestamp)
             point = selected_meas.position
+        else:
+            point = self.sel_point
+            selected_meas = self.dataset.get_measurement(*point)
 
         ref_meas = self.dataset.find_nearest_ref(selected_meas)
 
+        q_eval_res = None
         meas_quants = self.dataset.calc_meas_quantities(ref_meas, selected_meas)
 
         if self.settings.enable_q_eval:
-            ana_eval_res = self.dataset.single_layer_eval(selected_meas, freq_range="full")
+            ana_eval_res = self.dataset.single_layer_eval(selected_meas)
 
             q_eval = QSpaceEval(self.settings, meas_quants, ana_eval_res)
-            q_eval_res = q_eval.q_space_eval(**kwargs)
+            q_eval_res = q_eval.q_space_eval()
 
         logging.info(f"Plotting point {point}")
         logging.info(f"Reference measurement: {ref_meas}")
@@ -452,13 +454,15 @@ class DataSetPlotter(ComponentBase):
         err_bar_range = None
         if std_limits:
             meas_line, coords = self.dataset.get_line(y=0, limits=std_limits)
-
-            absorbance_arrs = []
-            for meas in meas_line:
-                sam_fd_line = self.dataset.get_data(meas, domain=Domain.Frequency)
-                t = sam_fd_line[:, 1] / ref_fd[:, 1]
-                absorbance_arrs.append(20*np.log10(np.abs(1/t)))
-            err_bar_range = np.std(absorbance_arrs, axis=0)
+            if meas_line:
+                absorbance_arrs = []
+                for meas in meas_line:
+                    sam_fd_line = self.dataset.get_data(meas, domain=Domain.Frequency)
+                    t = sam_fd_line[:, 1] / ref_fd[:, 1]
+                    absorbance_arrs.append(20*np.log10(np.abs(1/t)))
+                err_bar_range = np.std(absorbance_arrs, axis=0)
+            else:
+                err_bar_range = np.zeros(len(self.dataset.freq_axis))
         if ref_err_bars:
             all_ref_meas = self.measurements["refs"]
             ref_meas_first, ref_meas_last = all_ref_meas[0], all_ref_meas[-1]
@@ -469,16 +473,19 @@ class DataSetPlotter(ComponentBase):
                 meas_line, coords = self.dataset.get_line(y=0, limits=std_limits)
             else:
                 meas_line = [selected_meas]
-            absorbance_arrs = []
-            for meas in meas_line:
-                sam_fd_line = self.dataset.get_data(meas, domain=Domain.Frequency)
-                t_first = sam_fd_line[:, 1] / ref_fd_first[:, 1]
-                t_last = sam_fd_line[:, 1] / ref_fd_last[:, 1]
-                absorbance_arrs.append(20 * np.log10(np.abs(1 / t_first)))
-                absorbance_arrs.append(20 * np.log10(np.abs(1 / t_last)))
+            if meas_line:
+                absorbance_arrs = []
+                for meas in meas_line:
+                    sam_fd_line = self.dataset.get_data(meas, domain=Domain.Frequency)
+                    t_first = sam_fd_line[:, 1] / ref_fd_first[:, 1]
+                    t_last = sam_fd_line[:, 1] / ref_fd_last[:, 1]
+                    absorbance_arrs.append(20 * np.log10(np.abs(1 / t_first)))
+                    absorbance_arrs.append(20 * np.log10(np.abs(1 / t_last)))
 
-            err_bar_range = np.std(absorbance_arrs, axis=0)
-            err_bar_range = np.max(absorbance_arrs, axis=0) - np.min(absorbance_arrs, axis=0)
+                err_bar_range = np.std(absorbance_arrs, axis=0)
+                err_bar_range = np.max(absorbance_arrs, axis=0) - np.min(absorbance_arrs, axis=0)
+            else:
+                err_bar_range = np.zeros(len(self.dataset.freq_axis))
 
         freq_axis = ref_fd[:, 0].real
 
@@ -506,11 +513,11 @@ class DataSetPlotter(ComponentBase):
         alph = self.dataset.absorption_coef(selected_meas)
 
         if not self.dataset.plotted_ref:
-            self.plot_ref(ref_meas, **kwargs)
+            self.plot_ref(ref_meas)
             self.dataset.plotted_ref = True
 
         if not label:
-            label = f"(x,y)=({point[0]}, {point[1]}) mm"
+            label = f"(x,y)=({point[0]}, {point[1]})"
 
         freq_axis = sam_fd[:, 0].real
         noise_floor = np.mean(20 * np.log10(np.abs(sam_fd[sam_fd[:, 0] > 6.0, 1]))) * sub_noise_floor
@@ -615,7 +622,7 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase difference (rad)")
 
-    @action("ref noise", group="abe")
+    @action("Reference noise", group="Plots")
     def plot_frequency_noise(self):
         ref_meas_set = self.measurements["refs"]
         freq_axis = self.dataset.freq_axis
@@ -633,7 +640,7 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel(f"Frequency (THz)")
         plt.ylabel("Amplitude (dB)")
 
-    @action("Plot system stability", group="Plots")
+    @action("System stability", group="Plots")
     def plot_system_stability(self, climate_log_file=None, meas_set_kw=None):
         if meas_set_kw is not None:
             meas_set = []
@@ -1340,7 +1347,12 @@ class DataSetPlotter(ComponentBase):
         plt.subplots_adjust(wspace=0.3)
         plt.savefig(save_dir / (filename_s + f".{filetype}"), **kwargs)
 
-    @action("Show plots")
+    @action("Close all figures", group="Show / close plots")
+    def close_figures(self):
+        for fig_num in plt.get_fignums():
+            plt.close(fig_num)
+
+    @action("Show plots", group="Show / close plots")
     def plt_show(self, save_file_suffix=None, only_save_plots=False):
 
         # fig_labels = [plt.figure(fig_num).get_label() for fig_num in plt.get_fignums()]

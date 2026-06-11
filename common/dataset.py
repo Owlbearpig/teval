@@ -16,9 +16,8 @@ import colorlog
 from datetime import datetime
 from common.dataset_cache import DatasetCache
 import pandas as pd
-from scipy.signal import correlate
+from common.traits import Q_
 from scipy.stats import pearsonr
-from q_space_eval import QSpaceEval
 from common.default_appsettings import Domain, MeasurementType, QuantityEnum, AppSettings
 from common.components import action
 import itertools
@@ -73,8 +72,8 @@ def logger_config(settings):
     logger.setLevel(log_level)
 
 class DataSet(ComponentBase):
-    def __init__(self, data_path : Path | str, settings : Settings):
-        super().__init__()
+    def __init__(self, data_path : Path | str, settings : Settings, **kwargs):
+        super().__init__(**kwargs)
         self.plotted_ref = False
         self.noise_floor = None
         self.time_axis = None
@@ -166,13 +165,18 @@ class DataSet(ComponentBase):
         return data_path
 
     def find_climate_log_file(self, climate_log_file):
+        log_file = Path(climate_log_file)
+        if log_file.is_file():
+            return log_file
+        target_log_file = log_file.name
+
         checked_dirs = [self.data_path, self.data_path.parent]
         log_files = []
         log_files.extend([file for file in checked_dirs[0].iterdir() if "log" in file.name])
         log_files.extend([file for file in checked_dirs[1].iterdir() if "log" in file.name])
 
         for log_file in log_files:
-            if str(climate_log_file) in log_file.name:
+            if str(target_log_file) in log_file.name:
                 return log_file
 
         return None
@@ -286,7 +290,7 @@ class DataSet(ComponentBase):
         if self.measurements["refs"] or not self.measurements["sams"]:
             return
         logging.info(f"No explicit references in the dataset. Using ref_pos option")
-
+        
         threshold = self.settings.ref_threshold
 
         max_amp_meas = self.measurements["max_amp_meas"]
@@ -297,7 +301,7 @@ class DataSet(ComponentBase):
         refs_ = []
         if (manual_pos[0] is not None) and (manual_pos[1] is not None):
             refs_ = [self.get_measurement(*manual_pos)]
-            logging.warning(f"Using measurement at {manual_pos} as ref.")
+            logging.warning(f"Using measurement at {manual_pos} as ref. ({refs_[0]})")
         elif not all([pos is None for pos in manual_pos]):
             if manual_pos[0] is None:
                 y = manual_pos[1]
@@ -596,6 +600,8 @@ class DataSet(ComponentBase):
 
     def _calc_phi(self, ref_td_, sam_td_, ref_fd_, sam_fd_):
         phi_fit_range = self.settings.eval_opt.phi_fit_range
+        if isinstance(phi_fit_range[0], Q_):
+            phi_fit_range = [phi_fit_range[0].magnitude, phi_fit_range[1].magnitude]
 
         t_axis, f_axis = ref_td_[:, 0], ref_fd_[:, 0].real
         w_axis = 2*np.pi*f_axis
@@ -757,8 +763,12 @@ class DataSet(ComponentBase):
 
         return sigma
 
-    def get_measurement(self, x: float, y: float, return_single=True):
+    def get_measurement(self, x, y, return_single=True):
         meas_list = self.measurements["all"]
+        if isinstance(x, Q_):
+            x = x.magnitude
+        if isinstance(y, Q_):
+            y = y.magnitude
         pnt = (x, y)
         try:
             key = self.cache.coord_map_key_func(pnt)
@@ -842,7 +852,6 @@ class DataSet(ComponentBase):
     def find_nearest_ref(self, meas_, dist_func=None) -> Measurement:
         if not dist_func:
             dist_func = self.settings.dist_func.value
-
         closest_ref, best_fit_val = None, np.inf
         for ref_meas in self.measurements["refs"]:
             dist_val = dist_func(ref_meas, meas_)

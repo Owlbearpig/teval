@@ -10,7 +10,7 @@ from traitlets import (
 import common.consts
 from common import traits
 from common.components import ComponentBase
-from common.traits import ValueRange, Path
+from common.traits import ValueRange, Path, Q_
 
 class Domain(Enum):
     Time = 0
@@ -294,9 +294,9 @@ class LogLevel(Enum):
 class EvalOpt(ComponentBase):
     dt = Int(0)
     sub_pnt = ValueRange([0, 0])
-    fit_range = ValueRange([0.50, 2.20])
-    q_space_range = ValueRange([0.75, 2.00])
-    phi_fit_range = ValueRange([0.47, 1.05])
+    fit_range = ValueRange([Q_(0.50, "THz"), Q_(2.20, "THz")])
+    q_space_range = ValueRange([Q_(0.75, "THz"), Q_(2.00, "THz")])
+    phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")])
     average = Bool(False)
     delta_d = Float(2.0)
     phi_offset_correction = Bool(True)
@@ -350,7 +350,7 @@ class ShownPlots(ComponentBase):
 
 
 class PlotOpt(ComponentBase):
-    plot_range = ValueRange([0.05, 3.5], metadata={"priority": 1, "readonly": False})
+    plot_range = ValueRange([Q_(0.05, "THz"), Q_(3.5, "THz")], metadata={"priority": 1, "readonly": False})
     shift_sam2ref = Bool(False)
     label = Unicode("")
     sub_noise_floor = Bool(False)

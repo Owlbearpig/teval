@@ -77,8 +77,6 @@ if "nt" in os.name:
 else:
     dataset_path = r"/home/ftpuser/ftp/Data/CalibrationSamples/Graphene"
 
-from common.traits import Q_
-
 class AppRoot(ComponentBase):
 
     settings = Instance(Settings)
@@ -88,9 +86,8 @@ class AppRoot(ComponentBase):
     def __init__(self):
         super().__init__()
         self.settings = Settings()
-        self.dataset = DataSet(dataset_path, self.settings)
-        self.dataset_plotter = DataSetPlotter(self.dataset)
-        self.dataset_plotter.test = Q_(1000000.0, "THz")
+        self.dataset = DataSet(dataset_path, self.settings, object_name="Dataset")
+        self.dataset_plotter = DataSetPlotter(self.dataset, object_name="Dataset Plotter")
 
     @action("print settings")
     def print_settings(self):
