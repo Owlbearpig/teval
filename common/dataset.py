@@ -21,6 +21,8 @@ from common.default_appsettings import Domain, QuantityEnum
 from common.components import action
 import itertools
 
+from traitlets import observe
+
 """
 TODOs: 
 - How are measurements mapped when multiple measurements are performed at the same x-y coordinates?
@@ -72,8 +74,6 @@ def logger_config(settings):
 
 class DataSet(ComponentBase):
 
-
-
     def __init__(self, data_path : Path | str, settings : Settings, **kwargs):
         super().__init__(**kwargs)
         self.plotted_ref = False
@@ -91,6 +91,11 @@ class DataSet(ComponentBase):
         self.settings = settings
 
         self._parse_measurements()
+
+        self.settings.dataset_opt.observe(self.update_meas_sorting, names='ref_selection')
+
+    def update_meas_sorting(self):
+        self._sort_meas_type()
 
     @action("print settings")
     def print_settings(self):
