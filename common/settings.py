@@ -6,7 +6,7 @@ from common.traits import ValueRange, Path as TPath, Quantity
 from common.units import Q_
 from traitlets import Instance, Tuple, List, Bool, Integer, Float, Enum as TEnum
 from common.components import is_component_trait
-from common.default_appsettings import AppSettings, PpOpt
+from common.default_appsettings import AppSettings
 from common.default_appsettings import WindowTypes, PixelInterpolation, Dist, LogLevel
 
 class Settings(AppSettings):
@@ -26,6 +26,7 @@ class Settings(AppSettings):
 
         self._set_component_names()
 
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.save_configuration()
 
@@ -36,7 +37,7 @@ class Settings(AppSettings):
             "pp_opt": "Preprocessing",
             "eval_opt": "Evaluation",
             "sample_properties": "Sample Properties",
-            "save_plots_settings": "Save Plot Settings",
+            "save_settings": "Save Plot Settings",
             "plot_opt": "Plotting",
             "shown_plots": "Visible Plots"
         }

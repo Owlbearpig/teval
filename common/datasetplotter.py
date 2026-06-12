@@ -55,6 +55,10 @@ class DataSetPlotter(ComponentBase):
         return self.dataset.settings
 
     @property
+    def plot_settings(self):
+        return self.dataset.settings.plot_opt
+
+    @property
     def measurements(self):
         return self.dataset.measurements
 
@@ -162,8 +166,8 @@ class DataSetPlotter(ComponentBase):
     def _update_fig_num(self):
         en_freq_label = Domain.Frequency == self.selected_quantity.domain
         fig_num = ""
-        if self.settings.fig_label:
-            fig_num += self.settings.fig_label + " "
+        if self.plot_settings.fig_label:
+            fig_num += self.plot_settings.fig_label + " "
         fig_num += str(self.selected_quantity)
 
         f1, f2 = int(self.sel_freq_range[0].magnitude * 1e3), int(self.sel_freq_range[1].magnitude * 1e3)
@@ -188,7 +192,7 @@ class DataSetPlotter(ComponentBase):
                                                           freq_label * en_freq_label])
 
     def _is_excluded(self, idx_tuple):
-        excl_areas = self.settings.excluded_areas
+        excl_areas = self.plot_settings.excluded_areas
         if excl_areas is None:
             return False
 
@@ -338,7 +342,7 @@ class DataSetPlotter(ComponentBase):
     @action("Reference measurement", group="Plots")
     def plot_ref(self, ref_meas_=None, timestamp=None, ref_idx=None):
 
-        fig_num_ext = self.settings.plot_opt.fig_num_ext
+        fig_num_ext = self.plot_settings.fig_num_ext
         label = None
 
         if (ref_meas_ is None) and (timestamp is None):
@@ -361,15 +365,15 @@ class DataSetPlotter(ComponentBase):
 
         ref_td, ref_fd = self.dataset.get_data(ref_meas_, domain=Domain.Both)
         freq_axis = ref_fd[:, 0].real
-        plot_range = self.settings.plot_opt.plot_range
+        plot_range = self.plot_settings.plot_range
         f_idx_range = f_axis_idx_map(self.dataset.freq_axis, plot_range)
 
-        if self.settings.plot_opt.remove_t_offset:
+        if self.plot_settings.remove_t_offset:
             ref_td[:, 0] -= ref_td[0, 0]
 
         label = label if label else f"Reference ({ref_meas_.meas_time})"
 
-        sub_noise_floor = self.settings.plot_opt.sub_noise_floor
+        sub_noise_floor = self.plot_settings.sub_noise_floor
         noise_floor = np.mean(20 * np.log10(np.abs(ref_fd[ref_fd[:, 0] > 6.0, 1]))) * sub_noise_floor
 
         y_db = (20 * np.log10(np.abs(ref_fd[f_idx_range, 1])) - noise_floor).real
@@ -380,7 +384,7 @@ class DataSetPlotter(ComponentBase):
 
         plt.figure("Time domain" + fig_num_ext)
         plt.plot(ref_td[:, 0], ref_td[:, 1], label=label + " (Reference)")
-        if self.settings.plot_opt.plot_zero_crossing:
+        if self.plot_settings.plot_zero_crossing:
             plt.scatter(zero_crossing, 0, label="Zero-crossing", color="red")
         # plt.plot(ref_td[1:, 0], np.diff(np.abs(ref_td[:, 1])), label=label)
         plt.xlabel("Time (ps)")
@@ -391,13 +395,13 @@ class DataSetPlotter(ComponentBase):
         if timestamp is None:
             timestamp = self.sel_timestamp
 
-        plot_opt = self.settings.plot_opt
+        plot_opt = self.plot_settings
         label = plot_opt.label
         sub_noise_floor = plot_opt.sub_noise_floor
         td_scale = plot_opt.td_scale
         remove_t_offset = plot_opt.remove_t_offset
         std_limits = plot_opt.err_bar_limits # limits of spatial coordinates to average over, for the err_bars
-        en_csv_export = self.settings.en_csv_export
+        en_csv_export = self.settings.save_settings.en_csv_export
         fig_num_ext = plot_opt.fig_num_ext
         plot_range = plot_opt.plot_range
         ref_err_bars = plot_opt.ref_err_bars
@@ -428,7 +432,7 @@ class DataSetPlotter(ComponentBase):
 
         # TODO redo window plotting
         show_win_plot = deepcopy(self.settings.pp_opt.en_plot)
-        if self.settings.shown_plots.window:
+        if self.plot_settings.window:
             self.settings.pp_opt.en_plot = True
 
         self.settings.pp_opt.fig_label = "ref"
@@ -441,7 +445,7 @@ class DataSetPlotter(ComponentBase):
         sam_td, sam_fd = meas_quants["sam_td"], meas_quants["sam_fd"]
         ref_td, ref_fd = meas_quants["ref_td"], meas_quants["ref_fd"]
 
-        if self.settings.plot_opt.shift_sam2ref:
+        if self.plot_settings.shift_sam2ref:
             shift_t = np.abs(np.argmax(ref_td[:, 1]) - np.argmax(sam_td[:, 1]))
             sam_td[:, 1] = np.roll(sam_td[:, 1], -shift_t)
 
@@ -600,7 +604,7 @@ class DataSetPlotter(ComponentBase):
         return ret, meas_quants
 
     def plot_meas_phi_diff(self, pnt0, pnt1, label=""):
-        plot_range = self.settings.plot_opt.plot_range
+        plot_range = self.plot_settings.plot_range
 
         sam_meas0 = self.dataset.get_measurement(*pnt0)
         ref_meas0 = self.dataset.find_nearest_ref(sam_meas0)
@@ -610,15 +614,15 @@ class DataSetPlotter(ComponentBase):
         ref_fd = self.dataset.get_data(ref_meas0, domain=Domain.Frequency)
         freq_axis = ref_fd[:, 0].real
 
-        f_min, f_max = plot_range[0], plot_range[-1]
-        simple_eval_res0 = self.dataset.single_layer_eval(sam_meas0, (f_min, f_max))
-        simple_eval_res1 = self.dataset.single_layer_eval(sam_meas1, (f_min, f_max))
+        simple_eval_res0 = self.dataset.single_layer_eval(sam_meas0)
+        simple_eval_res1 = self.dataset.single_layer_eval(sam_meas1)
         phi0 = simple_eval_res0["phi_corrected"]
         phi1 = simple_eval_res1["phi_corrected"]
+        phi_diff = phi0-phi1
 
         f_idx_range = f_axis_idx_map(self.dataset.freq_axis, plot_range)
         plt.figure("Phi difference")
-        plt.plot(freq_axis[f_idx_range], phi0-phi1, label=label)
+        plt.plot(freq_axis[f_idx_range], phi_diff[f_idx_range], label=label)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase difference (rad)")
 
@@ -726,7 +730,7 @@ class DataSetPlotter(ComponentBase):
 
         angle_change = angle_arr[0] - angle_arr
         ampl_change = ampl_arr[0] - ampl_arr
-        if self.settings.plot_opt.stability_plot_rel_change:
+        if self.plot_settings.stability_plot_rel_change:
             ampl_change = 100 * ampl_change / ampl_arr[0]
             angle_change = 100 * angle_change / angle_arr[0]
 
@@ -772,7 +776,7 @@ class DataSetPlotter(ComponentBase):
         plt.title(f"Amplitude of reference measurement at {selected_freq_} THz")
         plt.plot(meas_times, ampl_change)
         plt.xlabel(f"Measurement time ({mt_unit})")
-        if self.settings.plot_opt.stability_plot_rel_change:
+        if self.plot_settings.stability_plot_rel_change:
             plt.ylabel(r"$\Delta$A (%)")
         else:
             plt.ylabel(r"$\Delta$A (arb. u.)")
@@ -781,7 +785,7 @@ class DataSetPlotter(ComponentBase):
         plt.title(f"Phase of reference measurement at {selected_freq_} THz")
         plt.plot(meas_times, angle_change)
         plt.xlabel(f"Measurement time ({mt_unit})")
-        if self.settings.plot_opt.stability_plot_rel_change:
+        if self.plot_settings.stability_plot_rel_change:
             plt.ylabel(r"$\Delta \phi$ (%)")
         else:
             plt.ylabel(r"$\Delta \phi$ (rad)")
@@ -801,7 +805,7 @@ class DataSetPlotter(ComponentBase):
 
         ret = {"meas_times": meas_times, "relative_delay": relative_delay}
 
-        if climate_log_file is not None or self.settings.plot_opt.climate_file is not None:
+        if climate_log_file is not None or self.plot_settings.climate_file is not None:
             climate_plot_ret = self.plot_climate(climate_log_file, unit=(mt_unit, conv_factor))
             if climate_plot_ret is not None:
                 climate_meas_times, climate_value_dict = climate_plot_ret
@@ -843,7 +847,7 @@ class DataSetPlotter(ComponentBase):
 
                 plt.plot(shift_arr * meas_interval, r_vals, label=k)
 
-            label_map = self.settings.plot_opt.redp_sensor_labels
+            label_map = self.plot_settings.redp_sensor_labels
             plt.figure("Climate correlation plot")
             for k in plotted_climate_vals:
                 x = np.gradient(plotted_climate_vals[k], 0.012186554258538694)
@@ -861,7 +865,7 @@ class DataSetPlotter(ComponentBase):
         return ret
 
     def plot_climate(self, log_file=None, unit=None, quantity=ClimateQuantity.Temperature):
-        log_file = log_file if log_file else self.settings.plot_opt.climate_file
+        log_file = log_file if log_file else self.plot_settings.climate_file
         if log_file is None:
             return None
 
@@ -875,7 +879,7 @@ class DataSetPlotter(ComponentBase):
         is_rp_log = False
         if "pitaya" in str(full_log_path):
             is_rp_log = True
-        temp_sensor_idx = self.settings.plot_opt.temp_sensor_idx
+        temp_sensor_idx = self.plot_settings.temp_sensor_idx
 
         def read_log_file(log_file_):
             meas_time_, temp_, humidity_ = [], [], []
@@ -945,7 +949,7 @@ class DataSetPlotter(ComponentBase):
 
         meas_time_diff *= conv_factor
 
-        if self.settings.plot_opt.clip_climate_data:
+        if self.plot_settings.clip_climate_data:
             meas_time = meas_time[:tf_idx]
             meas_time_diff = meas_time_diff[:tf_idx]
             quant = quant[:tf_idx]
@@ -967,7 +971,7 @@ class DataSetPlotter(ComponentBase):
             smooth_vals = moving_average(vals, iterations=sas[0], n=sas[1])
             quant_values["Arduino"] = np.array([vals, smooth_vals])
 
-        if self.settings.plot_opt.subtract_mean:
+        if self.plot_settings.subtract_mean:
             for k in quant_values:
                 offset = np.mean(quant_values[k][0])
                 std_quant = np.std(quant_values[k][0])
@@ -976,7 +980,7 @@ class DataSetPlotter(ComponentBase):
                 print(k, offset, std_quant)
 
 
-        line_labels = self.settings.plot_opt.redp_sensor_labels
+        line_labels = self.plot_settings.redp_sensor_labels
 
         line_colors = ["r", "b", "g", "c", "m", "y", "k"]
         stability_figs = ["Reference zero crossing", "Stability amplitude", "Stability phase"]
@@ -1127,7 +1131,7 @@ class DataSetPlotter(ComponentBase):
         shown_grid_vals = shown_grid_vals[w0:w1, h0:h1]
         shown_grid_vals = self._exclude_pixels(shown_grid_vals)
 
-        if self.settings.log_scale:
+        if self.plot_settings.log_scale:
             shown_grid_vals = np.log10(shown_grid_vals)
 
         fig = plt.figure(self.img_properties["fig_num"])
@@ -1137,13 +1141,13 @@ class DataSetPlotter(ComponentBase):
         if img_extent is None:
             img_extent = self.img_properties["extent"]
 
-        cbar_min, cbar_max = self.settings.cbar_lim
+        cbar_min, cbar_max = self.plot_settings.cbar_lim
         if cbar_min is None:
             cbar_min = np.min(shown_grid_vals)
         if cbar_max is None:
             cbar_max = np.max(shown_grid_vals)
 
-        if self.settings.log_scale:
+        if self.plot_settings.log_scale:
             self.settings.cbar_min = np.log10(cbar_min)
             self.settings.cbar_max = np.log10(cbar_max)
 
@@ -1154,9 +1158,9 @@ class DataSetPlotter(ComponentBase):
         img_ = ax.imshow(shown_grid_vals.transpose((1, 0)),
                          vmin=cbar_min, vmax=cbar_max,
                          origin="lower",
-                         cmap=plt.get_cmap(self.settings.color_map),
+                         cmap=plt.get_cmap(self.plot_settings.color_map),
                          extent=axes_extent,
-                         interpolation=self.settings.pixel_interpolation.value
+                         interpolation=self.plot_settings.pixel_interpolation.value
                          )
         if self.settings["invert_x"]:
             ax.invert_xaxis()
@@ -1169,7 +1173,7 @@ class DataSetPlotter(ComponentBase):
         self._update_quantity_label()
         quantity_label = self.img_properties["quantity_label"]
 
-        img_title_option = str(self.settings.img_title)
+        img_title_option = str(self.plot_settings.img_title)
         ax.set_title(" ".join([quantity_label, img_title_option]))
 
         divider = make_axes_locatable(ax)
@@ -1178,7 +1182,7 @@ class DataSetPlotter(ComponentBase):
         cbar = fig.colorbar(img_, cax=cax)
         cbar.set_ticks(np.round(np.linspace(cbar_min, cbar_max, 4), 3))
 
-        if self.settings.en_cbar_label:
+        if self.plot_settings.en_cbar_label:
             cbar_label = self.selected_quantity.label + self.selected_quantity.unit
             cbar.set_label(cbar_label, rotation=270, labelpad=30)
 
@@ -1300,7 +1304,7 @@ class DataSetPlotter(ComponentBase):
 
         plt.figure("Knife edge")
         plt.xlabel(plot_x_label)
-        plt.ylabel(f"Power (arb. u.) summed over {self.sel_freq[0]}-{self.sel_freq[1]} THz")
+        plt.ylabel(f"Power (arb. u.) summed over {self.sel_freq_range[0]}-{self.sel_freq_range[1]} THz")
 
         p0 = np.array([vals[0], 0.0, 0.5, 34.0])
         opt_res = shgo(_cost, bounds=([p0[0] - 1, p0[0] + 1],
@@ -1322,10 +1326,10 @@ class DataSetPlotter(ComponentBase):
 
     def save_fig(self, fig_num_, filename=None, **kwargs):
         save_dir = Path(self.settings.result_dir)
-        filetype = self.settings.save_plots_settings.filetype
-        kwargs.setdefault("dpi", self.settings.save_plots_settings.dpi)
-        kwargs.setdefault("bbox_inches", self.settings.save_plots_settings.bbox_inches)
-        kwargs.setdefault("pad_inches", self.settings.save_plots_settings.pad_inches)
+        filetype = self.settings.save_settings.filetype
+        kwargs.setdefault("dpi", self.settings.save_settings.dpi)
+        kwargs.setdefault("bbox_inches", self.settings.save_settings.bbox_inches)
+        kwargs.setdefault("pad_inches", self.settings.save_settings.pad_inches)
 
         fig = plt.figure(fig_num_)
 
@@ -1342,7 +1346,7 @@ class DataSetPlotter(ComponentBase):
             filename_s = filename_s.replace(char, '')
         filename_s.replace(" ", "_")
 
-        w = self.settings.save_plots_settings.set_size_inches
+        w = self.settings.save_settings.set_size_inches
         fig.set_size_inches(w=w, forward=False)
         plt.subplots_adjust(wspace=0.3)
         plt.savefig(save_dir / (filename_s + f".{filetype}"), **kwargs)
@@ -1357,12 +1361,12 @@ class DataSetPlotter(ComponentBase):
 
         # fig_labels = [plt.figure(fig_num).get_label() for fig_num in plt.get_fignums()]
         only_shown_fig_nums = []
-        if self.settings.only_shown_figures:
-            only_shown_fig_nums = self.settings.only_shown_figures
-            logging.warning(f"Only showing figures {self.settings.only_shown_figures}")
+        if self.plot_settings.only_shown_figures:
+            only_shown_fig_nums = self.plot_settings.only_shown_figures
+            logging.warning(f"Only showing figures {self.plot_settings.only_shown_figures}")
 
-        if self.settings.plot_opt.disable_legend:
-            figs_w_disabled_legends = self.settings.plot_opt.disable_legend
+        if self.plot_settings.disable_legend:
+            figs_w_disabled_legends = self.plot_settings.disable_legend
             logging.warning(f"Legends disabled for figure: {figs_w_disabled_legends}")
 
         not_shown = []
@@ -1373,10 +1377,10 @@ class DataSetPlotter(ComponentBase):
             if not any([ax.get_legend() for ax in axes]):
                 for ax in axes:
                     h, labels = ax.get_legend_handles_labels()
-                    if labels and not (fig_label in self.settings.plot_opt.disable_legend):
+                    if labels and not (fig_label in self.plot_settings.disable_legend):
                         ax.legend()
 
-            if self.settings.save_plots:
+            if self.settings.save_settings.save_plots:
                 save_file=None
                 if save_file_suffix:
                     save_file = str(fig_num) + "_" + save_file_suffix
@@ -1391,9 +1395,9 @@ class DataSetPlotter(ComponentBase):
                 plt.close(fig_num)
                 continue
 
-            shown_plots_dict = self.settings.shown_plots.attributes
+            shown_plots_dict = self.plot_settings.traits(group="Shown plots")
             for shown_plot_num in shown_plots_dict:
-                if shown_plot_num == fig_label and (not shown_plots_dict.get(shown_plot_num, True)):
+                if (shown_plot_num in fig_label) and (not shown_plots_dict[shown_plot_num]):
                     not_shown.append(fig_label)
                     plt.close(fig_num)
             """

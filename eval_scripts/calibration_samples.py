@@ -18,7 +18,7 @@ else:
     figure_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/Calibration test samples - Andreone")
 
 options = {
-"save_plots_settings": {"path": figure_dir, "filetype": "png", "suffix": "", "dpi": 300, "bbox_inches": "tight",
+"save_settings": {"path": figure_dir, "filetype": "png", "suffix": "", "dpi": 300, "bbox_inches": "tight",
                         "pad_inches": 0, "set_size_inches": (19, 9)},
 "sample_properties": {"d": 520, "fp_spacing": 12.0},
 "enable_q_eval": True,

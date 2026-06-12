@@ -20,7 +20,7 @@ options = {
 "dist_func": Dist.Position,
 "img_title": "",
 "save_plots": False,
-"save_plots_settings": {"path": figure_dir, "filetype": "png", "suffix": "", "dpi": 300, "bbox_inches": "tight",
+"save_settings": {"path": figure_dir, "filetype": "png", "suffix": "", "dpi": 300, "bbox_inches": "tight",
                         "pad_inches": 0, "set_size_inches": (19, 9)},
 "sample_properties": {"d_1": 640,#650,
                       "d_2": 650,

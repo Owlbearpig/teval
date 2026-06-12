@@ -1,12 +1,11 @@
 from common.components import ComponentBase
-from common.default_appsettings import QuantityFunc, ClimateQuantity, Direction, Dist
+from common.default_appsettings import QuantityFunc, ClimateQuantity, Direction, Dist, ReferenceSelection
 from common.settings import Settings
 from copy import deepcopy
 from pathlib import Path
 import numpy as np
-from functions import unwrap, window, local_minima_1d, WindowTypes, butter_filt
-from functions import phase_correction, do_fft, do_ifft, f_axis_idx_map, remove_offset
-from functions import arr_statistics
+from functions import (unwrap, window, local_minima_1d, WindowTypes, butter_filt,
+                       phase_correction, do_fft, do_ifft, f_axis_idx_map, remove_offset, arr_statistics)
 from common.measurements import Measurement, meas_id_func
 from mpl_settings import mpl_style_params
 import matplotlib as mpl
@@ -18,7 +17,7 @@ from common.dataset_cache import DatasetCache
 import pandas as pd
 from common.traits import Q_
 from scipy.stats import pearsonr
-from common.default_appsettings import Domain, MeasurementType, QuantityEnum, AppSettings
+from common.default_appsettings import Domain, QuantityEnum
 from common.components import action
 import itertools
 
@@ -72,6 +71,9 @@ def logger_config(settings):
     logger.setLevel(log_level)
 
 class DataSet(ComponentBase):
+
+
+
     def __init__(self, data_path : Path | str, settings : Settings, **kwargs):
         super().__init__(**kwargs)
         self.plotted_ref = False
@@ -79,7 +81,7 @@ class DataSet(ComponentBase):
         self.time_axis = None
         self.freq_axis = None
         self.properties = {"data": {}, "shape": {}, }
-        self.measurements = {"refs": [], "sams": [], "all": []}
+        self.measurements = {"refs": [], "sams": [], "all": ()}
 
         self.sub_dataset = None
         self.is_sub_dataset = False
@@ -89,8 +91,6 @@ class DataSet(ComponentBase):
         self.settings = settings
 
         self._parse_measurements()
-
-        self._check_refs_exist()
 
     @action("print settings")
     def print_settings(self):
@@ -203,28 +203,12 @@ class DataSet(ComponentBase):
                         raise err
                     logging.info(f"Skipping {file_path}. {err}")
 
-        return measurements
-
-    def _sort_measurements(self, measurements):
-        refs, sams = [], []
-        for measurement in measurements:
-            if measurement.meas_type.value == MeasurementType.REF.value:
-                refs.append(measurement)
-            else:
-                sams.append(measurement)
-
-        if not [*refs, *sams]:
+        if not measurements:
             raise Exception("No measurements found. Check path or filenames")
 
-        def sort(meas_list):
-            if meas_list:
-                return tuple(sorted(meas_list, key=lambda meas: meas.meas_time))
-            else:
-                return ()
+        measurements = tuple(sorted(measurements, key=lambda meas: meas.meas_time))
 
-        refs_sorted, sams_sorted, all_sorted = sort(refs), sort(sams), sort([*refs, *sams])
-
-        return {"refs": refs_sorted, "sams": sams_sorted, "all": all_sorted}
+        return measurements
 
     def _timestamp2id(self, timestamp_str):
         timestamp_dt = datetime.strptime(timestamp_str, "%Y-%m-%dT%H-%M-%S.%f")
@@ -235,18 +219,26 @@ class DataSet(ComponentBase):
         if not isinstance(self.data_path, Path):
             self.data_path = Path(self.data_path)
 
-        all_measurements = self._read_data_dir()
-
-        self.measurements = self._sort_measurements(all_measurements)
+        self.measurements["all"] = self._read_data_dir()
 
         self.cache = DatasetCache(self.measurements["all"], self.data_path)
+        self._data_properties()
 
-        logging.info(f"Dataset contains {len(all_measurements)} measurements")
-        if not self.measurements["refs"]:
-            logging.info("No reference measurements found based on filename (ref)")
-        else:
-            logging.info(f"{len(self.measurements['refs'])} reference measurements ")
-            logging.info(f"{len(self.measurements['sams'])} sample measurements")
+        all_meas = self.measurements["all"]
+        max_amp_meas = (all_meas[0], -np.inf)
+        for meas in all_meas:
+            data_td = self.get_data(meas)
+            max_amp = np.max(np.abs(data_td[:, 1]))
+            if max_amp > max_amp_meas[1]:
+                max_amp_meas = (meas, max_amp)
+        logging.info(f"Maximum amplitude measurement: {max_amp_meas[0].filepath.name}\n")
+        self.measurements["max_amp_meas"] = max_amp_meas[0]
+
+        self._sort_meas_type()
+
+        logging.info(f"Dataset contains {len(self.measurements['all'])} measurements")
+        logging.info(f"{len(self.measurements['refs'])} reference measurements ")
+        logging.info(f"{len(self.measurements['sams'])} sample measurements")
 
         first_measurement = self.measurements["all"][0]
         last_measurement = self.measurements["all"][-1]
@@ -273,52 +265,48 @@ class DataSet(ComponentBase):
         logging.info(f"Min and max time between measurements: "
                      f"({np.min(time_diffs)}, {np.max(time_diffs)}) seconds\n")
 
-        all_meas = self.measurements["all"]
-        max_amp_meas = (all_meas[0], -np.inf)
-        for meas in all_meas:
-            data_td = self.get_data(meas)
-            max_amp = np.max(np.abs(data_td[:, 1]))
-            if max_amp > max_amp_meas[1]:
-                max_amp_meas = (meas, max_amp)
-        logging.info(f"Maximum amplitude measurement: {max_amp_meas[0].filepath.name}\n")
-        self.measurements["max_amp_meas"] = max_amp_meas[0]
-
-        self._data_properties()
         self._shape_properties()
 
-    def _check_refs_exist(self):
-        if self.measurements["refs"] or not self.measurements["sams"]:
-            return
-        logging.info(f"No explicit references in the dataset. Using ref_pos option")
-        
-        threshold = self.settings.ref_threshold
+    def _sort_meas_type(self):
+        all_measurements = self.measurements["all"]
 
+        ref_filter = self.settings.dataset_opt.ref_selection
+
+        threshold = self.settings.dataset_opt.ref_threshold
         max_amp_meas = self.measurements["max_amp_meas"]
         max_amp = np.max(np.abs(self.get_data(max_amp_meas)[:, 1]))
 
-        manual_pos = self.settings.ref_pos
+        manual_pos = self.settings.dataset_opt.ref_pos
+
+        id_str = "ref"
 
         refs_ = []
-        if (manual_pos[0] is not None) and (manual_pos[1] is not None):
+        if ref_filter == ReferenceSelection.from_file_name:
+            for meas in all_measurements:
+                if id_str in str(meas.filepath.stem).lower():
+                    refs_.append(meas)
+            if not refs_:
+                logging.info(f"No explicit references found in the dataset based on filename ({id_str}).")
+        elif ref_filter == ReferenceSelection.point_as_ref:
             refs_ = [self.get_measurement(*manual_pos)]
-            logging.warning(f"Using measurement at {manual_pos} as ref. ({refs_[0]})")
-        elif not all([pos is None for pos in manual_pos]):
-            if manual_pos[0] is None:
-                y = manual_pos[1]
-                logging.info(f"Selecting measurements along horizontal line at y={y} mm")
-                ref_line, x_coords = self.get_line(y=y)
-            else:
-                x = manual_pos[0]
-                logging.info(f"Selecting measurements along vertical line at x={x} mm")
-                ref_line, y_coords = self.get_line(x=x)
+            logging.warning(f"Using measurement closest to {manual_pos} as ref. (ref: {refs_[0]})")
+        elif ref_filter == ReferenceSelection.horizontal_line_as_ref:
+            y = manual_pos[1]
+            logging.info(f"Selecting measurements along horizontal line at y={y} mm")
+            ref_line, x_coords = self.get_line(y=y)
+        elif ref_filter == ReferenceSelection.vertical_line_as_ref:
+            x = manual_pos[0]
+            logging.info(f"Selecting measurements along vertical line at x={x} mm")
+            ref_line, y_coords = self.get_line(x=x)
 
+        if ref_filter in [ReferenceSelection.horizontal_line_as_ref, ReferenceSelection.vertical_line_as_ref]:
             for meas in ref_line:
                 data_td = self.get_data(meas)
                 if np.max(np.abs(data_td[:, 1])) > threshold * max_amp:
                     refs_.append(meas)
 
-        if len(refs_) > 1:
-            logging.info(f"Using reference measurements: {refs_[0].filepath.stem} to {refs_[-1].filepath.stem}")
+            if len(refs_) > 1:
+                logging.info(f"Using reference measurements: {refs_[0].filepath.stem} to {refs_[-1].filepath.stem}")
 
         if not refs_:
             for meas in self.measurements["all"]:
@@ -326,13 +314,18 @@ class DataSet(ComponentBase):
                 amp = np.max(np.abs(data_td[:, 1]))
                 if amp > threshold * max_amp:
                     refs_.append(meas)
-
             logging.info(f"Using max amplitude measurements as ref. (Threshold: {threshold})")
 
         if not refs_:
-            logging.warning(f"No suitable refs found. Check ref_pos option or ref_threshold.")
+            logging.warning(f"No suitable refs found. Check settings.")
 
-        self.measurements["refs"] = tuple(refs_)
+        sams_ = []
+        for meas in all_measurements:
+            if meas not in refs_:
+                sams_.append(meas)
+
+        self.measurements["refs"] = refs_
+        self.measurements["sams"] = sams_
 
         logging.info(f"Found {len(self.measurements['refs'])} possible reference measurements")
         logging.info("######################################################\n")
@@ -748,7 +741,7 @@ class DataSet(ComponentBase):
 
         n_sub = sub_res["refr_idx"]
         t_sub = sub_res["t_sub"]
-        d_film = self.settings.sample_properties.d_film
+        d_film = self.settings.sample_properties.d
 
         # [eps0_thz] = ps * Siemens / µm, [c_thz] = µm / ps, [1/d_film] = 1/um -> conversion: 1e4 (S/cm)
         # 1 / µm = 1 / (1e-6 m) = 1 / (1e-6 * 1e2 cm) = 1 / (1e-4 cm) = 1e4 * 1 / cm
@@ -851,7 +844,7 @@ class DataSet(ComponentBase):
 
     def find_nearest_ref(self, meas_, dist_func=None) -> Measurement:
         if not dist_func:
-            dist_func = self.settings.dist_func.value
+            dist_func = self.settings.dataset_opt.dist_func.value
         closest_ref, best_fit_val = None, np.inf
         for ref_meas in self.measurements["refs"]:
             dist_val = dist_func(ref_meas, meas_)
@@ -863,7 +856,7 @@ class DataSet(ComponentBase):
 
         logging.debug(f"Sam: {meas_})")
         logging.debug(f"Ref: {closest_ref})")
-        if self.settings.dist_func == Dist.Time:
+        if self.settings.dataset_opt.dist_func == Dist.Time:
             logging.debug(f"Time between ref and sample: {best_fit_val} seconds")
         else:
             logging.debug(f"Distance between ref and sample: {best_fit_val} mm")
@@ -871,8 +864,8 @@ class DataSet(ComponentBase):
         return closest_ref
 
     def get_ref_data(self, domain=Domain.Time, point=None, ref_idx=None, ret_meas=False):
-        if self.settings.fix_ref is not False:
-            chosen_ref = self.measurements["refs"][self.settings.fix_ref]
+        if self.settings.dataset_opt.fix_ref is not False:
+            chosen_ref = self.measurements["refs"][self.settings.dataset_opt.fix_ref]
         elif point is not None:
             closest_sam = self.get_measurement(*point)
             chosen_ref = self.find_nearest_ref(closest_sam)

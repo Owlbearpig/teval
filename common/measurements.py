@@ -6,15 +6,14 @@ from datetime import datetime
 from numpy.fft import fft, fftfreq, rfft, rfftfreq
 from functions import window, remove_offset
 from enum import Enum
-from common.default_appsettings import MeasurementType
+from pathlib import Path
 
 meas_id_func = lambda meas_datetime: int((meas_datetime - datetime.min).total_seconds() * 1e6)
 
 
 class Measurement:
-    filepath = None
+    filepath = Path()
     meas_time = None
-    meas_type = None
     sample_name = None
     position = (None, None)
     window_applied = False
@@ -44,27 +43,17 @@ class Measurement:
         return positions
 
     def _set_metadata(self):
-        # set time
         date_string = str(self.filepath.stem)[:26]
         self.meas_time = datetime.strptime(date_string, "%Y-%m-%dT%H-%M-%S.%f")
 
-        # set sample name
         dir_1above, dir_2above = self.filepath.parents[0], self.filepath.parents[1]
         if ("sam" in dir_1above.stem.lower()) or ("ref" in dir_1above.stem.lower()):
             self.sample_name = dir_2above.stem
         else:
             self.sample_name = dir_1above.stem
 
-        # set measurement type
-        if "ref" in str(self.filepath.stem).lower():
-            self.meas_type = MeasurementType(1)
-        else:
-            self.meas_type = MeasurementType(2)
-
-        # set position
         self.position = self._extract_position()
 
-        # set identifier
         self.identifier = meas_id_func(self.meas_time)
 
     def get_data_td(self):
@@ -89,45 +78,3 @@ class Measurement:
         self._data_fd = np.array([freqs, data_fd]).T
 
         return self._data_fd
-
-class AvgMeasurement(Measurement):
-    # TODO not tested. How do we handle caching? -> Probably avoid using caching
-    def __init__(self, measurements):
-        super().__init__(measurements[0])
-
-        self.measurements = measurements
-
-    def get_data_td(self):
-        if self._data_td is None:
-            self._data_td = self.measurements[0].get_data_td()
-
-            all_data = np.zeros((len(self.measurements), *self._data_td.shape), dtype=float)
-            for i, meas in enumerate(self.measurements):
-                all_data[i] = meas.get_data_td()
-
-            self._data_td[:, 1] = np.mean(all_data, axis=2)
-
-        return self._data_td
-
-    def get_data_fd(self, reversed_time=True):
-        return self._data_fd(self, reversed_time)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

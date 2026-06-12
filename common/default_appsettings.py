@@ -1,27 +1,30 @@
 import logging
 from enum import Enum, member
-
+from pathlib import Path
 import traitlets
 from traitlets import (
     HasTraits, Bool, Int, Float, Unicode, Tuple,
     List as TList, Dict as TDict, Enum as TEnum, Instance, Any as TAny
 )
-
 import common.consts
 from common import traits
 from common.components import ComponentBase
-from common.traits import ValueRange, Path, Q_
-
-class Domain(Enum):
-    Time = 0
-    Frequency = 1
-    Both = 2
+from common.traits import ValueRange, Path as TPath, Q_
 
 
-class MeasurementType(Enum):
-    REF = 1
-    SAM = 2
+class LogLevel(Enum):
+    info = logging.INFO
+    debug = logging.DEBUG
+    warning = logging.WARNING
+    error = logging.ERROR
+    critical = logging.CRITICAL
 
+
+class ReferenceSelection(Enum):
+    from_file_name = 0
+    point_as_ref = 1
+    horizontal_line_as_ref = 2
+    vertical_line_as_ref = 3
 
 class PixelInterpolation(Enum):
     none = None
@@ -49,6 +52,10 @@ class ClimateQuantity(Enum):
     Temperature = 0
     Humidity = 1
 
+class Domain(Enum):
+    Time = 0
+    Frequency = 1
+    Both = 2
 
 class Dist(Enum):
     Position = member(lambda meas1, meas2: (abs(meas1.position[0] - meas2.position[0]) +
@@ -247,7 +254,6 @@ class ColorMaps(Enum):
     gist_yerg_r = "gist_yerg_r"
     Grays_r = "Grays_r"
 
-
 class QuantityFunc:
     func = None
 
@@ -267,7 +273,6 @@ class QuantityFunc:
     def __call__(self, *args, **kwargs):
         return self.func(*args, **kwargs)
 
-
 class QuantityEnum(Enum):
     P2P = QuantityFunc("Peak to peak", domain=Domain.Time)
     Power = QuantityFunc("Power", domain=Domain.Frequency)
@@ -284,12 +289,7 @@ class QuantityEnum(Enum):
     RefractiveIdx = QuantityFunc("Refractive idx", domain=Domain.Frequency)
     AbsorptionCoe = QuantityFunc("Absorption coe", domain=Domain.Frequency, unit="1/cm")
 
-class LogLevel(Enum):
-    info = logging.INFO
-    debug = logging.DEBUG
-    warning = logging.WARNING
-    error = logging.ERROR
-    critical = logging.CRITICAL
+
 
 class EvalOpt(ComponentBase):
     dt = Int(0)
@@ -305,8 +305,6 @@ class EvalOpt(ComponentBase):
 
 
 class PpOpt(ComponentBase):
-    dt = Int(0)
-
     window_group = "Window options"
     window_enabled = Bool(False, group=window_group, name="Enabled")
     win_width = Int(10, group=window_group)
@@ -323,49 +321,28 @@ class PpOpt(ComponentBase):
 class SampleProperties(ComponentBase):
     d = Int(1000)
     layers = Int(1)
-    default_values = Bool(True)
+    default_values = Bool(True, read_only=True)
 
 
-class SavePlotsSettings(ComponentBase):
-    path = Path(default_value=common.consts.result_dir)
+class SaveSettings(ComponentBase):
+    path = TPath(default_value=common.consts.result_dir)
     filetype = Unicode("pdf")
     suffix = Unicode("")
     bbox_inches = Unicode("tight")
     dpi = Int(300)
     pad_inches = Int(0)
     set_size_inches = TList([12.0, 9.0])
-
-
-class ShownPlots(ComponentBase):
-    window = Bool(True)
-    time_domain = Bool(True)
-    spectrum = Bool(True)
-    phase = Bool(True)
-    phase_slope = Bool(False)
-    amplitude_transmission = Bool(False)
-    absorbance = Bool(False)
-    refractive_index = Bool(False)
-    absorption_coefficient = Bool(False)
-    conductivity = Bool(False)
-
+    save_plots = Bool(False)
+    en_csv_export = Bool(False)
 
 class PlotOpt(ComponentBase):
     plot_range = ValueRange([Q_(0.05, "THz"), Q_(3.5, "THz")], metadata={"priority": 1, "readonly": False})
-    shift_sam2ref = Bool(False)
-    label = Unicode("")
-    sub_noise_floor = Bool(False)
-    td_scale = Float(1.0)
-    remove_t_offset = Bool(False)
-    err_bar_limits = ValueRange([90, 110])
-    ref_err_bars = Bool(False)
-    fig_num_ext = Unicode("")
-    stability_plot_rel_change = Bool(False)
-    subtract_mean = Bool(False)
-    temp_sensor_idx = Int(-1)
-    plot_zero_crossing = Bool(False)
-    disable_legend = TList(Int(), default_value=[])
-    climate_file = Path()
-    clip_climate_data = Bool(False)
+
+    stability_plot_rel_change = Bool(False, group="Stability and climate")
+    subtract_mean = Bool(False, group="Stability and climate")
+    temp_sensor_idx = Int(-1, group="Stability and climate")
+    climate_file = TPath(Path(), group="Stability and climate")
+    clip_climate_data = Bool(False, group="Stability and climate")
     redp_sensor_labels = TDict(
         key_trait=Unicode(),
         value_trait=Unicode(),
@@ -374,36 +351,65 @@ class PlotOpt(ComponentBase):
             "Redp idx 1": r"$\theta_{air}$",
             "Redp idx 2": r"$\theta_{fiber}$",
             "Redp idx 3": r"$\theta_{box}$",
-        }
+        },
+        group="Stability and climate"
     )
 
+    shift_sam2ref = Bool(False)
+    label = Unicode("")
+    sub_noise_floor = Bool(False)
+    td_scale = Float(1.0)
+    remove_t_offset = Bool(False)
+    err_bar_limits = ValueRange([90, 110])
+    ref_err_bars = Bool(False)
+    fig_num_ext = Unicode("")
+
+    plot_zero_crossing = Bool(False)
+    disable_legend = TList(Int(), default_value=[])
+
+    excluded_areas = TAny(None, allow_none=True, group="Image")
+    cbar_lim = ValueRange(default_value=[0, 0], group="Image")
+    log_scale = Bool(False, group="Image")
+    color_map = traitlets.Enum(ColorMaps, default_value=ColorMaps.autumn).tag(name="Colormaps", group="Image")
+    invert_x = Bool(False, group="Image")
+    invert_y = Bool(False, group="Image")
+    pixel_interpolation = TEnum(PixelInterpolation, default_value=PixelInterpolation.none, group="Image")
+    fig_label = Unicode("", group="Image")
+    img_title = Unicode("", group="Image")
+    en_cbar_label = Bool(True, group="Image")
+
+    window = Bool(True, group="Shown plots")
+    time_domain = Bool(True, group="Shown plots")
+    spectrum = Bool(True, group="Shown plots")
+    phase = Bool(True, group="Shown plots")
+    phase_slope = Bool(False, group="Shown plots")
+    amplitude_transmission = Bool(False, group="Shown plots")
+    absorbance = Bool(False, group="Shown plots")
+    refractive_index = Bool(False, group="Shown plots")
+    absorption_coefficient = Bool(False, group="Shown plots")
+    conductivity = Bool(False, group="Shown plots")
+
+    only_shown_figures = TList(TAny(), default_value=[])
+
+class DatasetOpt(ComponentBase):
+    dist_func = TEnum(Dist, default_value=Dist.Time)
+
+    ref_selection = TEnum(ReferenceSelection,
+                          default_value=ReferenceSelection.point_as_ref,
+                          group="Reference filter")
+    ref_pos = ValueRange([0, 0], group="Reference filter")
+    fix_ref = Bool(False, group="Reference filter")
+    ref_threshold = Float(0.95, group="Reference filter")
 
 class AppSettings(ComponentBase):
     log_level = TEnum(LogLevel, default_value=LogLevel.info)
-    result_dir = Path(default_value=common.consts.result_dir)
-    save_plots = Bool(False)
-    excluded_areas = TAny(None, allow_none=True)
-    cbar_lim = ValueRange(default_value=[0, 0])
-    log_scale = Bool(False)
-    color_map = traitlets.Enum(ColorMaps, default_value=ColorMaps.autumn).tag(name="Colormaps")
-    invert_x = Bool(False)
-    invert_y = Bool(False)
-    pixel_interpolation = TEnum(PixelInterpolation, default_value=PixelInterpolation.none)
-    fig_label = Unicode("")
-    img_title = Unicode("")
-    en_cbar_label = Bool(True)
-    ref_pos = ValueRange([0, 0])
-    ref_threshold = Float(0.95)
-    fix_ref = Bool(False)
-    en_csv_export = Bool(False)
-    dist_func = TEnum(Dist, default_value=Dist.Time)
+    result_dir = TPath(default_value=common.consts.result_dir)
 
-    save_plots_settings = Instance(SavePlotsSettings, args=())
+    save_settings = Instance(SaveSettings, args=())
     pp_opt = Instance(PpOpt, args=())
     sample_properties = Instance(SampleProperties, args=())
     eval_opt = Instance(EvalOpt, args=())
     plot_opt = Instance(PlotOpt, args=())
+    dataset_opt = Instance(DatasetOpt, args=())
 
     enable_q_eval = Bool(False)
-    only_shown_figures = TList(TAny(), default_value=[])
-    shown_plots = Instance(ShownPlots, args=())
