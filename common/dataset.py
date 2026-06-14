@@ -4,7 +4,7 @@ from common.settings import Settings
 from copy import deepcopy
 from pathlib import Path
 import numpy as np
-from functions import (unwrap, window, local_minima_1d, WindowTypes, butter_filt,
+from common.functions import (unwrap, window, local_minima_1d, WindowTypes, butter_filt,
                        phase_correction, do_fft, do_ifft, f_axis_idx_map, remove_offset, arr_statistics)
 from common.measurements import Measurement, meas_id_func
 from mpl_settings import mpl_style_params
@@ -17,11 +17,10 @@ from common.dataset_cache import DatasetCache
 import pandas as pd
 from common.traits import Q_
 from scipy.stats import pearsonr
-from common.default_appsettings import Domain, QuantityEnum
+from common.default_appsettings import Domain, QuantityEnum, DatasetOpt
 from common.components import action
 import itertools
-
-from traitlets import observe
+from traitlets import observe, Unicode
 
 """
 TODOs: 
@@ -73,6 +72,17 @@ def logger_config(settings):
     logger.setLevel(log_level)
 
 class DataSet(ComponentBase):
+    data_path_info = Unicode("", group="Dataset info", read_only=True).tag(name="Data path")
+    max_amp_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Max amplitude measurement")
+    first_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="First measurement")
+    last_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Last measurement")
+
+    all_meas_cnt_info = Unicode("", group="Measurement classification", read_only=True).tag(name="Number of measurements")
+    ref_meas_cnt_info = Unicode("", group="Measurement classification", read_only=True).tag(name="Number of reference measurements")
+    sam_meas_cnt_info = Unicode("", group="Measurement classification", read_only=True).tag(name="Number of sample measurements")
+
+    meas_time_info = Unicode("", group="Measurement time info", read_only=True).tag(name="Total measurement time")
+    mean_meas_time_info = Unicode("", group="Measurement time info", read_only=True).tag(name="Mean measurement time")
 
     def __init__(self, data_path : Path | str, settings : Settings, **kwargs):
         super().__init__(**kwargs)
@@ -92,9 +102,13 @@ class DataSet(ComponentBase):
 
         self._parse_measurements()
 
-        self.settings.dataset_opt.observe(self.update_meas_sorting, names='ref_selection')
+        self._set_observers()
 
-    def update_meas_sorting(self):
+    def _set_observers(self):
+        reference_filter_trait_names = self.settings.dataset_opt.trait_names(group=DatasetOpt.reference_filter_group)
+        self.settings.dataset_opt.observe(self.update_meas_sorting, names=reference_filter_trait_names)
+
+    def update_meas_sorting(self, change):
         self._sort_meas_type()
 
     @action("print settings")
@@ -167,6 +181,8 @@ class DataSet(ComponentBase):
         if not list(data_path.glob("*")):
             raise ValueError(f"Path {data_path} is empty")
 
+        self.set_trait("data_path_info", str(data_path))
+
         return data_path
 
     def find_climate_log_file(self, climate_log_file):
@@ -236,19 +252,28 @@ class DataSet(ComponentBase):
             max_amp = np.max(np.abs(data_td[:, 1]))
             if max_amp > max_amp_meas[1]:
                 max_amp_meas = (meas, max_amp)
-        logging.info(f"Maximum amplitude measurement: {max_amp_meas[0].filepath.name}\n")
         self.measurements["max_amp_meas"] = max_amp_meas[0]
 
         self._sort_meas_type()
 
-        logging.info(f"Dataset contains {len(self.measurements['all'])} measurements")
-        logging.info(f"{len(self.measurements['refs'])} reference measurements ")
-        logging.info(f"{len(self.measurements['sams'])} sample measurements")
+        self._shape_properties()
+
+    def _set_dataset_info(self):
+        max_amp_meas = self.measurements["max_amp_meas"]
+        logging.debug(f"Maximum amplitude measurement: {max_amp_meas.filepath.name}\n")
+        self.set_trait("max_amp_meas_info", max_amp_meas.filepath.stem)
+
+        all_cnt = len(self.measurements["all"])
+        ref_cnt = len(self.measurements["refs"])
+        sam_cnt = len(self.measurements["sams"])
+        logging.debug(f"Dataset contains {all_cnt} measurements")
+        logging.debug(f"{ref_cnt} reference measurements ")
+        logging.debug(f"{sam_cnt} sample measurements")
 
         first_measurement = self.measurements["all"][0]
         last_measurement = self.measurements["all"][-1]
 
-        logging.info(f"First measurement at: {first_measurement.meas_time}, "
+        logging.debug(f"First measurement at: {first_measurement.meas_time}, "
                      f"last measurement: {last_measurement.meas_time}")
         time_del = last_measurement.meas_time - first_measurement.meas_time
         td_secs = time_del.seconds + 24 * 3600 * time_del.days
@@ -256,7 +281,7 @@ class DataSet(ComponentBase):
         min_part = (td_secs // 60) % 60
         sec_part = time_del.seconds % 60
 
-        logging.info(f"Total measurement time: {tot_hours} hours, "
+        logging.debug(f"Total measurement time: {tot_hours} hours, "
                      f"{min_part} minute(s) and {sec_part} second(s) ({td_secs} seconds)\n")
 
         time_diffs = [(self.measurements["all"][i + 1].meas_time -
@@ -266,11 +291,20 @@ class DataSet(ComponentBase):
         mean_time_diff = np.mean(time_diffs)
 
         self.properties["mean_time_diff"] = mean_time_diff
-        logging.info(f"Mean time between measurements: {np.round(mean_time_diff, 2)} seconds")
-        logging.info(f"Min and max time between measurements: "
+        logging.debug(f"Mean time between measurements: {np.round(mean_time_diff, 2)} seconds")
+        logging.debug(f"Min and max time between measurements: "
                      f"({np.min(time_diffs)}, {np.max(time_diffs)}) seconds\n")
 
-        self._shape_properties()
+        self.set_trait("all_meas_cnt_info", str(all_cnt))
+        self.set_trait("ref_meas_cnt_info", str(ref_cnt))
+        self.set_trait("sam_meas_cnt_info", str(sam_cnt))
+
+        self.set_trait("first_meas_info", first_measurement.filepath.stem)
+        self.set_trait("last_meas_info", last_measurement.filepath.stem)
+
+        self.set_trait("meas_time_info", f"{tot_hours:02}:{min_part:02}:{sec_part:02}")
+        self.set_trait("mean_meas_time_info", str(np.round(mean_time_diff, 2)))
+
 
     def _sort_meas_type(self):
         all_measurements = self.measurements["all"]
@@ -284,6 +318,15 @@ class DataSet(ComponentBase):
         manual_pos = self.settings.dataset_opt.ref_pos
 
         id_str = "ref"
+
+        def threshold_filter():
+            ret = []
+            for meas in self.measurements["all"]:
+                data_td = self.get_data(meas)
+                amp = np.max(np.abs(data_td[:, 1]))
+                if amp > threshold * max_amp:
+                    ret.append(meas)
+            return ret
 
         refs_ = []
         if ref_filter == ReferenceSelection.from_file_name:
@@ -303,6 +346,8 @@ class DataSet(ComponentBase):
             x = manual_pos[0]
             logging.info(f"Selecting measurements along vertical line at x={x} mm")
             ref_line, y_coords = self.get_line(x=x)
+        elif ref_filter == ReferenceSelection.above_threshold:
+            refs_ = threshold_filter()
 
         if ref_filter in [ReferenceSelection.horizontal_line_as_ref, ReferenceSelection.vertical_line_as_ref]:
             for meas in ref_line:
@@ -314,11 +359,7 @@ class DataSet(ComponentBase):
                 logging.info(f"Using reference measurements: {refs_[0].filepath.stem} to {refs_[-1].filepath.stem}")
 
         if not refs_:
-            for meas in self.measurements["all"]:
-                data_td = self.get_data(meas)
-                amp = np.max(np.abs(data_td[:, 1]))
-                if amp > threshold * max_amp:
-                    refs_.append(meas)
+            refs_ = threshold_filter()
             logging.info(f"Using max amplitude measurements as ref. (Threshold: {threshold})")
 
         if not refs_:
@@ -332,8 +373,10 @@ class DataSet(ComponentBase):
         self.measurements["refs"] = refs_
         self.measurements["sams"] = sams_
 
-        logging.info(f"Found {len(self.measurements['refs'])} possible reference measurements")
+        logging.info(f"Classified {len(self.measurements['refs'])} measurements as reference")
         logging.info("######################################################\n")
+
+        self._set_dataset_info()
 
     def _pre_process(self, meas_):
         pp_opt = self.settings.pp_opt
@@ -741,6 +784,8 @@ class DataSet(ComponentBase):
         return sub_res
 
     def conductivity(self, meas_):
+        if self.settings.use_sub_dataset:
+            sub_pnt = self.settings.eval_opt.sub_pnt
         sub_res = self._eval_sub()
         t_sam = self.transmission(meas_, 1)
 

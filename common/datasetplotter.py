@@ -6,12 +6,12 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 from common.default_appsettings import Domain, Dist, Direction, ClimateQuantity, QuantityFunc, QuantityEnum
 from functools import partial
-from functions import moving_average, f_axis_idx_map, local_minima_1d
+from common.functions import moving_average, f_axis_idx_map, local_minima_1d
 import logging
 from datetime import datetime
 from pathlib import Path
 from scipy.special import erfc
-from _shgo import shgo
+from common.eval_component.shgo import shgo
 from traitlets import Float, observe, Integer, Unicode
 from common.traits import Q_, Quantity, ValueRange
 from mpl_settings import mpl_style_params
@@ -19,7 +19,7 @@ import matplotlib as mpl
 from scipy.stats import pearsonr
 from tqdm import tqdm
 import pandas as pd
-from q_space_eval import QSpaceEval
+from common.eval_component.q_space_eval import QSpaceEval
 from copy import deepcopy
 
 class DataSetPlotter(ComponentBase):
@@ -1064,6 +1064,7 @@ class DataSetPlotter(ComponentBase):
 
         return meas_time, quant_values
 
+    @action("Stability difference", group="Plots")
     def system_stability_diff_plot(self):
         system_stab_res_refs = self.plot_system_stability()
         x = system_stab_res_refs["meas_times"]
@@ -1114,7 +1115,7 @@ class DataSetPlotter(ComponentBase):
         plt.ylabel("Time (fs)")
 
 
-
+    @action("Image", group="Image plots")
     def plot_image(self, img_extent=None):
         self._update_fig_num()
         info = self.img_properties
@@ -1162,9 +1163,9 @@ class DataSetPlotter(ComponentBase):
                          extent=axes_extent,
                          interpolation=self.plot_settings.pixel_interpolation.value
                          )
-        if self.settings["invert_x"]:
+        if self.plot_settings.invert_x:
             ax.invert_xaxis()
-        if self.settings["invert_y"]:
+        if self.plot_settings.invert_y:
             ax.invert_yaxis()
 
         ax.set_xlabel("x (mm)")
@@ -1189,6 +1190,7 @@ class DataSetPlotter(ComponentBase):
         self.img_ax = ax
         self.img_properties["plotted_image"] = True
 
+    @action("Plot measurement on image", group="Image plots")
     def _plot_meas_on_image(self, measurements):
         if not plt.fignum_exists(self.img_properties["fig_num"]):
             return
@@ -1205,10 +1207,11 @@ class DataSetPlotter(ComponentBase):
 
         plt_fun(meas_x_coords, meas_y_coords, color="black", linewidth=0.4)
 
-
+    @action("Plot reference on image", group="Image plots")
     def plot_refs_on_image(self):
         self._plot_meas_on_image(self.measurements["refs"])
 
+    @action("Line plot", group="Image plots")
     def plot_line(self, line_coords=None, direction=Direction.Horizontal, fig_num_=None, y_label=None, **plot_kwargs):
         if line_coords is None:
             line_coords = [0.0]
@@ -1266,6 +1269,9 @@ class DataSetPlotter(ComponentBase):
 
         self._plot_meas_on_image(measurements)
 
+    def plot_q_space_eval_result(self, res):
+        pass
+    
     def plot_jitter(self):
         x = [25, 50, 100, 200]
         y = [113.8, 39.8, 12.47, 6.17]
@@ -1275,6 +1281,7 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel("Measurement window (ps)")
         plt.ylabel("Largest jump (fs)")
 
+    @action("Knife edge", group="Plots")
     def knife_edge(self, x=None, y=None, coord_slice=None):
         measurements, coords = self.dataset.get_line(x, y)
         vals = np.array([self.dataset.power(meas_, self.sel_freq_range) for meas_ in measurements])

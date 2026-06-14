@@ -1,8 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy
-from functions import f_axis_idx_map, moving_average
-from transfer_functions import model_1layer, transferfunction_error, dtdn, dtdd
+from common.functions import f_axis_idx_map, moving_average
+from common.eval_component.transfer_functions import model_1layer, transferfunction_error, dtdn, dtdd
 from common.consts import c_thz, GREEN, RESET
 from tqdm import tqdm
 from scipy.optimize import shgo

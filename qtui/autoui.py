@@ -89,10 +89,10 @@ def create_range_entry(component, name, trait):
             layout.addWidget(apply)
 
             def apply_value_to_component():
-                range_val_ = trait.get(component)
+                new_range_val = list(trait.get(component))
+                new_range_val[sb_idx] = spinbox.value() * units if is_quantity else spinbox.value()
 
-                range_val_[sb_idx] = spinbox.value() * units if is_quantity else spinbox.value()
-                setattr(component, name, range_val_)
+                setattr(component, name, new_range_val)
 
             apply.clicked.connect(apply_value_to_component)
             apply.clicked.connect(spinbox.check_changed)
@@ -104,8 +104,9 @@ def create_range_entry(component, name, trait):
             spinbox.setValue(new_val[sb_idx].to(units).magnitude if is_quantity else new_val[sb_idx])
             spinbox.blockSignals(False)
 
-        update_spinbox_from_trait(trait.get(component))
-        component.observe(lambda c: update_spinbox_from_trait(c['new']), name)
+        if not trait.read_only:
+            update_spinbox_from_trait(trait.get(component))
+            component.observe(lambda c: update_spinbox_from_trait(c['new']), name)
 
     for i in range(2):
         setup_single_spinbox(sb_idx=i)

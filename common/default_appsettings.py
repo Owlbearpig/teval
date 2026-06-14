@@ -9,7 +9,7 @@ from traitlets import (
 import common.consts
 from common import traits
 from common.components import ComponentBase
-from common.traits import ValueRange, Path as TPath, Q_
+from common.traits import ValueRange, Path as TPath, Q_, Quantity as TQuantity
 
 
 class LogLevel(Enum):
@@ -25,6 +25,7 @@ class ReferenceSelection(Enum):
     point_as_ref = 1
     horizontal_line_as_ref = 2
     vertical_line_as_ref = 3
+    above_threshold = 4
 
 class PixelInterpolation(Enum):
     none = None
@@ -292,23 +293,26 @@ class QuantityEnum(Enum):
 
 
 class EvalOpt(ComponentBase):
-    dt = Int(0)
+    dt = TQuantity(Q_(0.0, "ps"))
     sub_pnt = ValueRange([0, 0])
     fit_range = ValueRange([Q_(0.50, "THz"), Q_(2.20, "THz")])
     q_space_range = ValueRange([Q_(0.75, "THz"), Q_(2.00, "THz")])
     phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")])
     average = Bool(False)
     delta_d = Float(2.0)
+    fp_count = Int(0).tag(name="Number of Fabry-Perots")
     phi_offset_correction = Bool(True)
     printed_freqs = TList(trait=Float(), default_value=[1.000, 2.000])
     d_opt_axis = TAny(None, allow_none=True)
+
+    use_sub_dataset = Bool(False, group="Conductivity").tag(name="Use substrate dataset")
 
 
 class PpOpt(ComponentBase):
     window_group = "Window options"
     window_enabled = Bool(False, group=window_group, name="Enabled")
     win_width = Int(10, group=window_group)
-    shift = Float(0, group=window_group)
+    shift = Float(0, group=window_group).tag(name="Window shift")
     slope = Float(0.15, group=window_group)
     en_plot = Bool(False, group=window_group)
     type = TEnum(WindowTypes, default_value=WindowTypes.tukey, group=window_group)
@@ -319,7 +323,8 @@ class PpOpt(ComponentBase):
     remove_dc = Bool(True, group=filter_group)
 
 class SampleProperties(ComponentBase):
-    d = Int(1000)
+    d = TQuantity(Q_(0.0, "µm"))
+    d_film = TQuantity(Q_(0.0, "µm")).tag(name="Film thickness")
     layers = Int(1)
     default_values = Bool(True, read_only=True)
 
@@ -338,11 +343,12 @@ class SaveSettings(ComponentBase):
 class PlotOpt(ComponentBase):
     plot_range = ValueRange([Q_(0.05, "THz"), Q_(3.5, "THz")], metadata={"priority": 1, "readonly": False})
 
-    stability_plot_rel_change = Bool(False, group="Stability and climate")
-    subtract_mean = Bool(False, group="Stability and climate")
-    temp_sensor_idx = Int(-1, group="Stability and climate")
-    climate_file = TPath(Path(), group="Stability and climate")
-    clip_climate_data = Bool(False, group="Stability and climate")
+    climate_group = "Stability and climate"
+    stability_plot_rel_change = Bool(False, group=climate_group)
+    subtract_mean = Bool(False, group=climate_group)
+    temp_sensor_idx = Int(-1, group=climate_group)
+    climate_file = TPath(Path(), group=climate_group)
+    clip_climate_data = Bool(False, group=climate_group)
     redp_sensor_labels = TDict(
         key_trait=Unicode(),
         value_trait=Unicode(),
@@ -352,7 +358,7 @@ class PlotOpt(ComponentBase):
             "Redp idx 2": r"$\theta_{fiber}$",
             "Redp idx 3": r"$\theta_{box}$",
         },
-        group="Stability and climate"
+        group=climate_group
     )
 
     shift_sam2ref = Bool(False)
@@ -367,39 +373,42 @@ class PlotOpt(ComponentBase):
     plot_zero_crossing = Bool(False)
     disable_legend = TList(Int(), default_value=[])
 
-    excluded_areas = TAny(None, allow_none=True, group="Image")
-    cbar_lim = ValueRange(default_value=[0, 0], group="Image")
-    log_scale = Bool(False, group="Image")
-    color_map = traitlets.Enum(ColorMaps, default_value=ColorMaps.autumn).tag(name="Colormaps", group="Image")
-    invert_x = Bool(False, group="Image")
-    invert_y = Bool(False, group="Image")
-    pixel_interpolation = TEnum(PixelInterpolation, default_value=PixelInterpolation.none, group="Image")
-    fig_label = Unicode("", group="Image")
-    img_title = Unicode("", group="Image")
-    en_cbar_label = Bool(True, group="Image")
+    image_group = "Image"
+    excluded_areas = TAny(None, allow_none=True, group=image_group)
+    cbar_lim = ValueRange(default_value=[0, 0], group=image_group)
+    log_scale = Bool(False, group=image_group)
+    color_map = traitlets.Enum(ColorMaps, default_value=ColorMaps.autumn).tag(name="Colormaps", group=image_group)
+    invert_x = Bool(False, group=image_group)
+    invert_y = Bool(False, group=image_group)
+    pixel_interpolation = TEnum(PixelInterpolation, default_value=PixelInterpolation.none, group=image_group)
+    fig_label = Unicode("", group=image_group)
+    img_title = Unicode("", group=image_group)
+    en_cbar_label = Bool(True, group=image_group)
 
-    window = Bool(True, group="Shown plots")
-    time_domain = Bool(True, group="Shown plots")
-    spectrum = Bool(True, group="Shown plots")
-    phase = Bool(True, group="Shown plots")
-    phase_slope = Bool(False, group="Shown plots")
-    amplitude_transmission = Bool(False, group="Shown plots")
-    absorbance = Bool(False, group="Shown plots")
-    refractive_index = Bool(False, group="Shown plots")
-    absorption_coefficient = Bool(False, group="Shown plots")
-    conductivity = Bool(False, group="Shown plots")
+    shown_plots_group = "Shown plots"
+    window = Bool(True, group=shown_plots_group)
+    time_domain = Bool(True, group=shown_plots_group)
+    spectrum = Bool(True, group=shown_plots_group)
+    phase = Bool(True, group=shown_plots_group)
+    phase_slope = Bool(False, group=shown_plots_group)
+    amplitude_transmission = Bool(False, group=shown_plots_group)
+    absorbance = Bool(False, group=shown_plots_group)
+    refractive_index = Bool(False, group=shown_plots_group)
+    absorption_coefficient = Bool(False, group=shown_plots_group)
+    conductivity = Bool(False, group=shown_plots_group)
 
     only_shown_figures = TList(TAny(), default_value=[])
 
 class DatasetOpt(ComponentBase):
     dist_func = TEnum(Dist, default_value=Dist.Time)
 
+    reference_filter_group = "Reference filter"
     ref_selection = TEnum(ReferenceSelection,
                           default_value=ReferenceSelection.point_as_ref,
-                          group="Reference filter")
-    ref_pos = ValueRange([0, 0], group="Reference filter")
-    fix_ref = Bool(False, group="Reference filter")
-    ref_threshold = Float(0.95, group="Reference filter")
+                          group=reference_filter_group)
+    ref_pos = ValueRange([0, 0], group=reference_filter_group)
+    fix_ref = Bool(False, group=reference_filter_group)
+    ref_threshold = Float(0.95, group=reference_filter_group, min=0, max=1)
 
 class AppSettings(ComponentBase):
     log_level = TEnum(LogLevel, default_value=LogLevel.info)

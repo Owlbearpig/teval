@@ -13,10 +13,10 @@ class Settings(AppSettings):
 
     script_name = None
 
-    def __init__(self, settings_file: Path = None):
-        super().__init__()
+    def __init__(self, settings_file: Path = None, **kwargs):
+        super().__init__(**kwargs)
 
-        if self.script_name is None:
+        if settings_file is not None:
             self._settings_file = Path(settings_file).stem
         else:
             self._settings_file = Path(self.script_name).stem
@@ -63,9 +63,12 @@ class Settings(AppSettings):
                         val = val.name
                     elif isinstance(val, Path):
                         val = str(val)
+                    elif isinstance(val, Q_):
+                        val = val.magnitude
                     elif issubclass(trait.__class__, ValueRange):
                         if isinstance(val[0], Q_):
                             val = [val[0].magnitude, val[1].magnitude]
+
                     dump_dict[k] = val
                 else:
                     dump_dict[k] = {}
@@ -97,6 +100,9 @@ class Settings(AppSettings):
                     parse_dict(instance_class, dict_val)
                 elif issubclass(actual_type, (Bool, Integer, Float)):
                     instance.set_trait(trait_name, dict_val)
+                elif issubclass(actual_type, Quantity):
+                    value = getattr(instance, trait_name)
+                    instance.set_trait(trait_name, dict_val * value.units)
                 elif issubclass(actual_type, TEnum):
                     enum_attr = getattr(instance, trait_name)
                     instance.set_trait(trait_name, enum_attr)

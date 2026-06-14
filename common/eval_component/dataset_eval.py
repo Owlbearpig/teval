@@ -1,44 +1,58 @@
-from dataset import DataSet, Domain
-from functions import window, do_ifft
-from _shgo import shgo
+from common.dataset import DataSet, Domain
+
+from common.components import ComponentBase
+from common.functions import window, do_ifft, phase_correction
+from common.eval_component.shgo import shgo
 from scipy.optimize import shgo
 from functools import partial
 import numpy as np
-from consts import eps0_thz, c_thz
+from common.consts import eps0_thz, c_thz
 import matplotlib.pyplot as plt
 import logging
+import inspect
 from scipy.signal import iirnotch, filtfilt
 from numpy import polyfit
-from functions import phase_correction
-from tmm_impl import coh_tmm
 from enum import Enum
+from common.eval_component.conductivity_models import *
+from common.traits import Quantity, Q_, ValueRange
+from traitlets import Enum as TEnum
+
 # logging.basicConfig(level=logging.WARNING)
+
+class ConductivityModels(Enum):
+    drude = drude
+    drude2 = drude2
+    lattice_drude = total_response
+    drude_smith = drude_smith
 
 class DataSetType(Enum):
     Main = "main"
     Sub = "sub"
     Other = "other"
 
-class DatasetEval(DataSet):
+class DatasetEval(ComponentBase):
 
-    def __init__(self, dataset_path, sub_dataset_path=None, settings=None):
-        super().__init__(dataset_path, settings)
-        self._check_options()
-        self._link_sub_dataset(sub_dataset_path)
+    conductivity_model = TEnum(ConductivityModels, default_value=ConductivityModels.drude)
+
+    sig0 = Quantity()
+    sig0_bounds = ValueRange()
+
+    wp = Quantity(Q_(10, "THz"), group="Initial optimization values")
+    wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group="Optimization bounds")
+
+    def __init__(self, dataset: DataSet, dataset_sub=None):
+        self.dataset = dataset
+        self.settings = dataset.settings
+        self.sub_dataset = self._link_sub_dataset(dataset_sub)
         self._opt_consts = {}
 
-    def _link_sub_dataset(self, sub_dataset_path, options=None):
-        if sub_dataset_path is None:
+    def _link_sub_dataset(self, dataset: DataSet):
+        if dataset is None:
             return
-        if options is None:
-            options = self.options
 
-        sub_dataset = DataSet(sub_dataset_path, options)
-        self.link_sub_dataset(sub_dataset)
+        self.dataset.link_sub_dataset(dataset)
 
-    def _check_options(self):
-        # TODO automate type cast. (list -> array)
-        self.options["eval_opt"]["film_bounds"] = np.array(self.options["eval_opt"]["film_bounds"])
+        return dataset
 
     def _get_dataset(self, which=DataSetType.Main):
         if which == DataSetType.Main:
@@ -49,88 +63,18 @@ class DatasetEval(DataSet):
             return self.sub_dataset
         else:
             return self, self.sub_dataset
-    """
-    def plot_point(self, *args, **kwargs):
-        ds = self._get_dataset(which)
-        ds.plot_point(*args, **kwargs)
-    """
 
-    def _drude(self, freq_, sig0, tau):
-        # [tau] = fs, [sig0] = S/cm,
-        # => [sig_cc_] = S/cm
-        tau *= 1e-3  # fs = 1e-3 ps
-        tau /= 2 * np.pi
+    def get_bounds(self):
+        signature = inspect.signature(self.conductivity_model)
 
-        scale = 1
-        sig0 *= scale
+        bounds = []
+        for arg in signature.parameters.values():
+            if "freq" in arg.name.lower():
+                continue
+            bound = getattr(self, arg.name + "_bounds")
+            bounds.append(bound)
 
-        w = 2 * np.pi * freq_
-        sig_cc_ = sig0 / (1 - 1j * tau * w)
-
-        return sig_cc_
-
-    def _drude2(self, freq_, sig0, tau, wp, eps_inf):
-        tau *= 1e-3
-        tau /= 2 * np.pi
-        w = 2 * np.pi * freq_
-
-        return sig0 * wp**2 / (tau - 1j * w) - 1j * eps0_thz * w * (eps_inf - 1)
-
-    def _lattice_contrib(self, freq_, tau, wp, eps_s, eps_inf):
-        tau *= 1e-3 # fs = 1e-3 ps
-        tau /= 2 * np.pi
-
-        wp *= 2 * np.pi
-
-        w = 2 * np.pi * freq_
-
-        eps_l = eps_inf - ((eps_s - eps_inf) * wp ** 2) / (w ** 2 - wp ** 2 + 1j * w / tau)
-
-        return eps_l
-
-    def _total_response(self, freq, sig0, tau, wp, eps_s=None, eps_inf=None, c1=None):
-        # [freq] = THz, [tau] = fs, [sig0] = S/cm, [wp] = THz. Dimensionless: eps_inf, eps_s
-        if eps_s is None:
-            eps_s = self._opt_consts["eps_s"]
-        if eps_inf is None:
-            eps_inf = self._opt_consts["eps_inf"]
-
-        w = 2 * np.pi * freq
-
-        sig_cc = self._drude(freq, sig0, tau)
-        # sig_cc = drude_smith(freq, tau, sig0, c1)
-        eps_l = self._lattice_contrib(freq, tau, wp, eps_s, eps_inf)
-
-        # sig_tot = self._n_to_sigma(self.freq_axis, np.sqrt(eps_l)) + sig_cc
-
-        # n_ = self._sigma_to_n(self.freq_axis, sig_tot)
-
-        n_ = np.sqrt(eps_l + 1j*sig_cc/(w*(eps0_thz * 1e4))) # eps0_thz * 1e-4
-
-        return n_.real + 1j * n_.imag
-
-    def _sigma_to_n(self, freq_, sig_):
-        # [eps0_thz] = ps * S / µm
-        # sig_ in S/cm -> S/µm ( 1/(1e6 µm) = 1/m = 1/(1e2 cm) => 1e-4/µm = 1/cm)
-        sig_ *= 1e-4
-
-        w = 2*np.pi*freq_
-
-        sig_ *= 1e-4 # S/cm -> S/µm
-        n_ = np.sqrt(1 + 1j * sig_ / (eps0_thz * w))
-
-        return n_
-
-    def _n_to_sigma(self, freq_, n_):
-        # [eps0_thz] = ps * S / µm
-        # sig_ in S/cm -> S/µm ( 1/(1e6 µm) = 1/m = 1/(1e2 cm) => 1e-4/µm = 1/cm)
-
-        w = 2 * np.pi * freq_
-
-        sig_ = -1j*(n_ ** 2 - 1) * w * eps0_thz
-        sig_ *= 1e4 # S/µm -> S/cm
-
-        return sig_
+        return bounds
 
     def _sigma_dc(self, freq, sig0):
         w = 2 * np.pi * freq
@@ -150,135 +94,41 @@ class DatasetEval(DataSet):
 
         return t_mod_
 
-
-    def _t_tmm_model_1layer(self, freq, n3_):
-        d = self.options["sample_properties"]["d_1"]
-        shift_ = self.options["eval_opt"]["shift_sub"]
-        pol = "s"
-        n_list = [1, n3_, 1]
-        d_list = [np.inf, d, np.inf]
-        th_0 = 0 * np.pi / 180
-        lam_vac = c_thz / freq
-        w_ = 2 * np.pi * freq
-
-        phase_shift = np.exp(1j * shift_ * 1e-3 * w_)
-
-        e_sam = coh_tmm(pol, n_list, d_list, th_0, lam_vac)
-        e_ref = np.exp(1j * (d * w_ / c_thz))
-
-        t = phase_shift * e_sam / e_ref
-
-        return np.nan_to_num(t)
-
-    def _t_model_1layer(self, freqs, n3_):
-        d = self.options["sample_properties"]["d_1"]
-        shift_ = self.options["eval_opt"]["shift_sub"]
-        nfp = self.options["eval_opt"]["nfp"]
-
-        n1 = 1
-        w_ = 2 * np.pi * freqs
-        t_as = 2 * n1 / (n1 + n3_)
-        t_sa = 2 * n3_ / (n1 + n3_)
-        r_as = (n1 - n3_) / (n1 + n3_)
-        r_sa = (n3_ - n1) / (n1 + n3_)
-
-        exp = np.exp(1j * (d * w_ / c_thz) * n3_)
-
-        r_geo = r_as * r_sa * exp ** 2 # r in geometric series
-        if nfp == "inf":
-            fp_factor = 1 / (1 + r_geo)
-        else:
-            fp_factor = 0
-            for fp_idx in range(0, nfp+1):
-                fp_factor += r_geo ** fp_idx
-
-        e_sam = t_as * t_sa * exp * fp_factor
-        e_ref = np.exp(1j * (d * w_ / c_thz))
-
-        phase_shift = np.exp(1j * shift_ * 1e-3 * w_)
-
-        t = phase_shift * e_sam / e_ref
-
-        return np.nan_to_num(t)
-
-    def _t_model_2layer(self, freq, n_sub, n_film):
-        # n_sub += 0.01
-        n1, n4 = 1, 1
-        d = self.options["sample_properties"]["d_2"]
-        h = self.options["sample_properties"]["d_film"]
-        shift_ = self.options["eval_opt"]["shift_film"]
-        nfp = self.options["eval_opt"]["nfp"]
-
-        w_ = 2 * np.pi * freq
-        t12 = 2 * n1 / (n1 + n_film)
-        t23 = 2 * n_film / (n_film + n_sub)
-        t34 = 2 * n_sub / (n_sub + n4)
-
-        r12 = (n1 - n_film) / (n1 + n_film)
-        r23 = (n_film - n_sub) / (n_film + n_sub)
-        r34 = (n_sub - n4) / (n_sub + n4)
-
-        exp1 = np.exp(1j * (h * w_ / c_thz) * n_film)
-        exp2 = np.exp(1j * (d * w_ / c_thz) * n_sub)
-
-        # r in geometric series
-        r_geo = r12 * r23 * exp1 ** 2 + r23 * r34 * exp2 ** 2 + r12 * r34 * exp1 ** 2 * exp2 ** 2
-        if nfp == "inf":
-            fp_factor = 1 / (1 + r_geo)
-        else:
-            fp_factor = 0
-            for fp_idx in range(0, nfp+1):
-                fp_factor += r_geo ** fp_idx
-        
-        e_sam = t12 * t23 * t34 * exp1 * exp2 * fp_factor
-
-        e_ref = np.exp(1j * ((d + h) * w_ / c_thz))
-        phase_shift = np.exp(1j * shift_ * 1e-3 * w_)  # 6, 16
-
-        t = phase_shift * e_sam / e_ref
-
-        return np.nan_to_num(t)
-
-    def _opt_fun_freq_model(self, p_):
+    def _opt_fun_freq_model(self, p_, model, cost_fun):
         # if any([p < 0 for p in x_]):
         #    return np.inf
 
-        freq = self.freq_axis
-        model = self._t_cond_model
-        # model = partial(self._drude2, eps_inf=9)
-        # model = drude_smith
+        freq = self.dataset.freq_axis
 
         y_mod = model(freq, p_)
-        cost_fun = self._combined_cost_fun
 
         return cost_fun(y_mod)
 
     def _abs_cost_fun(self, y_mod_):
-        f0, f1 = self.options["eval_opt"]["fit_range"]
-        mask = (f0 <= self.freq_axis) * (self.freq_axis < f1)  # 2.2
+        freq_axis = self.dataset.freq_axis
+        f0, f1 = self.settings.eval_opt.fit_range
+        mask = (f0 <= freq_axis) * (freq_axis < f1)  # 2.2
 
         y_meas_ = self._opt_consts["y_meas"]
         abs_diff = (np.abs(y_mod_) - np.abs(y_meas_)) ** 2
 
-        return np.sum(abs_diff[mask]) / len(self.freq_axis[mask])
+        return np.sum(abs_diff[mask]) / len(freq_axis[mask])
 
     def _phi_cost_fun(self, y_mod_):
-        f0, f1 = self.options["eval_opt"]["fit_range"]
-        mask = (f0 <= self.freq_axis) * (self.freq_axis < f1)  # 2.2
+        f0, f1 = self.settings.eval_opt.fit_range
+        freq_axis = self.dataset.freq_axis
+        mask = (f0 <= freq_axis) * (freq_axis < f1)  # 2.2
 
         y_meas_ = self._opt_consts["y_meas"]
         phi_diff = (np.angle(y_mod_) - np.angle(y_meas_)) ** 2
 
-        return np.sum(phi_diff[mask]) / len(self.freq_axis[mask])
+        return np.sum(phi_diff[mask]) / len(freq_axis[mask])
 
     def _combined_cost_fun(self, y_mod_):
         return self._abs_cost_fun(y_mod_) + self._phi_cost_fun(y_mod_)
 
     def _fit_freq_model(self):
-        self.selected_n_model = self._total_response
-        # self.selected_n_model = self._sigma_dc
-
-        bounds_ = self.options["eval_opt"]["freq_model_bounds"]
+        bounds_ = self.get_bounds()
 
         min_kwargs = {"method": "Nelder-Mead",
                       "options": {
@@ -302,7 +152,10 @@ class DatasetEval(DataSet):
         }
         shgo_n = 2
         shgo_iters = 100
-        opt_res_ = shgo(self._opt_fun_freq_model,
+        opt_fun = partial(self._opt_fun_freq_model,
+                          model=self._t_cond_model,
+                          cost_fun=self._combined_cost_fun)
+        opt_res_ = shgo(opt_fun,
                         bounds=bounds_,
                         n=shgo_n,
                         iters=shgo_iters,
@@ -344,28 +197,30 @@ class DatasetEval(DataSet):
 
     def _gof(self, n_film_, n_sub_, t_exp_):
         f0, f1 = self.options["eval_opt"]["fit_range_film"]
-        freq_mask = (f0 <= self.freq_axis) * (self.freq_axis <= f1)
+        freq_axis = self.dataset.freq_axis
+        freq_mask = (f0 <= freq_axis) * (freq_axis <= f1)
 
         s = 0
-        for f_idx in np.arange(len(self.freq_axis))[freq_mask]:
+        for f_idx in np.arange(len(freq_axis))[freq_mask]:
             n_f = (n_film_[f_idx].real, n_film_[f_idx].imag)
-            s += self._opt_fun_2layer(n_f, self.freq_axis[f_idx], n_sub_[f_idx], t_exp_[f_idx])
+            s += self._opt_fun_2layer(n_f, freq_axis[f_idx], n_sub_[f_idx], t_exp_[f_idx])
 
-        return s / len(self.freq_axis[freq_mask])
+        return s / len(freq_axis[freq_mask])
 
     def _q_val(self, n_imag_):
         f0, f1 = self.options["eval_opt"]["fit_range_film"]
-        freq_mask = (f0 <= self.freq_axis) * (self.freq_axis <= f1)
+        freq_axis = self.dataset.freq_axis
+        freq_mask = (f0 <= freq_axis) * (freq_axis <= f1)
 
         n_imag_mean = np.mean(n_imag_[freq_mask])
 
         win_settings = {"en_plot": False, "win_start": f0, "win_width": f1 - f0, "fig_label": "FFT"}
-        n_imag_ = window(np.array([self.freq_axis, n_imag_]).T, **win_settings)
+        n_imag_ = window(np.array([freq_axis, n_imag_]).T, **win_settings)
         n_imag_ = n_imag_[:, 1]
 
         fft_ = np.fft.rfft(n_imag_[freq_mask] - n_imag_mean)
         fft_freq_axis = np.fft.rfftfreq(len(n_imag_[freq_mask]),
-                                        d=np.mean(np.diff(self.freq_axis)))
+                                        d=np.mean(np.diff(freq_axis)))
 
         # mask_ = (10 < fft_freq_axis) * (fft_freq_axis < 20)
         mask_ = (11 <= fft_freq_axis)
@@ -375,7 +230,7 @@ class DatasetEval(DataSet):
         # plt.figure("TESTFFT")
         # plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
 
-        fs = 1/np.mean(np.diff(self.freq_axis))
+        fs = 1/np.mean(np.diff(freq_axis))
         Q = 0.5  # quality factor: higher = narrower
 
         peak_freq = fft_freq_axis[mask_][peak_idx]
