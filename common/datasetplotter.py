@@ -6,13 +6,15 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 from common.default_appsettings import Domain, Dist, Direction, ClimateQuantity, QuantityFunc, QuantityEnum
 from functools import partial
+
+from common.eval_component.transfer_functions import t_tmm_model_1layer
 from common.functions import moving_average, f_axis_idx_map, local_minima_1d
 import logging
 from datetime import datetime
 from pathlib import Path
 from scipy.special import erfc
 from common.eval_component.shgo import shgo
-from traitlets import Float, observe, Integer, Unicode
+from traitlets import Float, observe, Integer, Unicode, Enum as TEnum
 from common.traits import Q_, Quantity, ValueRange
 from mpl_settings import mpl_style_params
 import matplotlib as mpl
@@ -29,13 +31,13 @@ class DataSetPlotter(ComponentBase):
     )
     sel_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point (x, y)")
     sel_timestamp = Unicode("").tag(name="Selected timestamp")
+    selected_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(name="Selected quantity")
 
     def __init__(self, dataset : DataSet, **kwargs):
         super().__init__(**kwargs)
         self.dataset = dataset
         self.img_properties = {}
 
-        self.selected_quantity = None
         self.selected_freq_idx = None
 
         self.grid_func = None
@@ -84,9 +86,6 @@ class DataSetPlotter(ComponentBase):
         return grid_vals
 
     def _apply_settings(self):
-        if self.selected_quantity is None:
-            self.select_quantity(QuantityEnum.P2P)
-
         mpl.rcParams.update(mpl_style_params())
 
     def freq_idx(self, freq=None):
@@ -96,7 +95,10 @@ class DataSetPlotter(ComponentBase):
 
         return selected_freq_idx
 
-    def select_quantity(self, quantity, label=""):
+    @observe("selected_quantity")
+    def select_quantity(self, change, label=""):
+        quantity = change["new"]
+
         power_func = partial(self.dataset.power, freq_range=self.selected_freq_idx)
         peak_cnt_func = partial(self.dataset.simple_peak_cnt, threshold=2.5)
 
@@ -128,7 +130,7 @@ class DataSetPlotter(ComponentBase):
             func = func_map[quantity]
             selected_quantity = quantity.value
         else:
-            raise ValueError(f"Unknown quantity type: {quantity}")
+            logging.warning(f"Unknown quantity type: {quantity}")
 
         def grid_func(meas, func=func):
             sel_freq_idx = self.freq_idx()
@@ -1330,6 +1332,107 @@ class DataSetPlotter(ComponentBase):
         plt.text(pos_axis[0], 0.04, s)
 
         return opt_res
+
+
+    def plot_eval_res(self, res):
+        freq_axis = self.dataset.freq_axis
+
+        n_sub = res["n_sub"]
+
+        t_exp_1layer, t_exp_2layer = res["t_exp_1layer"], res["t_exp_2layer"]
+
+        f0, f1 = self.settings.eval_opt.fit_range
+        f_mask = (f0 < freq_axis) * (freq_axis < f1)
+
+        plt.figure("TEST2")
+        phi_1l = np.unwrap(np.angle(t_exp_1layer[f_mask]))
+        phi_2l = np.unwrap(np.angle(t_exp_2layer[f_mask]))
+        plt.plot(freq_axis[f_mask], phi_1l, label="Experiment 1l")
+        plt.plot(freq_axis[f_mask], phi_2l, label="Experiment 2l")
+        # self.phase_fit_(freq_axis[f_mask], phi_1l)
+        # self.phase_fit_(freq_axis[f_mask], phi_2l)
+
+        plt.figure("n_sub")
+        plt.plot(freq_axis, n_sub.real, label="Real part")
+        plt.plot(freq_axis, n_sub.imag, label="Imaginary part")
+        # plt.ylim((-0.005, 0.020))
+        plt.xlim(self.settings.eval_opt.fit_range)
+        plt.xlabel("Frequency (THz)")
+
+        t_mod_sub = res["t_mod_sub"]
+        plt.figure("Transmission fit abs sub")
+        plt.plot(freq_axis[f_mask], np.log10(np.abs(t_exp_1layer[f_mask])), label="Experiment")
+        plt.plot(freq_axis[f_mask], np.log10(np.abs(t_mod_sub[f_mask])), label="Model")
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("log10(|t|)")
+
+        plt.figure("Transmission fit angle sub")
+        plt.plot(freq_axis[f_mask], np.angle(t_exp_1layer[f_mask]), label="Experiment")
+        plt.plot(freq_axis[f_mask], np.angle(t_mod_sub[f_mask]), label="Model")
+        plt.xlabel("Frequency (THz)")
+
+        plt.figure("Transmission fit abs sub diff")
+        log_diff = np.log10((np.abs(t_exp_1layer[f_mask]) - np.abs(t_mod_sub[f_mask])) ** 2)
+        plt.plot(freq_axis[f_mask], log_diff, label="Log squared difference")
+        # plt.plot(freq_axis[f_mask], n_sub.imag[f_mask] / np.max(n_sub.imag[f_mask]), label="n_sub.imag")
+        plt.xlabel("Frequency (THz)")
+
+        t_mod_film = res["t_mod_film"]
+        plt.figure("Transmission fit abs film")
+        plt.plot(freq_axis[f_mask], np.abs(t_exp_2layer[f_mask]), label="Experiment", ls="dashed")
+        plt.plot(freq_axis[f_mask], np.abs(t_mod_film[f_mask]), label="Model (fit)")
+        plt.ylim((-0.05, 0.45))
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("|t|")
+
+        plt.figure("Transmission fit angle film")
+        plt.plot(freq_axis[f_mask], np.angle(t_exp_2layer[f_mask]), label="Experiment")
+        plt.plot(freq_axis[f_mask], np.angle(t_mod_film[f_mask]), label="Model")
+        plt.xlabel("Frequency (THz)")
+
+        if "sigma_n_film" in res:
+            sigma_n_film = res["sigma_n_film"]
+            plt.figure("Conductivity(fit)")
+            plt.plot(freq_axis, sigma_n_film.real, label="Real part")
+            plt.plot(freq_axis, sigma_n_film.imag, label="Imaginary part")
+
+        if "single_layer_eval" in res:
+            single_layer_eval = res["single_layer_eval"]
+
+            plt.figure("n_sub")
+            # plt.plot(freq_axis, single_layer_eval["refr_idx"].imag, label="Imaginary part (1 layer eval)")
+
+            plt.figure("absorption coefficient")
+            plt.plot(freq_axis, 4 * np.pi * n_sub.imag * freq_axis / 0.03, label="fit")
+            plt.plot(freq_axis, single_layer_eval["alpha"], label="single layer eval")
+            plt.xlabel("Frequency (THz)")
+            plt.ylabel("Absorption coefficient (1/cm)")
+            plt.ylim((0, 0.012))
+            plt.xlim((-0.05, 3.5))
+
+        if "n_film" in res:
+            n_film = res["n_film"]
+            plt.figure("n_film")
+            plt.plot(freq_axis, n_film.real, label="real")
+            plt.plot(freq_axis, n_film.imag, label="imag")
+            plt.xlabel("Frequency (THz)")
+
+        if "sigma_exp" in res and "sigma_mod" in res:
+            sigma_exp, sigma_mod = res["sigma_exp"], res["sigma_mod"]
+            plt.figure("Conductivity")
+            plt.plot(freq_axis[f_mask], sigma_exp[f_mask].real, label="Exp (real)")
+            plt.plot(freq_axis[f_mask], sigma_exp[f_mask].imag, label="Exp (imag)")
+            plt.plot(freq_axis[f_mask], sigma_mod[f_mask].real, label="Fit (real)")
+            plt.plot(freq_axis[f_mask], sigma_mod[f_mask].imag, label="Fit (imag)")
+            # plt.xlim((0.20, 2.55))
+            # plt.ylim((-10, 200))
+            plt.xlabel("Frequency (THz)")
+            plt.ylabel("Conductivity (S/cm)")
+
+    def plot_freq_fit(self, res):
+        for quantity in res:
+            pass
+        return
 
     def save_fig(self, fig_num_, filename=None, **kwargs):
         save_dir = Path(self.settings.result_dir)

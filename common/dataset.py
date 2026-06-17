@@ -778,23 +778,23 @@ class DataSet(ComponentBase):
 
         return alph
 
-    def _eval_sub(self):
-        sub_pnt = self.settings.eval_opt.sub_pnt
-        sub_meas = self.sub_dataset.get_measurement(*sub_pnt)
-        sub_res = self.sub_dataset.single_layer_eval(sub_meas)
-        sub_res["t_sub"] = self.sub_dataset.transmission(sub_meas)
-
-        return sub_res
 
     def conductivity(self, meas_):
-        if self.settings.use_sub_dataset:
-            sub_pnt = self.settings.eval_opt.sub_pnt
-        sub_res = self._eval_sub()
+        sub_pnt = self.settings.eval_opt.sub_pnt
+        if self.settings.eval_opt.use_sub_dataset:
+            sub_meas = self.sub_dataset.get_measurement(*sub_pnt)
+            sub_res = self.sub_dataset.single_layer_eval(sub_meas)
+            t_sub = self.sub_dataset.transmission(sub_meas)
+        else:
+            sub_meas = self.get_measurement(*sub_pnt)
+            sub_res = self.single_layer_eval(sub_meas)
+            t_sub = self.transmission(sub_pnt)
+
         t_sam = self.transmission(meas_, 1)
 
         n_sub = sub_res["refr_idx"]
-        t_sub = sub_res["t_sub"]
-        d_film = self.settings.sample_properties.d
+
+        d_film = self.settings.sample_properties.d_film
 
         # [eps0_thz] = ps * Siemens / µm, [c_thz] = µm / ps, [1/d_film] = 1/um -> conversion: 1e4 (S/cm)
         # 1 / µm = 1 / (1e-6 m) = 1 / (1e-6 * 1e2 cm) = 1 / (1e-4 cm) = 1e4 * 1 / cm

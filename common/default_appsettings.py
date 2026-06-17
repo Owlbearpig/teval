@@ -260,12 +260,9 @@ class QuantityFunc:
 
     def __init__(self, label="label", func=None, domain=None, unit=""):
         self.label = label
-        if domain is None:
-            self.domain = Domain.Time
-        else:
-            self.domain = domain
-        if func is not None:
-            self.func = func
+        self.domain = Domain.Time if domain is None else domain
+        self.func = func if func is not None else lambda x: x
+
         self.unit = bool(unit)*" (" + unit + bool(unit)*")"
 
     def __repr__(self):
@@ -285,16 +282,17 @@ class QuantityEnum(Enum):
     PeakCnt = QuantityFunc("Peak Cnt", domain=Domain.Time)
     ZeroCrossing = QuantityFunc("Zero Crossing", domain=Domain.Time, unit="ps")
     TimeOfFlight = QuantityFunc("Time of Flight", domain=Domain.Time, unit="ps")
+    Transmission = QuantityFunc("Transmission", domain=Domain.Frequency)
     TransmissionAmp = QuantityFunc("Amplitude transmission", domain=Domain.Frequency)
     TransmissionPhase = QuantityFunc("Phase transmission", domain=Domain.Frequency, unit="rad")
     RefractiveIdx = QuantityFunc("Refractive idx", domain=Domain.Frequency)
     AbsorptionCoe = QuantityFunc("Absorption coe", domain=Domain.Frequency, unit="1/cm")
-
+    Conductivity = QuantityFunc("Conductivity", domain=Domain.Frequency, unit="S/cm")
 
 
 class EvalOpt(ComponentBase):
-    dt = TQuantity(Q_(0.0, "ps"))
-    sub_pnt = ValueRange([0, 0])
+    fit_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.TransmissionAmp).tag(name="Fit quantity")
+    dt = TQuantity(Q_(0.0, "fs"))
     fit_range = ValueRange([Q_(0.50, "THz"), Q_(2.20, "THz")])
     q_space_range = ValueRange([Q_(0.75, "THz"), Q_(2.00, "THz")])
     phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")])
@@ -306,6 +304,7 @@ class EvalOpt(ComponentBase):
     d_opt_axis = TAny(None, allow_none=True)
 
     use_sub_dataset = Bool(False, group="Conductivity").tag(name="Use substrate dataset")
+    sub_pnt = ValueRange([0, 0], group="Conductivity").tag(name="Substrate point")
 
 
 class PpOpt(ComponentBase):
