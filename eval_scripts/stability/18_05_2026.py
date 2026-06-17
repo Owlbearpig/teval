@@ -17,6 +17,7 @@ if "nt" in os.name:
     dataset_path = r"C:\Users\alexj\Data/Stability/18052026_systemcover"
     dataset_path_sub = r"C:\Users\alexj\Data\Stability\01062026_systemcover_subset"
 else:
+    dataset_path_sub = r"/home/ftpuser/ftp/Data/Stability/01062026_systemcover_subset"
     dataset_path = r"/home/ftpuser/ftp/Data/Stability/18052026_systemcover"
 
 

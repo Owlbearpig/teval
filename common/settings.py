@@ -13,7 +13,7 @@ class Settings(AppSettings):
 
     script_name = None
 
-    def __init__(self, settings_file: Path = None, **kwargs):
+    def __init__(self, settings_file: Path | str = None, **kwargs):
         super().__init__(**kwargs)
 
         if settings_file is not None:
@@ -28,7 +28,7 @@ class Settings(AppSettings):
 
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.save_configuration()
+        self.save_configuration(self)
 
         return False
 
@@ -46,15 +46,16 @@ class Settings(AppSettings):
             if is_component_trait(trait):
                 instance = getattr(self, k)
                 if instance is not None:
-                    friendly_name = custom_names.get(k, k.replace('_', ' ').title())
-                    instance.object_name = friendly_name
+                    instance.object_name = custom_names.get(k, k.replace('_', ' ').title())
 
 
-    def save_configuration(self):
+    def save_configuration(self, component_instance):
         if not self.config_path.parent.exists():
             self.config_path.parent.mkdir()
 
-        settings_dict = {}
+        comp_class = component_instance.__class__
+        comp_class_name = comp_class.__name__
+
         def make_dump_dict(dump_dict, instance):
             for k, trait in instance.attributes.items():
                 val = trait.get(instance)
@@ -75,7 +76,14 @@ class Settings(AppSettings):
 
                     make_dump_dict(dump_dict[k], val)
 
-        make_dump_dict(settings_dict, self)
+        if self.config_path.exists():
+            with open(self.config_path, "r") as fp:
+                settings_dict = json.load(fp)
+                settings_dict[comp_class_name] = {}
+        else:
+            settings_dict = {comp_class_name: {}}
+
+        make_dump_dict(settings_dict[comp_class_name], component_instance)
 
         with open(self.config_path, 'w') as fp:
             json.dump(settings_dict, fp, indent=4)
@@ -83,7 +91,7 @@ class Settings(AppSettings):
     def load_configuration(self):
         config_path = self.config_path
         print(f"Loading settings from {config_path}")
-
+        return
         if self._settings_file is None:
             print(f"No config file path set. Loading global defaults.")
             return
@@ -92,12 +100,12 @@ class Settings(AppSettings):
             print(f"No custom config found at {config_path}. Loading global defaults.")
             return
 
-        def parse_dict(instance, dict_):
+        def set_trait_values(instance, dict_):
             for trait_name, dict_val in dict_.items():
                 actual_type = type(getattr(instance.__class__, trait_name))
                 if actual_type == Instance:
                     instance_class = getattr(instance, trait_name)
-                    parse_dict(instance_class, dict_val)
+                    set_trait_values(instance_class, dict_val)
                 elif issubclass(actual_type, (Bool, Integer, Float)):
                     instance.set_trait(trait_name, dict_val)
                 elif issubclass(actual_type, Quantity):
@@ -117,4 +125,4 @@ class Settings(AppSettings):
 
         with open(config_path, "r") as f:
             json_dict = json.load(f)
-            parse_dict(self, json_dict)
+            set_trait_values(self, json_dict)

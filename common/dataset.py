@@ -104,6 +104,9 @@ class DataSet(ComponentBase):
 
         self._set_observers()
 
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.settings.save_configuration(self)
+
     def _set_observers(self):
         reference_filter_trait_names = self.settings.dataset_opt.trait_names(group=DatasetOpt.reference_filter_group)
         self.settings.dataset_opt.observe(self.update_meas_sorting, names=reference_filter_trait_names)
