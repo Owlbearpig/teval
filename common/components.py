@@ -48,8 +48,11 @@ class ComponentBase(HasTraits):
         for name, memb in _dumb_list_of_actions(self):
             self.__actions.append((name, memb))
 
-    def __enter__(self):
+    def __enter__(self, *args):
         self.is_initialized = True
+        for name, trait in self.traits().items():
+            if is_component_trait(trait):
+                trait.get(self).__enter__(*args)
 
         return self
 

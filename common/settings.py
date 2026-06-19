@@ -7,7 +7,6 @@ from common.units import Q_
 from traitlets import Instance, Tuple, List, Bool, Integer, Float, Enum as TEnum
 from common.components import is_component_trait
 from common.default_appsettings import AppSettings
-from common.default_appsettings import WindowTypes, PixelInterpolation, Dist, LogLevel
 
 class Settings(AppSettings):
 
@@ -22,7 +21,7 @@ class Settings(AppSettings):
             self._settings_file = Path(self.script_name).stem
         self.config_path = Path(f"config/{self._settings_file}.json")
 
-        self.load_configuration()
+        self.load_configuration(self)
 
         self._set_component_names()
 
@@ -88,16 +87,16 @@ class Settings(AppSettings):
         with open(self.config_path, 'w') as fp:
             json.dump(settings_dict, fp, indent=4)
 
-    def load_configuration(self):
+    def load_configuration(self, component_instance):
         config_path = self.config_path
         print(f"Loading settings from {config_path}")
-        return
+
         if self._settings_file is None:
-            print(f"No config file path set. Loading global defaults.")
+            print(f"No config file path set. Using default values.")
             return
 
         if not config_path.exists():
-            print(f"No custom config found at {config_path}. Loading global defaults.")
+            print(f"No custom config found at {config_path}. Using default values.")
             return
 
         def set_trait_values(instance, dict_):
@@ -125,4 +124,8 @@ class Settings(AppSettings):
 
         with open(config_path, "r") as f:
             json_dict = json.load(f)
-            set_trait_values(self, json_dict)
+            component_class_name = component_instance.__class__.__name__
+            if component_class_name in json_dict:
+                set_trait_values(component_instance, json_dict[component_class_name])
+            else:
+                print(f"No custom config found for component {component_class_name}. Using default values.")

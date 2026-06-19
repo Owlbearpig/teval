@@ -20,7 +20,7 @@ from scipy.stats import pearsonr
 from common.default_appsettings import Domain, QuantityEnum, DatasetOpt
 from common.components import action
 import itertools
-from traitlets import observe, Unicode
+from traitlets import Unicode
 
 """
 TODOs: 

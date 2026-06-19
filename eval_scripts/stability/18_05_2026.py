@@ -38,6 +38,7 @@ class AppRoot(ComponentBase):
     dataset = Instance(DataSet)
     dataset_sub = Instance(DataSet)
     dataset_plotter = Instance(DataSetPlotter)
+    dataset_eval = Instance(DatasetEval)
 
     def __init__(self):
         super().__init__()

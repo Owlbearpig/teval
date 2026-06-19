@@ -141,7 +141,7 @@ class QSpaceEval:
         for f_idx, f_ in enumerate(freq_axis):
             def cost_fun(p):
                 n3_ = p[0] + 1j * p[1]
-                t_mod_ = model_1layer(n3_, d=d_, f=f_, n1=1, shift_=0)
+                t_mod_ = model_1layer(n3_, d=d_, freq=f_, n1=1, shift_=0)
 
                 return np.abs(t_exp_[f_idx] - t_mod_) ** 2
 
@@ -193,7 +193,7 @@ class QSpaceEval:
         # fp_spacing_estimate = ...
         opt_res_["q_val"] = self.calc_q_val(opt_res_, en_plot=False)
 
-        t_mod_ = model_1layer(n_opt_res_, d=d_, f=freq_axis, n1=1, shift_=0)
+        t_mod_ = model_1layer(n_opt_res_, d=d_, freq=freq_axis, n1=1, shift_=0)
 
         opt_res_["t_mod"] = t_mod_
         opt_res_["sam_mod"] = self.meas_quants["ref_fd"][f_idx_range_, 1] * t_mod_

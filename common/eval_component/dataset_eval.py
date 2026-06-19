@@ -1,5 +1,4 @@
 from common.dataset import DataSet, Domain
-
 from common.components import ComponentBase
 from common.datasetplotter import DataSetPlotter
 from common.functions import window, do_ifft, phase_correction
@@ -16,8 +15,10 @@ from numpy import polyfit
 from enum import Enum
 from common.eval_component.conductivity_models import *
 from common.traits import Quantity, Q_, ValueRange
-from traitlets import Enum as TEnum
-from common.eval_component.transfer_functions import t_tmm_model_1layer
+from traitlets import Enum as TEnum, observe, Integer, Float
+from common.eval_component.transfer_functions import (t_tmm_model_1layer, model_1layer, t_tmm_model_2layer,
+                                                      model_2layer, _t_model_2layer)
+
 
 # logging.basicConfig(level=logging.WARNING)
 
@@ -30,6 +31,13 @@ class ConductivityModels(Enum):
     lattice_drude = total_response
     drude_smith = drude_smith
 
+class TransmissionModels(Enum):
+    tmm_1layer = t_tmm_model_1layer
+    tmm_2layer = t_tmm_model_2layer
+    model_1layer = model_1layer
+    model_2layer = model_2layer
+    t_model_2layer = _t_model_2layer
+
 class DataSetType(Enum):
     Main = "main"
     Sub = "sub"
@@ -38,27 +46,36 @@ class DataSetType(Enum):
 class DatasetEval(ComponentBase):
 
     conductivity_model = TEnum(ConductivityModels, default_value=ConductivityModels.drude)
+    transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.model_2layer)
 
-    sig0 = Quantity()
-    sig0_bounds = ValueRange()
+    sig0 = Quantity(Q_(10, "S/cm"), group="Initial optimization values")
+    sig0_bounds = ValueRange([Q_(10, "S/cm"), Q_(20, "S/cm")], group="Optimization bounds")
 
     wp = Quantity(Q_(10, "THz"), group="Initial optimization values")
     wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group="Optimization bounds")
 
-    def __init__(self, dataset: DataSet, dataset_sub: DataSet=None, plotter: DataSetPlotter=None):
+    shgo_n = Integer(2)
+    shgo_iters = Integer(100)
+
+    def __init__(self, dataset: DataSet, dataset_sub: DataSet=None,
+                 plotter: DataSetPlotter=None, object_name: str = None):
+        super().__init__(object_name=object_name)
         self.dataset = dataset
         self.settings = dataset.settings
         self.sub_dataset = self._link_sub_dataset(dataset_sub)
         self.plotter = plotter
         self._opt_consts = {}
+        self._fixed_params = {}
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.dataset.settings.save_configuration()
+        self.settings.save_configuration(self)
 
+    def __enter__(self):
+        self.settings.load_configuration(self)
 
-    def _link_sub_dataset(self, dataset: DataSet):
+    def _link_sub_dataset(self, dataset: DataSet = None):
         if dataset is None:
-            return
+            return None
 
         self.dataset.link_sub_dataset(dataset)
 
@@ -74,6 +91,19 @@ class DatasetEval(ComponentBase):
         else:
             return self, self.sub_dataset
 
+    """
+        1. set y_meas
+        2. y_mod = model(p)
+        3. fun = cost(y_mod)
+        4. 
+        """
+
+    def set_y_meas(self):
+        fit_quantity = self.settings.eval_opt.fit_quantity
+        self._opt_consts["y_meas"] = calc_fit_quantity(fit_quantity)
+
+        # if fit_quantity == "conductivity":
+
     def get_bounds(self):
         signature = inspect.signature(self.conductivity_model)
 
@@ -85,6 +115,69 @@ class DatasetEval(ComponentBase):
             bounds.append(bound)
 
         return bounds
+
+    def get_mininimizer_kwargs(self):
+        min_kwargs = {"method": "Nelder-Mead",
+                      "options": {
+                          "maxfev": 200,
+                          "maxev": 200,
+                          "maxiter": 200,
+                          "tol": 1e-13,
+                          "fatol": 1e-13,
+                          "xatol": 1e-13,
+                      },
+                      }
+        return min_kwargs
+
+    def get_shgo_options(self):
+        shgo_options = {
+            "maxfev": 1500,
+            # "f_tol": 1e-12,
+            # "maxiter": 4000,
+            # "ftol": 1e-12,
+            # "xtol": 1e-12,
+            # "maxev": 4000,
+            # "minimize_every_iter": True,
+            # "disp": True
+        }
+
+        return shgo_options
+
+    @observe("transmission_model")
+    def select_model(self, change):
+
+        self.model = self.transmission_model
+
+    def setup_bounds(self):
+        bounds = []
+        return bounds
+
+    def optimize(self):
+        self.set_y_meas()
+        self.set_model()
+        bounds = self.setup_bounds()
+        cost = self.setup_cost()
+        min_kwargs = self.get_mininimizer_kwargs()
+        shgo_options = self.get_shgo_options()
+
+        opt_res_ = shgo(cost,
+                        bounds=bounds,
+                        n=self.shgo_n,
+                        iters=self.shgo_iters,
+                        minimizer_kwargs=min_kwargs,
+                        options=shgo_options,
+                        )
+        return opt_res_
+
+    def set_model(self):
+        pass
+
+    def setup_cost(self):
+        cost = partial(self.model,
+                       freq_=self.freq_axis[f_idx],
+                       t_exp_=t_exp_[f_idx],
+                       bounds_=bounds)
+
 
     def _sigma_dc(self, freq, sig0):
         w = 2 * np.pi * freq
@@ -549,16 +642,6 @@ class DatasetEval(ComponentBase):
         res["sigma_n_film"] = 1e4 * 2 * eps0_thz * n_film ** 2 * w / (1 + 1j)  # S/cm
 
         return res
-
-    """
-    fit model to quantity (conductivity or transmission)
-    """
-
-    def set_y_meas(self):
-        fit_quantity = self.settings.eval_opt.fit_quantity
-        self._opt_consts["y_meas"] = calc_fit_quantity(fit_quantity)
-
-        # if fit_quantity == "conductivity":
 
 
     def eval_point_model_fit(self, film_pnt=None):

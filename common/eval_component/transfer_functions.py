@@ -3,8 +3,9 @@ from common.consts import c_thz
 from common.eval_component.tmm_impl import coh_tmm
 
 
-def t_tmm_model_1layer(freq, n3_, d):
+def t_tmm_model_1layer(freq, n3_r, n3_i, d):
     pol = "s"
+    n3_ = n3_r + 1j * n3_i
     n_list = [1, n3_, 1]
     d_list = [np.inf, d, np.inf]
     th_0 = 0 * np.pi / 180
@@ -14,14 +15,30 @@ def t_tmm_model_1layer(freq, n3_, d):
     e_sam = coh_tmm(pol, n_list, d_list, th_0, lam_vac)
     e_ref = np.exp(1j * (d * w_ / c_thz))
 
-    shift_ = self.settings.eval_opt.dt
-    phase_shift = np.exp(1j * shift_ * 1e-3 * w_)
-    t = phase_shift * e_sam / e_ref
+    t = e_sam / e_ref
 
     return np.nan_to_num(t)
 
-def model_1layer(n3_, d, f, nfp=3, n1=1, shift_=0):
-    w_ = 2 * np.pi * f
+def t_tmm_model_2layer(freq, n2_r, n2_i, n3_r, n3_i, h, d, n1=1, n4=1):
+    pol = "s"
+    n2_ = n2_r + 1j * n2_i
+    n3_ = n3_r + 1j * n3_i
+    n_list = [n1, n2_, n3_, n4]
+    d_list = [np.inf, h, d, np.inf]
+    th_0 = 0 * np.pi / 180
+    lam_vac = c_thz / freq
+    w_ = 2 * np.pi * freq
+
+    e_sam = coh_tmm(pol, n_list, d_list, th_0, lam_vac)
+    e_ref = np.exp(1j * ((d + h) * w_ / c_thz))
+
+    t = e_sam / e_ref
+
+    return np.nan_to_num(t)
+
+def model_1layer(freq, n3_r, n3_i, d, nfp=3, n1=1):
+    n3_ = n3_r + 1j * n3_i
+    w_ = 2 * np.pi * freq
     t_as = 2 * n1 / (n1 + n3_)
     t_sa = 2 * n3_ / (n1 + n3_)
     r_as = (n1 - n3_) / (n1 + n3_)
@@ -32,9 +49,7 @@ def model_1layer(n3_, d, f, nfp=3, n1=1, shift_=0):
     e_sam = t_as * t_sa * exp / (1 + r_as * r_sa * exp ** 2)
     e_ref = np.exp(1j * (d * w_ / c_thz))
 
-    phase_shift = np.exp(1j * shift_ * 1e-3 * w_)
-
-    t = phase_shift * e_sam / e_ref
+    t = e_sam / e_ref
     """
     #"""
     exp1 = np.exp(1j * (d * w_ / c_thz) * (n3_ - 1))
@@ -49,9 +64,10 @@ def model_1layer(n3_, d, f, nfp=3, n1=1, shift_=0):
     return np.nan_to_num(t)
 
 
-def model_2layer(n2_, n3_, h, d, f, n1=1, n4=1, shift_=0):
-    # n3_ += 0.01
-    w_ = 2 * np.pi * f
+def model_2layer(freq, n2_r, n2_i, n3_r, n3_i, h, d, n1=1, n4=1):
+    n2_ = n2_r + 1j * n2_i
+    n3_ = n3_r + 1j * n3_i
+    w_ = 2 * np.pi * freq
     t12 = 2 * n1 / (n1 + n2_)
     t23 = 2 * n2_ / (n2_ + n3_)
     t34 = 2 * n3_ / (n3_ + n4)
@@ -66,18 +82,14 @@ def model_2layer(n2_, n3_, h, d, f, n1=1, n4=1, shift_=0):
     e_sam = t12 * t23 * t34 * exp1 * exp2 / (1 + r12 * r23 * exp1 ** 2 + r23 * r34 * exp2 ** 2 + r12 * r34 * exp1 ** 2 * exp2 ** 2)
     e_ref = np.exp(1j * ((d + h) * w_ / c_thz))
 
-    phase_shift = np.exp(1j * shift_ * 1e-3 * w_) # 6, 16
-    t = phase_shift * e_sam / e_ref
+    t = e_sam / e_ref
 
     return np.nan_to_num(t)
 
-def _t_model_2layer(freq, n_sub, n_film):
-    # n_sub += 0.01
+def _t_model_2layer(freq, n_sub_r, n_sub_i, n_film_r, n_film_i, d, h, nfp):
+    n_sub = n_sub_r + 1j * n_sub_i
+    n_film = n_film_r + 1j * n_film_i
     n1, n4 = 1, 1
-    d = self.settings.sample_properties.d
-    h = self.settings.sample_properties.d_film
-    shift_ = self.settings.eval_opt.dt
-    nfp = self.settings.eval_opt.fp_count
 
     w_ = 2 * np.pi * freq
     t12 = 2 * n1 / (n1 + n_film)
@@ -101,11 +113,9 @@ def _t_model_2layer(freq, n_sub, n_film):
             fp_factor += r_geo ** fp_idx
 
     e_sam = t12 * t23 * t34 * exp1 * exp2 * fp_factor
-
     e_ref = np.exp(1j * ((d + h) * w_ / c_thz))
-    phase_shift = np.exp(1j * shift_ * 1e-3 * w_)  # 6, 16
 
-    t = phase_shift * e_sam / e_ref
+    t = e_sam / e_ref
 
     return np.nan_to_num(t)
 
