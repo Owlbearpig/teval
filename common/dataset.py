@@ -36,7 +36,7 @@ TODOs:
 - Split DataSet into multiple smaller classes (e.g. a plotting class) "Classes should do one thing each."
 - should phi correction be a part of the pre-processing?
 - rename some keys in options dict e.g. "eval_opt" to "eval"
-- make Dataset(dict)?
+- make Dataset(dict)? -> No
 - q-eval: svmaf, estimate #FP reflections and FP spacing for q-space freq range
 - fix default_options["sample_properties"]["default_values"]
 
@@ -110,6 +110,24 @@ class DataSet(ComponentBase):
     def _set_observers(self):
         reference_filter_trait_names = self.settings.dataset_opt.trait_names(group=DatasetOpt.reference_filter_group)
         self.settings.dataset_opt.observe(self.update_meas_sorting, names=reference_filter_trait_names)
+
+    @property
+    def func_map(self):
+        func_map = {QuantityEnum.P2P: self.p2p,
+                    QuantityEnum.Phase: self.phase,
+                    QuantityEnum.MeasTimeDeltaRef2Sam: self.meas_time_delta,
+                    QuantityEnum.RefAmp: self.ref_max,
+                    QuantityEnum.RefArgmax: self.get_ref_argmax,
+                    QuantityEnum.RefPhase: self.ref_phase,
+                    QuantityEnum.ZeroCrossing: self.get_zero_crossing,
+                    QuantityEnum.TimeOfFlight: self.time_of_flight,
+                    QuantityEnum.TransmissionAmp: self.amplitude_transmission,
+                    QuantityEnum.TransmissionPhase: self.phase_transmission,
+                    QuantityEnum.RefractiveIdx: self.refractive_idx,
+                    QuantityEnum.AbsorptionCoe: self.absorption_coef,
+                    QuantityEnum.Conductivity: self.conductivity,
+                    }
+        return func_map
 
     def update_meas_sorting(self, change):
         self._sort_meas_type()

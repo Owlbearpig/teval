@@ -99,24 +99,10 @@ class DataSetPlotter(ComponentBase):
     def select_quantity(self, change, label=""):
         quantity = change["new"]
 
-        power_func = partial(self.dataset.power, freq_range=self.selected_freq_idx)
-        peak_cnt_func = partial(self.dataset.simple_peak_cnt, threshold=2.5)
+        func_map = self.dataset.func_map
 
-        func_map = {QuantityEnum.P2P: self.dataset.p2p,
-                    QuantityEnum.Phase: self.dataset.phase,
-                    QuantityEnum.Power: power_func,
-                    QuantityEnum.MeasTimeDeltaRef2Sam: self.dataset.meas_time_delta,
-                    QuantityEnum.RefAmp: self.dataset.ref_max,
-                    QuantityEnum.RefArgmax: self.dataset.get_ref_argmax,
-                    QuantityEnum.RefPhase: self.dataset.ref_phase,
-                    QuantityEnum.PeakCnt: peak_cnt_func,
-                    QuantityEnum.ZeroCrossing: self.dataset.get_zero_crossing,
-                    QuantityEnum.TimeOfFlight: self.dataset.time_of_flight,
-                    QuantityEnum.TransmissionAmp: self.dataset.amplitude_transmission,
-                    QuantityEnum.TransmissionPhase: self.dataset.phase_transmission,
-                    QuantityEnum.RefractiveIdx: self.dataset.refractive_idx,
-                    QuantityEnum.AbsorptionCoe: self.dataset.absorption_coef,
-                    }
+        func_map[QuantityEnum.Power] = partial(self.dataset.power, freq_range=self.selected_freq_idx)
+        func_map[QuantityEnum.PeakCnt] = partial(self.dataset.simple_peak_cnt, threshold=2.5)
 
         if isinstance(quantity, QuantityFunc):
             if not callable(quantity.func):

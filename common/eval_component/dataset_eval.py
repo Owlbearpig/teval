@@ -1,7 +1,7 @@
 from common.dataset import DataSet, Domain
-from common.components import ComponentBase
+from common.components import ComponentBase, action
 from common.datasetplotter import DataSetPlotter
-from common.functions import window, do_ifft, phase_correction
+from common.functions import window, do_ifft, phase_correction, f_axis_idx_map
 from common.eval_component.shgo import shgo
 from scipy.optimize import shgo
 from functools import partial
@@ -15,17 +15,34 @@ from numpy import polyfit
 from enum import Enum
 from common.eval_component.conductivity_models import *
 from common.traits import Quantity, Q_, ValueRange
-from traitlets import Enum as TEnum, observe, Integer, Float
+from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance
+from common.default_appsettings import QuantityEnum
 from common.eval_component.transfer_functions import (t_tmm_model_1layer, model_1layer, t_tmm_model_2layer,
                                                       model_2layer, _t_model_2layer)
 
+
+def abs_cost_fun(y_meas, y_mod):
+
+    abs_diff = (np.abs(y_meas) - np.abs(y_mod)) ** 2
+
+    return np.sum(abs_diff)
+
+
+def phi_cost_fun(y_meas, y_mod):
+    phi_diff = (np.angle(y_meas) - np.angle(y_mod)) ** 2
+
+    return np.sum(phi_diff)
+
+
+def combined_cost_fun(y_meas, y_mod):
+    return abs_cost_fun(y_meas, y_mod) + phi_cost_fun(y_meas, y_mod)
 
 # logging.basicConfig(level=logging.WARNING)
 
 class OptRes:
     pass
 
-class ConductivityModels(Enum):
+class RegressionModels(Enum):
     drude = drude
     drude2 = drude2
     lattice_drude = total_response
@@ -38,15 +55,54 @@ class TransmissionModels(Enum):
     model_2layer = model_2layer
     t_model_2layer = _t_model_2layer
 
+class CostFunctions(Enum):
+    abs_cost = abs_cost_fun
+    phi_cost = phi_cost_fun
+    combined_cost = combined_cost_fun
+
 class DataSetType(Enum):
     Main = "main"
     Sub = "sub"
     Other = "other"
 
+class MinimizerMethod(Enum):
+    NelderMead = "Nelder-Mead"
+
+class MinimizerOptions(ComponentBase):
+    minimizer_opt_grp = "options"
+    method = TEnum(MinimizerMethod, default_value=MinimizerMethod.NelderMead, group="method")
+    maxfev = Integer(200, group=minimizer_opt_grp)
+    maxev = Integer(200, group=minimizer_opt_grp)
+    maxiter = Integer(200, group=minimizer_opt_grp)
+    tol = Float(1e-13, group=minimizer_opt_grp)
+    fatol = Float(1e-13, group=minimizer_opt_grp)
+    xatol = Float(1e-13, group=minimizer_opt_grp)
+
+class SHGOOptions(ComponentBase):
+    n = Integer(2)
+    iters = Integer(100)
+
+    shgo_options_grp = "shgo_options"
+    maxfev = Integer(1500, group=shgo_options_grp)
+    f_tol = Float(1e-12, group=shgo_options_grp)
+    maxiter = Integer(4000, group=shgo_options_grp)
+    xtol = Float(1e-12, group=shgo_options_grp)
+    maxev = Integer(4000, group=shgo_options_grp)
+    minimize_every_iter = Bool(False, group=shgo_options_grp)
+    disp = Bool(False, group=shgo_options_grp)
+
+    minimizer_kwargs = Instance(MinimizerOptions)
+
 class DatasetEval(ComponentBase):
 
-    conductivity_model = TEnum(ConductivityModels, default_value=ConductivityModels.drude)
+    shgo_options = Instance(SHGOOptions)
+
+    sel_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point (x, y)")
+
+    regression_model = TEnum(RegressionModels, default_value=RegressionModels.drude)
     transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.model_2layer)
+    cost_fun = TEnum(CostFunctions, default_value=CostFunctions.abs_cost)
+    meas_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.TransmissionAmp).tag(name="Measurement quantity")
 
     sig0 = Quantity(Q_(10, "S/cm"), group="Initial optimization values")
     sig0_bounds = ValueRange([Q_(10, "S/cm"), Q_(20, "S/cm")], group="Optimization bounds")
@@ -54,8 +110,6 @@ class DatasetEval(ComponentBase):
     wp = Quantity(Q_(10, "THz"), group="Initial optimization values")
     wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group="Optimization bounds")
 
-    shgo_n = Integer(2)
-    shgo_iters = Integer(100)
 
     def __init__(self, dataset: DataSet, dataset_sub: DataSet=None,
                  plotter: DataSetPlotter=None, object_name: str = None):
@@ -64,8 +118,11 @@ class DatasetEval(ComponentBase):
         self.settings = dataset.settings
         self.sub_dataset = self._link_sub_dataset(dataset_sub)
         self.plotter = plotter
-        self._opt_consts = {}
+
+        self.freq_axis = self.dataset.freq_axis
+        self._opt_args = {}
         self._fixed_params = {}
+        self.transmission_model = None
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.settings.save_configuration(self)
@@ -91,93 +148,70 @@ class DatasetEval(ComponentBase):
         else:
             return self, self.sub_dataset
 
-    """
-        1. set y_meas
-        2. y_mod = model(p)
-        3. fun = cost(y_mod)
-        4. 
-        """
-
     def set_y_meas(self):
-        fit_quantity = self.settings.eval_opt.fit_quantity
-        self._opt_consts["y_meas"] = calc_fit_quantity(fit_quantity)
+        meas_quantity = self.settings.eval_opt.meas_quantity
+        func = self.dataset.func_map(meas_quantity)
 
-        # if fit_quantity == "conductivity":
+        meas = self.dataset.get_measurement(*self.sel_point)
+        y_meas = func(meas)
 
-    def get_bounds(self):
-        signature = inspect.signature(self.conductivity_model)
+        f_idx = f_axis_idx_map(self.freq_axis, self.settings.eval_opt.fit_range)
+        self._opt_args["y_meas"] = y_meas[f_idx]
+
+    @observe("regression_model")
+    def select_regression_model(self, change):
+        fun = getattr(self.regression_model, change["new"])
+        f_idx = f_axis_idx_map(self.freq_axis, self.settings.eval_opt.fit_range)
+
+        self._opt_args["model"] = partial(fun, self.freq_axis[f_idx])
+
+        self.setup_bounds()
+
+    def setup_bounds(self):
+        signature = inspect.signature(self._opt_args["model"])
 
         bounds = []
         for arg in signature.parameters.values():
-            if "freq" in arg.name.lower():
-                continue
-            bound = getattr(self, arg.name + "_bounds")
-            bounds.append(bound)
+            bound = getattr(self, arg.name + "_bounds", None)
+            if bound:
+                bounds.append(bound)
+            else:
+                bounds.append([-np.inf, np.inf])
 
-        return bounds
+        self._opt_args["bounds"] = bounds
 
-    def get_mininimizer_kwargs(self):
-        min_kwargs = {"method": "Nelder-Mead",
-                      "options": {
-                          "maxfev": 200,
-                          "maxev": 200,
-                          "maxiter": 200,
-                          "tol": 1e-13,
-                          "fatol": 1e-13,
-                          "xatol": 1e-13,
-                      },
-                      }
-        return min_kwargs
+    @observe("cost_fun")
+    def setup_cost(self, c=None):
+        if c is None:
+            cost_func = getattr(self, "cost_fun")
+        else:
+            cost_func = c["new"]
+        mod_func = self._opt_args["model"]
+        y_meas = self._opt_args["y_meas"]
 
-    def get_shgo_options(self):
-        shgo_options = {
-            "maxfev": 1500,
-            # "f_tol": 1e-12,
-            # "maxiter": 4000,
-            # "ftol": 1e-12,
-            # "xtol": 1e-12,
-            # "maxev": 4000,
-            # "minimize_every_iter": True,
-            # "disp": True
-        }
+        self._opt_args["func"] = lambda p: cost_func(y_meas, mod_func(*p))
 
-        return shgo_options
+    @action("Fit regression model")
+    def perform_regression(self):
+        self.set_y_meas()
+        self.setup_cost()
+
+        min_kwargs = self.shgo_options.minimizer_kwargs.traits(group=MinimizerOptions.minimizer_opt_grp)
+        min_kwargs["method"] = self.shgo_options.minimizer_kwargs.method
+
+        opt_res_ = shgo(func=self._opt_args["func"],
+                        bounds=self._opt_args["bounds"],
+                        n=self.shgo_options.n,
+                        iters=self.shgo_options.iters,
+                        minimizer_kwargs=min_kwargs,
+                        options=self.shgo_options.traits(group=SHGOOptions.shgo_options_grp),
+                        )
+        return opt_res_
 
     @observe("transmission_model")
     def select_model(self, change):
 
-        self.model = self.transmission_model
-
-    def setup_bounds(self):
-        bounds = []
-        return bounds
-
-    def optimize(self):
-        self.set_y_meas()
-        self.set_model()
-        bounds = self.setup_bounds()
-        cost = self.setup_cost()
-        min_kwargs = self.get_mininimizer_kwargs()
-        shgo_options = self.get_shgo_options()
-
-        opt_res_ = shgo(cost,
-                        bounds=bounds,
-                        n=self.shgo_n,
-                        iters=self.shgo_iters,
-                        minimizer_kwargs=min_kwargs,
-                        options=shgo_options,
-                        )
-        return opt_res_
-
-    def set_model(self):
-        pass
-
-    def setup_cost(self):
-        cost = partial(self.model,
-                       freq_=self.freq_axis[f_idx],
-                       t_exp_=t_exp_[f_idx],
-                       bounds_=bounds)
-
+        self.transmission_model = getattr(self.transmission_model, change["new"])
 
     def _sigma_dc(self, freq, sig0):
         w = 2 * np.pi * freq
@@ -188,7 +222,7 @@ class DatasetEval(ComponentBase):
         return n_
 
     def _t_cond_model(self, freq_, p_):
-        n_sub_ = self._opt_consts["n_sub"]
+        n_sub_ = self._opt_args["n_sub"]
         # tau = self._opt_consts["tau"]
         n_film_ = self.selected_n_model(freq_, *p_)
 
@@ -206,29 +240,6 @@ class DatasetEval(ComponentBase):
         y_mod = model(freq, p_)
 
         return cost_fun(y_mod)
-
-    def _abs_cost_fun(self, y_mod_):
-        freq_axis = self.dataset.freq_axis
-        f0, f1 = self.settings.eval_opt.fit_range
-        mask = (f0 <= freq_axis) * (freq_axis < f1)  # 2.2
-
-        y_meas_ = self._opt_consts["y_meas"]
-        abs_diff = (np.abs(y_mod_) - np.abs(y_meas_)) ** 2
-
-        return np.sum(abs_diff[mask]) / len(freq_axis[mask])
-
-    def _phi_cost_fun(self, y_mod_):
-        f0, f1 = self.settings.eval_opt.fit_range
-        freq_axis = self.dataset.freq_axis
-        mask = (f0 <= freq_axis) * (freq_axis < f1)  # 2.2
-
-        y_meas_ = self._opt_consts["y_meas"]
-        phi_diff = (np.angle(y_mod_) - np.angle(y_meas_)) ** 2
-
-        return np.sum(phi_diff[mask]) / len(freq_axis[mask])
-
-    def _combined_cost_fun(self, y_mod_):
-        return self._abs_cost_fun(y_mod_) + self._phi_cost_fun(y_mod_)
 
     def _fit_freq_model(self):
         bounds_ = self.get_bounds()
@@ -488,7 +499,7 @@ class DatasetEval(ComponentBase):
         return n_opt_best
 
     def conductivity_model(self, sigma_exp):
-        self._opt_consts["sigma_exp"] = sigma_exp
+        self._opt_args["sigma_exp"] = sigma_exp
         opt_res = self._fit_freq_model()
         p = opt_res.x # x = [tau, sig0, wp, eps_inf, eps_s]
         # p = [1, 100, 4*np.pi, 10, 20]
@@ -604,7 +615,7 @@ class DatasetEval(ComponentBase):
         res["alpha"] = single_layer_eval_res["alpha"]
 
         res["sigma_exp"] = self.conductivity(meas_film)
-        res["sigma_mod"] = self.conductivity_model(res["sigma_exp"])
+        res["sigma_mod"] = self.regression_model(res["sigma_exp"])
 
         #self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = True
         self.sub_dataset.options["pp_opt"]["window_opt"]["en_plot"] = False
@@ -624,7 +635,7 @@ class DatasetEval(ComponentBase):
 
         n_sub = self._fit_1layer(t_exp_1layer)
         res["n_sub"] = n_sub
-        self._opt_consts["n_sub"] = n_sub
+        self._opt_args["n_sub"] = n_sub
 
         if self.options["eval_opt"]["area_fit"]:
             return res
@@ -664,10 +675,10 @@ class DatasetEval(ComponentBase):
 
         # n_sub.imag = 0.023*self.freq_axis
 
-        self._opt_consts["y_meas"] = res["t_exp_2layer"]
-        self._opt_consts["n_sub"] = n_sub
-        self._opt_consts["eps_s"] = 5
-        self._opt_consts["eps_inf"] = 50
+        self._opt_args["y_meas"] = res["t_exp_2layer"]
+        self._opt_args["n_sub"] = n_sub
+        self._opt_args["eps_s"] = 5
+        self._opt_args["eps_inf"] = 50
         # self._opt_consts["tau"] = 100 * 10
 
         freq_fit_res = self._fit_freq_model()

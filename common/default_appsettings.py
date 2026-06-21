@@ -278,7 +278,7 @@ class QuantityEnum(Enum):
     MeasTimeDeltaRef2Sam = QuantityFunc("Time delta Ref. to Sam.", domain=Domain.Time)
     RefAmp = QuantityFunc("Ref. Amp", domain=Domain.Frequency)
     RefArgmax = QuantityFunc("Ref. Argmax", domain=Domain.Time)
-    RefPhase = QuantityFunc("Ref. Phase", domain=Domain.Frequency)
+    RefPhase = QuantityFunc("Ref. Phase", domain=Domain.Frequency, unit="rad")
     PeakCnt = QuantityFunc("Peak Cnt", domain=Domain.Time)
     ZeroCrossing = QuantityFunc("Zero Crossing", domain=Domain.Time, unit="ps")
     TimeOfFlight = QuantityFunc("Time of Flight", domain=Domain.Time, unit="ps")
@@ -291,7 +291,6 @@ class QuantityEnum(Enum):
 
 
 class EvalOpt(ComponentBase):
-    fit_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.TransmissionAmp).tag(name="Fit quantity")
     dt = TQuantity(Q_(0.0, "fs"))
     fit_range = ValueRange([Q_(0.50, "THz"), Q_(2.20, "THz")])
     q_space_range = ValueRange([Q_(0.75, "THz"), Q_(2.00, "THz")])
@@ -383,6 +382,7 @@ class PlotOpt(ComponentBase):
     fig_label = Unicode("", group=image_group)
     img_title = Unicode("", group=image_group)
     en_cbar_label = Bool(True, group=image_group)
+    plotted_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.P2P, group=image_group)
 
     shown_plots_group = "Shown plots"
     window = Bool(True, group=shown_plots_group)
