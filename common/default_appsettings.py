@@ -302,9 +302,10 @@ class EvalOpt(ComponentBase):
     printed_freqs = TList(trait=Float(), default_value=[1.000, 2.000])
     d_opt_axis = TAny(None, allow_none=True)
 
-    use_sub_dataset = Bool(False, group="Conductivity").tag(name="Use substrate dataset")
+    use_sub_dataset = Bool(False, group="Conductivity").tag(name="Use separate substrate dataset")
     sub_pnt = ValueRange([0, 0], group="Conductivity").tag(name="Substrate point")
-
+    substrate_dataset_linked = Bool(False, group="Conductivity",
+                                    read_only=True).tag(name="Substrate dataset linked")
 
 class PpOpt(ComponentBase):
     window_group = "Window options"

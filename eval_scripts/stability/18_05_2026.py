@@ -50,7 +50,7 @@ class AppRoot(ComponentBase):
         self.dataset_sub = DataSet(dataset_path_sub, self.settings_sub, object_name="Dataset substrate")
 
         self.dataset_plotter = DataSetPlotter(self.dataset, object_name="Dataset Plotter")
-        self.dataset_eval = DatasetEval(self.dataset, object_name="Dataset Evaluation")
+        self.dataset_eval = DatasetEval(self.dataset, self.dataset_sub, object_name="Dataset Evaluation")
         
     @action("Take new measurement")
     def takeMeasurement(self):

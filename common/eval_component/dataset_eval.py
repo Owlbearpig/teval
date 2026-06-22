@@ -11,8 +11,9 @@ import matplotlib.pyplot as plt
 import logging
 import inspect
 from scipy.signal import iirnotch, filtfilt
+from q_space_eval import QSpaceEval
 from numpy import polyfit
-from enum import Enum
+from enum import Enum, member
 from common.eval_component.conductivity_models import *
 from common.traits import Quantity, Q_, ValueRange
 from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance
@@ -43,22 +44,23 @@ class OptRes:
     pass
 
 class RegressionModels(Enum):
-    drude = drude
-    drude2 = drude2
-    lattice_drude = total_response
-    drude_smith = drude_smith
+    drude = member(drude)
+    drude2 = member(drude2)
+    lattice_drude = member(total_response)
+    drude_smith = member(drude_smith)
+    # TODO add transmission models derived from conductivity (from freq. indep. parameters)
 
 class TransmissionModels(Enum):
-    tmm_1layer = t_tmm_model_1layer
-    tmm_2layer = t_tmm_model_2layer
-    model_1layer = model_1layer
-    model_2layer = model_2layer
-    t_model_2layer = _t_model_2layer
+    tmm_1layer = member(t_tmm_model_1layer)
+    tmm_2layer = member(t_tmm_model_2layer)
+    model_1layer = member(model_1layer)
+    model_2layer = member(model_2layer)
+    t_model_2layer = member(_t_model_2layer)
 
 class CostFunctions(Enum):
-    abs_cost = abs_cost_fun
-    phi_cost = phi_cost_fun
-    combined_cost = combined_cost_fun
+    abs_cost = member(abs_cost_fun)
+    phi_cost = member(phi_cost_fun)
+    combined_cost = member(combined_cost_fun)
 
 class DataSetType(Enum):
     Main = "main"
@@ -93,16 +95,22 @@ class SHGOOptions(ComponentBase):
 
     minimizer_kwargs = Instance(MinimizerOptions)
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.minimizer_kwargs = MinimizerOptions()
+
 class DatasetEval(ComponentBase):
 
     shgo_options = Instance(SHGOOptions)
 
     sel_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point (x, y)")
 
-    regression_model = TEnum(RegressionModels, default_value=RegressionModels.drude)
-    transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.model_2layer)
-    cost_fun = TEnum(CostFunctions, default_value=CostFunctions.abs_cost)
     meas_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.TransmissionAmp).tag(name="Measurement quantity")
+    regression_model = TEnum(RegressionModels, default_value=RegressionModels.drude)
+    transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.tmm_1layer)
+    cost_fun = TEnum(CostFunctions, default_value=CostFunctions.abs_cost)
+
 
     sig0 = Quantity(Q_(10, "S/cm"), group="Initial optimization values")
     sig0_bounds = ValueRange([Q_(10, "S/cm"), Q_(20, "S/cm")], group="Optimization bounds")
@@ -119,10 +127,14 @@ class DatasetEval(ComponentBase):
         self.sub_dataset = self._link_sub_dataset(dataset_sub)
         self.plotter = plotter
 
+        self.shgo_options = SHGOOptions()
+
+
         self.freq_axis = self.dataset.freq_axis
+
+
         self._opt_args = {}
         self._fixed_params = {}
-        self.transmission_model = None
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.settings.save_configuration(self)
@@ -213,6 +225,90 @@ class DatasetEval(ComponentBase):
 
         self.transmission_model = getattr(self.transmission_model, change["new"])
 
+
+
+    def fit_1layer(self):
+
+        sub_properties = self.dataset.get_sub_properties()
+
+
+        qs_eval = QSpaceEval(dataset_options, meas_quants, ana_eval_res)
+        qs_res = qs_eval.q_space_eval()
+
+
+
+        bounds = self.options["eval_opt"]["sub_bounds"]
+
+
+        # t_exp_phi_ = phase_correction(self.freq_axis, np.unwrap(np.angle(t_exp_)), en_plot=True)
+        # t_exp_ = np.abs(t_exp_) * np.exp(1j * t_exp_phi_)
+
+        f0, f1 = self.options["eval_opt"]["fit_range_sub"]
+        freq_mask = (f0 <= self.freq_axis) * (self.freq_axis <= f1)
+
+        shift = 15.3  # 15.3  # 30
+        best_ = ((None, None), np.inf)
+        n_opt_best = None
+        d_sub0 = self.options["sample_properties"]["d_1"]
+        for d_sub in [
+            *np.arange(d_sub0, d_sub0 + 1, 1.0)]:  # [639.5]:#[*np.arange(639, 640, 0.5)]: # 639 / 640 (Teralyzer)
+            for shift in [*np.arange(-0, 1, 1.0)]:  # 28, 22, -3
+                self.options["sample_properties"]["d_1"] = d_sub
+                self.options["eval_opt"]["shift_sub"] = shift
+                gof = 0
+                n_opt = np.zeros_like(self.freq_axis, dtype=complex)
+                for f_idx in np.arange(len(self.freq_axis))[freq_mask]:
+                    cost = partial(self._opt_fun_1layer,
+                                   freq_=self.freq_axis[f_idx],
+                                   # t_exp_=t_exp_[f_idx], TODO
+                                   bounds_=bounds)
+
+                    opt_res_ = shgo(cost,
+                                    bounds,
+                                    #minimizer_kwargs=min_kwargs, TODO
+                                    #iters=shgo_iters TODO
+                                    )
+                    n_opt[f_idx] = opt_res_.x[0] + opt_res_.x[1] * 1j
+                    gof += opt_res_.fun
+
+                n_imag = n_opt.imag
+                peak_val, sum_val, n_imag_filt = self._q_val(n_imag)
+
+                gof = gof / np.sum(freq_mask)
+
+                print("Sub:", sum_val, peak_val, shift, d_sub, gof)
+
+                res = ((shift, d_sub), peak_val, sum_val)
+                if peak_val < best_[1]:
+                    best_ = res
+                    n_opt_best = n_opt
+
+                with open("debug_out", "a") as f:
+                    res_line = f"{pnt} {str(res)}\n"
+                    f.write(res_line)
+
+        print(f"Best q-val sub: {best_} @{pnt}")
+        self.options["sample_properties"]["d_1"] = best_[0][1]
+        self.options["eval_opt"]["shift_sub"] = best_[0][0]
+
+        en_debug = False
+        if en_debug:
+            with open("result_out", "a") as f:
+                res_line = f"{pnt} {str(best_)}\n"
+                f.write(res_line)
+
+            with open("debug_out", "a") as f:
+                f.write("\n")
+
+        return n_opt_best
+
+    def fit_2layer(self):
+        pass
+
+    @action("Fit transmission model")
+    def fit_transmission_coefficient(self):
+        pass
+
     def _sigma_dc(self, freq, sig0):
         w = 2 * np.pi * freq
 
@@ -230,53 +326,6 @@ class DatasetEval(ComponentBase):
         t_mod_ = self._t_model_2layer(freq_, n_sub_, n_film_)
 
         return t_mod_
-
-    def _opt_fun_freq_model(self, p_, model, cost_fun):
-        # if any([p < 0 for p in x_]):
-        #    return np.inf
-
-        freq = self.dataset.freq_axis
-
-        y_mod = model(freq, p_)
-
-        return cost_fun(y_mod)
-
-    def _fit_freq_model(self):
-        bounds_ = self.get_bounds()
-
-        min_kwargs = {"method": "Nelder-Mead",
-                      "options": {
-                          "maxfev": 200,
-                          "maxev": 200,
-                          "maxiter": 200,
-                          "tol": 1e-13,
-                          "fatol": 1e-13,
-                          "xatol": 1e-13,
-                      },
-                      }
-        shgo_options = {
-            "maxfev": 1500,
-            # "f_tol": 1e-12,
-            # "maxiter": 4000,
-            # "ftol": 1e-12,
-            # "xtol": 1e-12,
-            # "maxev": 4000,
-            # "minimize_every_iter": True,
-            # "disp": True
-        }
-        shgo_n = 2
-        shgo_iters = 100
-        opt_fun = partial(self._opt_fun_freq_model,
-                          model=self._t_cond_model,
-                          cost_fun=self._combined_cost_fun)
-        opt_res_ = shgo(opt_fun,
-                        bounds=bounds_,
-                        n=shgo_n,
-                        iters=shgo_iters,
-                        minimizer_kwargs=min_kwargs,
-                        options=shgo_options,
-                        )
-        return opt_res_
 
     def _opt_fun_1layer(self, x_, freq_, t_exp_, bounds_=None):
         if bounds_ is not None:

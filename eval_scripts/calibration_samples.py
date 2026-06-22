@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
-from functions import WindowTypes, f_axis_idx_map
+from common.functions import WindowTypes, f_axis_idx_map
 from common.settings import Settings
 from traitlets import Instance, Float
 from common.datasetplotter import DataSetPlotter
