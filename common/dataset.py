@@ -538,7 +538,7 @@ class DataSet(ComponentBase):
 
             return meas_in_limit_range, coords
 
-    def find_nearest_ref(self, meas_, dist_func=None) -> Measurement:
+    def get_nearest_ref(self, meas_, dist_func=None) -> Measurement:
         if not dist_func:
             dist_func = self.settings.dataset_opt.dist_func.value
         closest_ref, best_fit_val = None, np.inf
@@ -564,7 +564,7 @@ class DataSet(ComponentBase):
             chosen_ref = self.measurements["refs"][self.settings.dataset_opt.fix_ref]
         elif point is not None:
             closest_sam = self.get_measurement(*point)
-            chosen_ref = self.find_nearest_ref(closest_sam)
+            chosen_ref = self.get_nearest_ref(closest_sam)
         else:
             if ref_idx is None:
                 ref_idx = -1
@@ -584,7 +584,7 @@ class DataSet(ComponentBase):
 
     def get_ref_sam_meas(self, point):
         sam_meas = self.get_measurement(*point)
-        ref_meas = self.find_nearest_ref(sam_meas)
+        ref_meas = self.get_nearest_ref(sam_meas)
 
         return ref_meas, sam_meas
 
@@ -709,7 +709,7 @@ class DataSet(ComponentBase):
 
         return alph
 
-    def get_sub_properties(self):
+    def get_single_layer_properties(self):
         sub_pnt = self.settings.eval_opt.sub_pnt
         if self.settings.eval_opt.use_sub_dataset:
             meas = self.sub_dataset.get_measurement(*sub_pnt)
@@ -860,7 +860,7 @@ class DataSet(ComponentBase):
         return power_val_sam / power_val_ref
 
     def meas_time_delta(self, meas_: Measurement):
-        ref_meas = self.find_nearest_ref(meas_)
+        ref_meas = self.get_nearest_ref(meas_)
 
         return (meas_.meas_time - ref_meas.meas_time).total_seconds()
 
@@ -911,7 +911,7 @@ class DataSet(ComponentBase):
         return np.angle(t)
 
     def time_of_flight(self, meas_):
-        closest_ref = self.find_nearest_ref(meas_)
+        closest_ref = self.get_nearest_ref(meas_)
 
         t_zero_ref = self.get_zero_crossing(closest_ref)
         t_zero_sam = self.get_zero_crossing(meas_)
@@ -952,7 +952,7 @@ class DataSet(ComponentBase):
         return phi
 
     def conductivity(self, meas_):
-        sub_properties = self.get_sub_properties()
+        sub_properties = self.get_single_layer_properties()
 
         t_sam = self.transmission(meas_, 1)
 
@@ -976,7 +976,7 @@ class DataSet(ComponentBase):
 
     def _ref_interpolation(self, sam_meas):
         sam_meas_time = sam_meas.meas_time
-        nearest_ref = self.find_nearest_ref(sam_meas, dist_func=Dist.Time)
+        nearest_ref = self.get_nearest_ref(sam_meas, dist_func=Dist.Time)
 
         sam_idx = self.measurements["all"].index(sam_meas)
         ref_idx = self.measurements["all"].index(nearest_ref)

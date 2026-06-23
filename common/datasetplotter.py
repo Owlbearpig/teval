@@ -403,7 +403,7 @@ class DataSetPlotter(ComponentBase):
             point = self.sel_point
             selected_meas = self.dataset.get_measurement(*point)
 
-        ref_meas = self.dataset.find_nearest_ref(selected_meas)
+        ref_meas = self.dataset.get_nearest_ref(selected_meas)
 
         q_eval_res = None
         meas_quants = self.dataset.calc_meas_quantities(ref_meas, selected_meas)
@@ -595,7 +595,7 @@ class DataSetPlotter(ComponentBase):
         plot_range = self.plot_settings.plot_range
 
         sam_meas0 = self.dataset.get_measurement(*pnt0)
-        ref_meas0 = self.dataset.find_nearest_ref(sam_meas0)
+        ref_meas0 = self.dataset.get_nearest_ref(sam_meas0)
 
         sam_meas1 = self.dataset.get_measurement(*pnt1)
 

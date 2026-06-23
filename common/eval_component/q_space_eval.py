@@ -6,30 +6,49 @@ from common.eval_component.transfer_functions import model_1layer, transferfunct
 from common.consts import c_thz, GREEN, RESET
 from tqdm import tqdm
 from scipy.optimize import shgo
+from common.eval_component.dataset_eval import DatasetEval
+from common.eval_component.shgo_settings import SHGOOptions, MinimizerOptions
 
 class QSpaceEval:
 
-    def __init__(self, dataset_options, meas_quants, ana_eval_res):
-        self.options = dataset_options
-        self.meas_quants = meas_quants
-        self.ana_eval_res = ana_eval_res
-        self.freq_axis = self.meas_quants["freq_axis"]
+    def __init__(self, dataset_eval: DatasetEval):
+        self.dataset_eval = dataset_eval
+        self.dataset = dataset_eval.dataset
+        self.settings = dataset_eval.dataset.settings
+        self.freq_axis = self.dataset.freq_axis
+
+        self.opt_consts = {}
+        self.cost_fun = self.dataset_eval.cost_fun
+        self.transmission_model = self.dataset_eval.transmission_model
+
         self.opt_state = {
-            "d": float(self.options["sample_properties"]["d"]),
+            "d": self.settings.sample_properties.d,
             "q_min": np.inf
         }
+
+    def set_opt_config(self):
+        single_layer_properties = self.dataset.get_single_layer_properties()
+        meas = single_layer_properties["meas"]
+        ref_meas = self.dataset.get_nearest_ref(meas)
+
+        meas_quants = self.dataset.calc_meas_quantities(ref_meas, meas)
+
+        self.opt_consts["meas_quants"] = meas_quants
+        self.opt_consts["single_layer_approx"] = single_layer_properties["single_layer_approx"]
 
     def calc_uncertainties(self, result):
         uncertainties = {**result}
 
-        f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.options["plot_opt"]["plot_range"])
+        meas_quants = self.opt_consts["meas_quants"]
 
-        sam_fd_, sam_fd_std = self.meas_quants["sam_fd"], self.meas_quants["sam_fd_std"]
-        ref_fd_, ref_fd_std = self.meas_quants["ref_fd"], self.meas_quants["ref_fd_std"]
-        delta_amp = self.meas_quants["t_exp_amp_std"][f_idx_plot_range, 1]
-        delta_phi = self.meas_quants["t_exp_phi_std"][f_idx_plot_range, 1]
-        amp = self.meas_quants["t_exp_amp"][f_idx_plot_range, 1]
-        phi = self.meas_quants["t_exp_phi"][f_idx_plot_range, 1]
+        f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.settings.plot_opt.plot_range)
+
+        sam_fd_, sam_fd_std = meas_quants["sam_fd"], meas_quants["sam_fd_std"]
+        ref_fd_, ref_fd_std = meas_quants["ref_fd"], meas_quants["ref_fd_std"]
+        delta_amp = meas_quants["t_exp_amp_std"][f_idx_plot_range, 1]
+        delta_phi = meas_quants["t_exp_phi_std"][f_idx_plot_range, 1]
+        amp = meas_quants["t_exp_amp"][f_idx_plot_range, 1]
+        phi = meas_quants["t_exp_phi"][f_idx_plot_range, 1]
 
         f_axis = self.freq_axis[f_idx_plot_range]
         w = 2 * np.pi * f_axis
@@ -41,7 +60,7 @@ class QSpaceEval:
         dtdn_ = dtdn(n, d, f_axis)
         dtdd_ = dtdd(n, d, f_axis)
 
-        delta_d = self.options["eval_opt"]["delta_d"]
+        delta_d = self.settings.eval_opt.delta_d
 
         uncertainties["delta_n"] = np.sqrt(((1 / dtdn_) * delta_t) ** 2 + ((1 / dtdn_) * dtdd_ * delta_d) ** 2)
         uncertainties["delta_alpha"] = (4 * np.pi * f_axis / (1e-4 * c_thz)) * uncertainties["delta_n"].imag
@@ -60,7 +79,7 @@ class QSpaceEval:
         return uncertainties
 
     def calc_q_val(self, opt_res_, en_plot=False):
-        q_space_range = self.options["eval_opt"]["q-space_range"]
+        q_space_range = self.settings.eval_opt.q_space_range
         q_space_idx_range = f_axis_idx_map(opt_res_["freq_axis"], q_space_range)
 
         dt = np.mean(np.diff(opt_res_["freq_axis"][q_space_idx_range]))
@@ -83,7 +102,7 @@ class QSpaceEval:
         q_val = np.abs(y_ft)[0:]
         t_axis = t_axis[0:]
 
-        fp_spacing = self.options["sample_properties"]["fp_spacing"]
+        fp_spacing = self.settings.sample_properties.fp_spacing
         t0 = np.argmin(np.abs(t_axis - (fp_spacing - 2)))
         t1 = np.argmin(np.abs(t_axis - (fp_spacing + 2)))
         if en_plot:
@@ -106,32 +125,18 @@ class QSpaceEval:
         return np.max(q_val[t0:t1])
 
     def model_opt(self, d_, f_idx_range_):
-        minimizer_kwargs = {"method": "Nelder-Mead",
-                            "options": {
-                                "maxev": np.inf,
-                                "maxiter": 200,
-                                "tol": 1e-8,
-                                "fatol": 1e-8,
-                                "xatol": 1e-8,
-                            }
-                            }
-        shgo_options = {
-            # "maxfev": np.inf,
-            # "f_tol": 1e-12,
-            # "maxiter": 4000,
-            # "ftol": 1e-12,
-            # "xtol": 1e-12,
-            # "maxev": 4000,
-            # "minimize_every_iter": True,
-            # "disp": True
-        }
+        min_kwargs_comp = self.dataset_eval.shgo_options.minimizer_kwargs
+        minimizer_kwargs = min_kwargs_comp.traits(group=MinimizerOptions.minimizer_opt_grp)
+        minimizer_kwargs["method"] = min_kwargs_comp.method
+
+        shgo_options = self.dataset_eval.shgo_options.traits(group=SHGOOptions.shgo_options_grp)
 
         freq_axis = self.freq_axis[f_idx_range_]
 
-        n0 = self.ana_eval_res["refr_idx"]
+        n0 = self.opt_consts["single_layer_approx"]["refr_idx"]
         n0_ = n0[f_idx_range_]
 
-        t_exp = self.meas_quants["t_exp"]
+        t_exp = self.opt_consts["meas_quants"]["t_exp"]
         t_exp_ = t_exp[f_idx_range_, 1]  # * np.exp(1j * 2*np.pi*freq_axis*0.150)
 
         # phi_corrected = self.ana_eval_res["phi_corrected"][f_idx_range_]
@@ -139,11 +144,12 @@ class QSpaceEval:
 
         n_opt_res_ = np.zeros_like(freq_axis, dtype=complex)
         for f_idx, f_ in enumerate(freq_axis):
-            def cost_fun(p):
-                n3_ = p[0] + 1j * p[1]
-                t_mod_ = model_1layer(n3_, d=d_, freq=f_, n1=1, shift_=0)
+            args = [f_, d_]
+            def opt_fun(p):
+                n = p[0] + 1j * p[1]
+                t_mod_ = self.transmission_model(n, *args)
 
-                return np.abs(t_exp_[f_idx] - t_mod_) ** 2
+                return self.cost_fun(t_exp_[f_idx], t_mod_)
 
 
             n0_f_idx = n0_[f_idx]
@@ -154,7 +160,7 @@ class QSpaceEval:
             conv, i_ = False, 0
             while not conv:
                 i_ += 1
-                shgo_opt_res_ = shgo(cost_fun,
+                shgo_opt_res_ = shgo(opt_fun,
                                      bounds=bounds,
                                      minimizer_kwargs=minimizer_kwargs,
                                      options=shgo_options,
@@ -196,13 +202,13 @@ class QSpaceEval:
         t_mod_ = model_1layer(n_opt_res_, d=d_, freq=freq_axis, n1=1, shift_=0)
 
         opt_res_["t_mod"] = t_mod_
-        opt_res_["sam_mod"] = self.meas_quants["ref_fd"][f_idx_range_, 1] * t_mod_
+        opt_res_["sam_mod"] = self.opt_consts["meas_quants"]["ref_fd"][f_idx_range_, 1] * t_mod_
 
         return opt_res_
 
     def q_space_eval(self, fit_range=None, q_space_range=None, **kwargs):
         if fit_range is None:
-            fit_range = self.options["eval_opt"]["fit_range"]
+            fit_range = self.settings.eval_opt.fit_range
 
         """ # TODO add to final result dict and plot
         for k in simple_eval_res:
@@ -213,7 +219,7 @@ class QSpaceEval:
         """
 
         f_idx_fit_range = f_axis_idx_map(self.freq_axis, fit_range)
-        f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.options["plot_opt"]["plot_range"])
+        f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.settings.plot_opt.plot_range)
 
         opt_results = []
         def opt_d_axis(d_axis_, it_prog=None):
@@ -235,7 +241,7 @@ class QSpaceEval:
                     self.opt_state["d"] = d
                     self.opt_state["q_min"] = q_val
 
-        d_axis = self.options["eval_opt"]["d_opt_axis"]
+        d_axis = self.settings["eval_opt"]["d_opt_axis"]
         if d_axis is not None:
             opt_d_axis(d_axis)
         else:

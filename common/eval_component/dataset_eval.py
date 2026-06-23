@@ -20,6 +20,7 @@ from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance
 from common.default_appsettings import QuantityEnum
 from common.eval_component.transfer_functions import (t_tmm_model_1layer, model_1layer, t_tmm_model_2layer,
                                                       model_2layer, _t_model_2layer)
+from common.eval_component.shgo_settings import SHGOOptions, MinimizerOptions
 
 
 def abs_cost_fun(y_meas, y_mod):
@@ -66,39 +67,6 @@ class DataSetType(Enum):
     Main = "main"
     Sub = "sub"
     Other = "other"
-
-class MinimizerMethod(Enum):
-    NelderMead = "Nelder-Mead"
-
-class MinimizerOptions(ComponentBase):
-    minimizer_opt_grp = "options"
-    method = TEnum(MinimizerMethod, default_value=MinimizerMethod.NelderMead, group="method")
-    maxfev = Integer(200, group=minimizer_opt_grp)
-    maxev = Integer(200, group=minimizer_opt_grp)
-    maxiter = Integer(200, group=minimizer_opt_grp)
-    tol = Float(1e-13, group=minimizer_opt_grp)
-    fatol = Float(1e-13, group=minimizer_opt_grp)
-    xatol = Float(1e-13, group=minimizer_opt_grp)
-
-class SHGOOptions(ComponentBase):
-    n = Integer(2)
-    iters = Integer(100)
-
-    shgo_options_grp = "shgo_options"
-    maxfev = Integer(1500, group=shgo_options_grp)
-    f_tol = Float(1e-12, group=shgo_options_grp)
-    maxiter = Integer(4000, group=shgo_options_grp)
-    xtol = Float(1e-12, group=shgo_options_grp)
-    maxev = Integer(4000, group=shgo_options_grp)
-    minimize_every_iter = Bool(False, group=shgo_options_grp)
-    disp = Bool(False, group=shgo_options_grp)
-
-    minimizer_kwargs = Instance(MinimizerOptions)
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        self.minimizer_kwargs = MinimizerOptions()
 
 class DatasetEval(ComponentBase):
 
@@ -220,6 +188,11 @@ class DatasetEval(ComponentBase):
                         )
         return opt_res_
 
+    """
+    - 
+    
+    """
+
     @observe("transmission_model")
     def select_model(self, change):
 
@@ -229,10 +202,9 @@ class DatasetEval(ComponentBase):
 
     def fit_1layer(self):
 
-        sub_properties = self.dataset.get_sub_properties()
 
 
-        qs_eval = QSpaceEval(dataset_options, meas_quants, ana_eval_res)
+        qs_eval = QSpaceEval(self.dataset, self)
         qs_res = qs_eval.q_space_eval()
 
 
