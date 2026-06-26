@@ -204,7 +204,7 @@ class DatasetEval(ComponentBase):
 
 
 
-        qs_eval = QSpaceEval(self.dataset, self)
+        qs_eval = QSpaceEval(self)
         qs_res = qs_eval.q_space_eval()
 
 

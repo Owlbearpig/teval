@@ -491,7 +491,7 @@ def smooth_temp_values(meas_time, temp, humidity):
 
     return meas_time, temp, humidity
 
-def arr_statistics(arr):
+def arr_statistics(arr) -> np.array:
     def _std(data_):
         if np.iscomplex(data_).any():
             a = np.std(data_.real, ddof=1, axis=0)

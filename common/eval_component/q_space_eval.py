@@ -26,7 +26,7 @@ class QSpaceEval:
             "q_min": np.inf
         }
 
-    def set_opt_config(self):
+    def set_opt_consts(self):
         single_layer_properties = self.dataset.get_single_layer_properties()
         meas = single_layer_properties["meas"]
         ref_meas = self.dataset.get_nearest_ref(meas)
@@ -35,6 +35,8 @@ class QSpaceEval:
 
         self.opt_consts["meas_quants"] = meas_quants
         self.opt_consts["single_layer_approx"] = single_layer_properties["single_layer_approx"]
+        self.opt_consts["n1"] = 1
+        self.opt_consts["n4"] = 1
 
     def calc_uncertainties(self, result):
         uncertainties = {**result}
@@ -131,6 +133,8 @@ class QSpaceEval:
 
         shgo_options = self.dataset_eval.shgo_options.traits(group=SHGOOptions.shgo_options_grp)
 
+        self.set_opt_consts()
+
         freq_axis = self.freq_axis[f_idx_range_]
 
         n0 = self.opt_consts["single_layer_approx"]["refr_idx"]
@@ -142,14 +146,14 @@ class QSpaceEval:
         # phi_corrected = self.ana_eval_res["phi_corrected"][f_idx_range_]
         # t_exp_ = np.abs(t_exp_) * np.exp(1j * phi_corrected)
 
+        self.opt_consts["d"] = d_
         n_opt_res_ = np.zeros_like(freq_axis, dtype=complex)
         for f_idx, f_ in enumerate(freq_axis):
-            args = [f_, d_]
             def opt_fun(p):
                 n = p[0] + 1j * p[1]
-                t_mod_ = self.transmission_model(n, *args)
+                t_mod = self.transmission_model(n, f_, self.opt_consts)
 
-                return self.cost_fun(t_exp_[f_idx], t_mod_)
+                return self.cost_fun(t_exp_[f_idx], t_mod)
 
 
             n0_f_idx = n0_[f_idx]
@@ -199,7 +203,7 @@ class QSpaceEval:
         # fp_spacing_estimate = ...
         opt_res_["q_val"] = self.calc_q_val(opt_res_, en_plot=False)
 
-        t_mod_ = model_1layer(n_opt_res_, d=d_, freq=freq_axis, n1=1, shift_=0)
+        t_mod_ = self.transmission_model(n_opt_res_, freq_axis, self.opt_consts)
 
         opt_res_["t_mod"] = t_mod_
         opt_res_["sam_mod"] = self.opt_consts["meas_quants"]["ref_fd"][f_idx_range_, 1] * t_mod_

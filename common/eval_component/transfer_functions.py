@@ -4,7 +4,8 @@ from common.eval_component.tmm_impl import coh_tmm
 
 # n is the free parameter of the unknown layer
 
-def t_tmm_model_1layer(n, freq, d):
+def t_tmm_model_1layer(n, freq, **opt_kwargs):
+    d = opt_kwargs["d"]
     pol = "s"
     n_list = [1, n, 1]
     d_list = [np.inf, d, np.inf]
@@ -19,7 +20,13 @@ def t_tmm_model_1layer(n, freq, d):
 
     return np.nan_to_num(t)
 
-def t_tmm_model_2layer(n, freq, n_sub, h, d, n1=1, n4=1):
+def t_tmm_model_2layer(n, freq, **opt_kwargs):
+    d = opt_kwargs["d"]
+    n_sub = opt_kwargs["n_sub"]
+    h = opt_kwargs["h"]
+    n1 = opt_kwargs["n1"]
+    n4 = opt_kwargs["n4"]
+
     pol = "s"
     n_list = [n1, n, n_sub, n4]
     d_list = [np.inf, h, d, np.inf]
@@ -34,7 +41,11 @@ def t_tmm_model_2layer(n, freq, n_sub, h, d, n1=1, n4=1):
 
     return np.nan_to_num(t)
 
-def model_1layer(n, freq, d, nfp=3, n1=1):
+def model_1layer(n, freq, **opt_kwargs):
+    d = opt_kwargs["d"]
+    nfp = opt_kwargs["nfp"]
+    n1 = opt_kwargs["n1"]
+
     w_ = 2 * np.pi * freq
     t_as = 2 * n1 / (n1 + n)
     t_sa = 2 * n / (n1 + n)
@@ -61,7 +72,13 @@ def model_1layer(n, freq, d, nfp=3, n1=1):
     return np.nan_to_num(t)
 
 
-def model_2layer(n, freq, n_sub, h, d, n1=1, n4=1):
+def model_2layer(n, freq, **opt_kwargs):
+    d = opt_kwargs["d"]
+    n_sub = opt_kwargs["n_sub"]
+    h = opt_kwargs["h"]
+    n1 = opt_kwargs["n1"]
+    n4 = opt_kwargs["n4"]
+
     w_ = 2 * np.pi * freq
     t12 = 2 * n1 / (n1 + n)
     t23 = 2 * n / (n + n_sub)
@@ -81,8 +98,13 @@ def model_2layer(n, freq, n_sub, h, d, n1=1, n4=1):
 
     return np.nan_to_num(t)
 
-def _t_model_2layer(n , freq, n_sub, d, h, nfp):
-    n1, n4 = 1, 1
+def _t_model_2layer(n, freq, **opt_kwargs):
+    d = opt_kwargs["d"]
+    n_sub = opt_kwargs["n_sub"]
+    h = opt_kwargs["h"]
+    n1 = opt_kwargs["n1"]
+    n4 = opt_kwargs["n4"]
+    nfp = opt_kwargs["nfp"]
 
     w_ = 2 * np.pi * freq
     t12 = 2 * n1 / (n1 + n)
