@@ -11,17 +11,18 @@ import matplotlib.pyplot as plt
 import logging
 import inspect
 from scipy.signal import iirnotch, filtfilt
-from q_space_eval import QSpaceEval
+from common.eval_component.q_space_eval import QSpaceEval
 from numpy import polyfit
 from enum import Enum, member
 from common.eval_component.conductivity_models import *
-from common.traits import Quantity, Q_, ValueRange
+from common.traits import Quantity, Q_, ValueRange, Path as TPath
+from pathlib import Path
 from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance
 from common.default_appsettings import QuantityEnum
 from common.eval_component.transfer_functions import (t_tmm_model_1layer, model_1layer, t_tmm_model_2layer,
                                                       model_2layer, _t_model_2layer)
 from common.eval_component.shgo_settings import SHGOOptions, MinimizerOptions
-
+from common.save import ResultSaver, test_dict
 
 def abs_cost_fun(y_meas, y_mod):
 
@@ -75,10 +76,17 @@ class DatasetEval(ComponentBase):
     sel_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point (x, y)")
 
     meas_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.TransmissionAmp).tag(name="Measurement quantity")
-    regression_model = TEnum(RegressionModels, default_value=RegressionModels.drude)
     transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.tmm_1layer)
     cost_fun = TEnum(CostFunctions, default_value=CostFunctions.abs_cost)
 
+    regression_model = TEnum(RegressionModels, default_value=RegressionModels.drude, group="Regression")
+    convert_sigma_to_t = Bool(default_value=False, group="Regression")
+
+    selected_result_path = TPath(Path(""))
+
+    d_opt_axis_bounds = ValueRange([Q_(500, "µm"), Q_(700, "µm", )], group="Q-Space eval")
+    d_opt_axis_step = Quantity(Q_(50, "µm"), group="Q-Space eval")
+    use_custom_d_opt_axis = Bool(True, group="Q-Space eval")
 
     sig0 = Quantity(Q_(10, "S/cm"), group="Initial optimization values")
     sig0_bounds = ValueRange([Q_(10, "S/cm"), Q_(20, "S/cm")], group="Optimization bounds")
@@ -86,6 +94,9 @@ class DatasetEval(ComponentBase):
     wp = Quantity(Q_(10, "THz"), group="Initial optimization values")
     wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group="Optimization bounds")
 
+    eval_result = ComponentBase(object_name="Eval result")
+
+    # result_saver = Instance(ResultSaver)
 
     def __init__(self, dataset: DataSet, dataset_sub: DataSet=None,
                  plotter: DataSetPlotter=None, object_name: str = None):
@@ -97,12 +108,12 @@ class DatasetEval(ComponentBase):
 
         self.shgo_options = SHGOOptions()
 
+        # self.result_saver = ResultSaver()
+        # register regression, optimization 1 and 2 layer. Opt res dict -> npz
 
         self.freq_axis = self.dataset.freq_axis
 
-
-        self._opt_args = {}
-        self._fixed_params = {}
+        self._opt_conf = {}
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.settings.save_configuration(self)
@@ -128,6 +139,9 @@ class DatasetEval(ComponentBase):
         else:
             return self, self.sub_dataset
 
+    def load_result(self, path):
+        pass
+
     def set_y_meas(self):
         meas_quantity = self.settings.eval_opt.meas_quantity
         func = self.dataset.func_map(meas_quantity)
@@ -136,19 +150,21 @@ class DatasetEval(ComponentBase):
         y_meas = func(meas)
 
         f_idx = f_axis_idx_map(self.freq_axis, self.settings.eval_opt.fit_range)
-        self._opt_args["y_meas"] = y_meas[f_idx]
+        self._opt_conf["y_meas"] = y_meas[f_idx]
 
     @observe("regression_model")
     def select_regression_model(self, change):
         fun = getattr(self.regression_model, change["new"])
+
+        self._opt_conf["model"] = partial(fun, self._opt_conf["freq_axis"])
+
+
+    def update_freq_axis(self):
         f_idx = f_axis_idx_map(self.freq_axis, self.settings.eval_opt.fit_range)
-
-        self._opt_args["model"] = partial(fun, self.freq_axis[f_idx])
-
-        self.setup_bounds()
+        self._opt_conf["freq_axis"] = self.freq_axis[f_idx]
 
     def setup_bounds(self):
-        signature = inspect.signature(self._opt_args["model"])
+        signature = inspect.signature(self._opt_conf["model"])
 
         bounds = []
         for arg in signature.parameters.values():
@@ -158,29 +174,50 @@ class DatasetEval(ComponentBase):
             else:
                 bounds.append([-np.inf, np.inf])
 
-        self._opt_args["bounds"] = bounds
+        self._opt_conf["bounds"] = bounds
 
     @observe("cost_fun")
-    def setup_cost(self, c=None):
-        if c is None:
+    def setup_cost(self, change=None):
+        if change is None:
             cost_func = getattr(self, "cost_fun")
         else:
-            cost_func = c["new"]
-        mod_func = self._opt_args["model"]
-        y_meas = self._opt_args["y_meas"]
+            cost_func = change["new"]
+        mod_func = self._opt_conf["model"]
+        y_meas = self._opt_conf["y_meas"]
 
-        self._opt_args["func"] = lambda p: cost_func(y_meas, mod_func(*p))
+        if self.convert_sigma_to_t:
+            def t_mod_func(*args, **kwargs):
+                freq_axis = self._opt_conf["freq_axis"]
+                sigma = mod_func(*args, **kwargs)
+                n = self.sigma_to_n(freq_axis, sigma)
 
-    @action("Fit regression model")
-    def perform_regression(self):
+                t = self.transmission_model(n, freq_axis, **self._opt_conf)
+
+                return t
+
+            mod_func = t_mod_func
+
+        self._opt_conf["func"] = lambda p: cost_func(y_meas, mod_func(*p))
+
+    def update_opt_config(self):
+        self.update_freq_axis()
+        self._opt_conf["h"] = self.settings.sample_properties.d_film
+
         self.set_y_meas()
         self.setup_cost()
+        self.setup_bounds()
+
+        self.selected_result_path = Path(f"results/{self._settings_file}.json")
+
+    @action("Fit regression model", group="Regression")
+    def perform_regression(self):
+        self.update_opt_config()
 
         min_kwargs = self.shgo_options.minimizer_kwargs.traits(group=MinimizerOptions.minimizer_opt_grp)
         min_kwargs["method"] = self.shgo_options.minimizer_kwargs.method
 
-        opt_res_ = shgo(func=self._opt_args["func"],
-                        bounds=self._opt_args["bounds"],
+        opt_res_ = shgo(func=self._opt_conf["func"],
+                        bounds=self._opt_conf["bounds"],
                         n=self.shgo_options.n,
                         iters=self.shgo_options.iters,
                         minimizer_kwargs=min_kwargs,
@@ -188,131 +225,36 @@ class DatasetEval(ComponentBase):
                         )
         return opt_res_
 
-    """
-    - 
-    
-    """
-
     @observe("transmission_model")
     def select_model(self, change):
 
         self.transmission_model = getattr(self.transmission_model, change["new"])
 
-
-
+    @action("Fit 1 layer")
     def fit_1layer(self):
 
-
-
         qs_eval = QSpaceEval(self)
-        qs_res = qs_eval.q_space_eval()
+        # qs_res = qs_eval.q_space_eval()
 
+        qs_res = test_dict
 
+        self.result_saver.process(qs_res)
 
-        bounds = self.options["eval_opt"]["sub_bounds"]
+        return qs_res
 
-
-        # t_exp_phi_ = phase_correction(self.freq_axis, np.unwrap(np.angle(t_exp_)), en_plot=True)
-        # t_exp_ = np.abs(t_exp_) * np.exp(1j * t_exp_phi_)
-
-        f0, f1 = self.options["eval_opt"]["fit_range_sub"]
-        freq_mask = (f0 <= self.freq_axis) * (self.freq_axis <= f1)
-
-        shift = 15.3  # 15.3  # 30
-        best_ = ((None, None), np.inf)
-        n_opt_best = None
-        d_sub0 = self.options["sample_properties"]["d_1"]
-        for d_sub in [
-            *np.arange(d_sub0, d_sub0 + 1, 1.0)]:  # [639.5]:#[*np.arange(639, 640, 0.5)]: # 639 / 640 (Teralyzer)
-            for shift in [*np.arange(-0, 1, 1.0)]:  # 28, 22, -3
-                self.options["sample_properties"]["d_1"] = d_sub
-                self.options["eval_opt"]["shift_sub"] = shift
-                gof = 0
-                n_opt = np.zeros_like(self.freq_axis, dtype=complex)
-                for f_idx in np.arange(len(self.freq_axis))[freq_mask]:
-                    cost = partial(self._opt_fun_1layer,
-                                   freq_=self.freq_axis[f_idx],
-                                   # t_exp_=t_exp_[f_idx], TODO
-                                   bounds_=bounds)
-
-                    opt_res_ = shgo(cost,
-                                    bounds,
-                                    #minimizer_kwargs=min_kwargs, TODO
-                                    #iters=shgo_iters TODO
-                                    )
-                    n_opt[f_idx] = opt_res_.x[0] + opt_res_.x[1] * 1j
-                    gof += opt_res_.fun
-
-                n_imag = n_opt.imag
-                peak_val, sum_val, n_imag_filt = self._q_val(n_imag)
-
-                gof = gof / np.sum(freq_mask)
-
-                print("Sub:", sum_val, peak_val, shift, d_sub, gof)
-
-                res = ((shift, d_sub), peak_val, sum_val)
-                if peak_val < best_[1]:
-                    best_ = res
-                    n_opt_best = n_opt
-
-                with open("debug_out", "a") as f:
-                    res_line = f"{pnt} {str(res)}\n"
-                    f.write(res_line)
-
-        print(f"Best q-val sub: {best_} @{pnt}")
-        self.options["sample_properties"]["d_1"] = best_[0][1]
-        self.options["eval_opt"]["shift_sub"] = best_[0][0]
-
-        en_debug = False
-        if en_debug:
-            with open("result_out", "a") as f:
-                res_line = f"{pnt} {str(best_)}\n"
-                f.write(res_line)
-
-            with open("debug_out", "a") as f:
-                f.write("\n")
-
-        return n_opt_best
-
+    @action("Fit 2 layers")
     def fit_2layer(self):
         pass
 
-    @action("Fit transmission model")
-    def fit_transmission_coefficient(self):
-        pass
 
-    def _sigma_dc(self, freq, sig0):
+    def sigma_to_n(self, freq, sigma):
         w = 2 * np.pi * freq
 
-        sig0 *= 1e-4 # S/cm -> S/µm
-        n_ = (1 + 1j) * np.sqrt(sig0/(2*w*eps0_thz))
+        sigma *= 1e-4 # S/cm -> S/µm
+        n_ = (1 + 1j) * np.sqrt(sigma/(2*w*eps0_thz))
 
         return n_
 
-    def _t_cond_model(self, freq_, p_):
-        n_sub_ = self._opt_args["n_sub"]
-        # tau = self._opt_consts["tau"]
-        n_film_ = self.selected_n_model(freq_, *p_)
-
-        # n_film_ = self._sigma_to_n(freq_, sig_model_)
-        t_mod_ = self._t_model_2layer(freq_, n_sub_, n_film_)
-
-        return t_mod_
-
-    def _opt_fun_1layer(self, x_, freq_, t_exp_, bounds_=None):
-        if bounds_ is not None:
-            for i, p_ in enumerate(x_):
-                if not (bounds_[i][0] <= p_) * (p_ <= bounds_[i][1]):
-                    return np.inf
-
-        n = x_[0] + 1j * x_[1]
-        t_mod = self._t_model_1layer(freq_, n)
-        # t_mod = self._tmm_model_1layer(freq_, n)
-
-        abs_loss = (np.abs(t_mod) - np.abs(t_exp_)) ** 2
-        ang_loss = (np.angle(t_mod) - np.angle(t_exp_)) ** 2
-
-        return abs_loss + ang_loss
 
     def _opt_fun_2layer(self, x_, freq, n_sub_, t_exp_):
         #if x_[0] < 1 or x_[1] < 0:
@@ -329,52 +271,6 @@ class DatasetEval(ComponentBase):
         # imag_part = (t_mod.imag - t_exp_.imag) ** 2
 
         return mag + ang
-
-    def _gof(self, n_film_, n_sub_, t_exp_):
-        f0, f1 = self.options["eval_opt"]["fit_range_film"]
-        freq_axis = self.dataset.freq_axis
-        freq_mask = (f0 <= freq_axis) * (freq_axis <= f1)
-
-        s = 0
-        for f_idx in np.arange(len(freq_axis))[freq_mask]:
-            n_f = (n_film_[f_idx].real, n_film_[f_idx].imag)
-            s += self._opt_fun_2layer(n_f, freq_axis[f_idx], n_sub_[f_idx], t_exp_[f_idx])
-
-        return s / len(freq_axis[freq_mask])
-
-    def _q_val(self, n_imag_):
-        f0, f1 = self.options["eval_opt"]["fit_range_film"]
-        freq_axis = self.dataset.freq_axis
-        freq_mask = (f0 <= freq_axis) * (freq_axis <= f1)
-
-        n_imag_mean = np.mean(n_imag_[freq_mask])
-
-        win_settings = {"en_plot": False, "win_start": f0, "win_width": f1 - f0, "fig_label": "FFT"}
-        n_imag_ = window(np.array([freq_axis, n_imag_]).T, **win_settings)
-        n_imag_ = n_imag_[:, 1]
-
-        fft_ = np.fft.rfft(n_imag_[freq_mask] - n_imag_mean)
-        fft_freq_axis = np.fft.rfftfreq(len(n_imag_[freq_mask]),
-                                        d=np.mean(np.diff(freq_axis)))
-
-        # mask_ = (10 < fft_freq_axis) * (fft_freq_axis < 20)
-        mask_ = (11 <= fft_freq_axis)
-        peak_val, peak_idx = np.max(np.abs(fft_[mask_])), np.argmax(np.abs(fft_[mask_]))
-        sum_val = np.sum(np.abs(fft_[7 <= fft_freq_axis]))
-
-        # plt.figure("TESTFFT")
-        # plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
-
-        fs = 1/np.mean(np.diff(freq_axis))
-        Q = 0.5  # quality factor: higher = narrower
-
-        peak_freq = fft_freq_axis[mask_][peak_idx]
-        # print(peak_freq, fs)
-        b, a = iirnotch(peak_freq / (fs / 2), Q)
-
-        n_imag_filt_ = filtfilt(b, a, n_imag_)
-
-        return peak_val, sum_val, n_imag_filt_
 
     def _fit_2layer(self, t_exp_, n_sub_):
         pnt = self.options["eval_opt"]["sub_pnt"]
@@ -445,82 +341,8 @@ class DatasetEval(ComponentBase):
         print("Best q-val film: ", best_)
         return n_opt_best
 
-    def _fit_1layer(self, t_exp_):
-        pnt = self.options["eval_opt"]["sub_pnt"]
-        bounds = self.options["eval_opt"]["sub_bounds"]
-        #bounds = [(3.05, 3.13), (0.0025, 0.0050)]
-        min_kwargs = {"method": "Nelder-Mead",
-                      "options": {
-                          "maxfev": 120,
-                          # "maxiter": 20,
-                          "tol": 1e-12,
-                          "fatol": 1e-12,
-                          "xatol": 1e-12,
-                      }
-                      }
-        shgo_iters = 3
-
-        #t_exp_phi_ = phase_correction(self.freq_axis, np.unwrap(np.angle(t_exp_)), en_plot=True)
-        #t_exp_ = np.abs(t_exp_) * np.exp(1j * t_exp_phi_)
-
-        f0, f1 = self.options["eval_opt"]["fit_range_sub"]
-        freq_mask = (f0 <= self.freq_axis) * (self.freq_axis <= f1)
-
-        shift = 15.3 # 15.3  # 30
-        best_ = ((None, None), np.inf)
-        n_opt_best = None
-        d_sub0 = self.options["sample_properties"]["d_1"]
-        for d_sub in [*np.arange(d_sub0, d_sub0+1, 1.0)]:#[639.5]:#[*np.arange(639, 640, 0.5)]: # 639 / 640 (Teralyzer)
-            for shift in [*np.arange(-0, 1, 1.0)]:# 28, 22, -3
-                self.options["sample_properties"]["d_1"] = d_sub
-                self.options["eval_opt"]["shift_sub"] = shift
-                gof = 0
-                n_opt = np.zeros_like(self.freq_axis, dtype=complex)
-                for f_idx in np.arange(len(self.freq_axis))[freq_mask]:
-
-                    cost = partial(self._opt_fun_1layer,
-                                   freq_=self.freq_axis[f_idx],
-                                   t_exp_=t_exp_[f_idx],
-                                   bounds_=bounds)
-
-                    opt_res_ = shgo(cost,
-                                    bounds,
-                                    minimizer_kwargs=min_kwargs,
-                                    iters=shgo_iters)
-                    n_opt[f_idx] = opt_res_.x[0] + opt_res_.x[1] * 1j
-                    gof += opt_res_.fun
-
-                n_imag = n_opt.imag
-                peak_val, sum_val, n_imag_filt = self._q_val(n_imag)
-
-                gof = gof / np.sum(freq_mask)
-
-                print("Sub:", sum_val, peak_val, shift, d_sub, gof)
-
-                res = ((shift, d_sub), peak_val, sum_val)
-                if peak_val < best_[1]:
-                    best_ = res
-                    n_opt_best = n_opt
-
-                with open("debug_out", "a") as f:
-                    res_line = f"{pnt} {str(res)}\n"
-                    f.write(res_line)
-
-        print(f"Best q-val sub: {best_} @{pnt}")
-        self.options["sample_properties"]["d_1"] = best_[0][1]
-        self.options["eval_opt"]["shift_sub"] = best_[0][0]
-
-        with open("result_out", "a") as f:
-            res_line = f"{pnt} {str(best_)}\n"
-            f.write(res_line)
-
-        with open("debug_out", "a") as f:
-            f.write("\n")
-
-        return n_opt_best
-
     def conductivity_model(self, sigma_exp):
-        self._opt_args["sigma_exp"] = sigma_exp
+        self._opt_conf["sigma_exp"] = sigma_exp
         opt_res = self._fit_freq_model()
         p = opt_res.x # x = [tau, sig0, wp, eps_inf, eps_s]
         # p = [1, 100, 4*np.pi, 10, 20]
@@ -551,40 +373,6 @@ class DatasetEval(ComponentBase):
 
         return t_sim
 
-    def ref_std(self, en_plot=False):
-        all_refs = self.measurements["refs"]
-        ref_data = np.zeros((len(all_refs), len(self.freq_axis)), dtype=complex)
-        for ref_idx, ref_meas in enumerate(all_refs):
-            ref_fd = self._get_data(ref_meas, domain=Domain.Frequency)
-            ref_data[ref_idx] = ref_fd[:, 1]
-
-        freq_range = (0.35 < self.freq_axis)*(self.freq_axis < 4.0)
-        amp_argmin = np.argmin(np.abs(ref_data[:, freq_range]))
-        amp_argmin = np.unravel_index(amp_argmin, ref_data[:, freq_range].shape)[0]
-        amp_min = ref_data[amp_argmin]
-
-        amp_argmax = np.argmax(np.abs(ref_data[:, freq_range]))
-        amp_argmax = np.unravel_index(amp_argmax, ref_data[:, freq_range].shape)[0]
-        amp_max = ref_data[amp_argmax]
-
-        amp_mean, amp_std = np.mean(np.abs(ref_data), axis=0), np.std(np.abs(ref_data), axis=0)
-        phi = np.unwrap(np.angle(ref_data))
-        phi_mean, phi_std = np.mean(phi, axis=0), np.std(phi, axis=0)
-
-        def dB(y):
-            return 20*np.log10(y)
-
-        if en_plot:
-            plt.figure("Ref Standard deviation")
-            #plt.plot(self.freq_axis, dB(np.abs(amp_min)), label="Min")
-            #plt.plot(self.freq_axis, dB(amp_mean), label="Mean")
-            #plt.plot(self.freq_axis, dB(np.abs(amp_max)), label="Max")
-            plt.plot(self.freq_axis, amp_std, label="Std")
-            plt.xlabel("Frequency (THz)")
-            plt.ylabel("Amplitude (dB)")
-
-        return amp_std
-
     def sub_meas_sim(self):
         t_sim = self.t_sim_1layer()
 
@@ -596,8 +384,6 @@ class DatasetEval(ComponentBase):
 
         meas_time_diff = (ref1_meas.meas_time - ref2_meas.meas_time).total_seconds()
         print("ref1 - ref2 measurement time difference (seconds): ", np.round(meas_time_diff, 2))
-
-        ref_amp_std = self.ref_std(en_plot=False)
 
         ref_amp = np.abs(ref2_fd[:, 1])
         ref_phi = np.angle(ref2_fd[:, 1])
@@ -656,7 +442,7 @@ class DatasetEval(ComponentBase):
 
         n_sub = self._fit_1layer(t_exp_1layer)
         res["n_sub"] = n_sub
-        self._opt_args["n_sub"] = n_sub
+        self._opt_conf["n_sub"] = n_sub
 
         if self.options["eval_opt"]["area_fit"]:
             return res
@@ -696,10 +482,10 @@ class DatasetEval(ComponentBase):
 
         # n_sub.imag = 0.023*self.freq_axis
 
-        self._opt_args["y_meas"] = res["t_exp_2layer"]
-        self._opt_args["n_sub"] = n_sub
-        self._opt_args["eps_s"] = 5
-        self._opt_args["eps_inf"] = 50
+        self._opt_conf["y_meas"] = res["t_exp_2layer"]
+        self._opt_conf["n_sub"] = n_sub
+        self._opt_conf["eps_s"] = 5
+        self._opt_conf["eps_inf"] = 50
         # self._opt_consts["tau"] = 100 * 10
 
         freq_fit_res = self._fit_freq_model()

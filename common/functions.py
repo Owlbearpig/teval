@@ -10,16 +10,7 @@ from numpy.fft import irfft, rfft, rfftfreq
 from scipy import signal
 from enum import Enum
 from matplotlib._pylab_helpers import Gcf
-from scipy.signal import butter, filtfilt
-
-class WindowTypes(Enum):
-    tukey = signal.windows.tukey
-    triang = signal.windows.triang
-    hamming = signal.windows.hamming
-    hann = signal.windows.hann
-    gaussian = signal.windows.gaussian
-    blackmanharris = signal.windows.blackmanharris
-    blackman = signal.windows.blackman
+from scipy.signal import butter, filtfilt, get_window
 
 def do_fft(data_td):
     data_td = nan_to_num(data_td)
@@ -136,7 +127,7 @@ def flip_phase(data_fd):
     return np.array([freq_axis, y_amp_ * np.exp(-1j*y_phi_)]).T
 
 
-def window(data_td, win_width=10, shift=0, en_plot=False, slope=0.15, **k):
+def window(data_td, win_width=10, shift=0, en_plot=False, slope=0.15, **kwargs):
     t, y = data_td[:, 0], data_td[:, 1]
     t -= t[0]
     dt = np.mean(np.diff(t))
@@ -149,15 +140,12 @@ def window(data_td, win_width=10, shift=0, en_plot=False, slope=0.15, **k):
     win_center = np.argmax(np.abs(y))
     win_start = win_center - int(win_width / 2)
 
-    if "type" in k:
-        window_function = k["type"]
-        if window_function == WindowTypes.tukey:
-            window_arr = window_function(win_width, slope)
+    if "type" in kwargs:
+        window = kwargs["type"]
+        if window == "tukey":
+            window_arr = get_window(window, win_width, slope)
         else:
-            window_arr = window_function(win_width)
-    else:
-        window_function = WindowTypes.tukey
-        window_arr = window_function(win_width, slope)
+            window_arr = get_window(window, win_width)
 
     window_mask = np.zeros(len(y))
     window_mask[:win_width] = window_arr
@@ -171,8 +159,8 @@ def window(data_td, win_width=10, shift=0, en_plot=False, slope=0.15, **k):
     y_win = y * window_mask
 
     if en_plot:
-        if "fig_label" in k:
-            fig_label = f"_{k['fig_label']}"
+        if "fig_label" in kwargs:
+            fig_label = f"_{kwargs['fig_label']}"
         else:
             fig_label = ""
 

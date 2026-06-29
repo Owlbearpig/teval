@@ -10,7 +10,7 @@ from common.default_appsettings import AppSettings
 
 class Settings(AppSettings):
 
-    script_name = None
+    # script_name = None
 
     def __init__(self, settings_file: Path | str = None, **kwargs):
         super().__init__(**kwargs)
@@ -88,6 +88,7 @@ class Settings(AppSettings):
             json.dump(settings_dict, fp, indent=4)
 
     def load_configuration(self, component_instance):
+        return
         config_path = self.config_path
         print(f"Loading settings from {config_path}")
 

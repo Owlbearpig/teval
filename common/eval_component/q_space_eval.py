@@ -6,18 +6,18 @@ from common.eval_component.transfer_functions import model_1layer, transferfunct
 from common.consts import c_thz, GREEN, RESET
 from tqdm import tqdm
 from scipy.optimize import shgo
-from common.eval_component.dataset_eval import DatasetEval
+from scipy.signal import iirnotch, filtfilt
 from common.eval_component.shgo_settings import SHGOOptions, MinimizerOptions
 
 class QSpaceEval:
 
-    def __init__(self, dataset_eval: DatasetEval):
+    def __init__(self, dataset_eval):
         self.dataset_eval = dataset_eval
         self.dataset = dataset_eval.dataset
         self.settings = dataset_eval.dataset.settings
         self.freq_axis = self.dataset.freq_axis
 
-        self.opt_consts = {}
+        self.model_kwargs = {}
         self.cost_fun = self.dataset_eval.cost_fun
         self.transmission_model = self.dataset_eval.transmission_model
 
@@ -33,15 +33,15 @@ class QSpaceEval:
 
         meas_quants = self.dataset.calc_meas_quantities(ref_meas, meas)
 
-        self.opt_consts["meas_quants"] = meas_quants
-        self.opt_consts["single_layer_approx"] = single_layer_properties["single_layer_approx"]
-        self.opt_consts["n1"] = 1
-        self.opt_consts["n4"] = 1
+        self.model_kwargs["meas_quants"] = meas_quants
+        self.model_kwargs["single_layer_approx"] = single_layer_properties["single_layer_approx"]
+        self.model_kwargs["n1"] = 1
+        self.model_kwargs["n4"] = 1
 
     def calc_uncertainties(self, result):
         uncertainties = {**result}
 
-        meas_quants = self.opt_consts["meas_quants"]
+        meas_quants = self.model_kwargs["meas_quants"]
 
         f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.settings.plot_opt.plot_range)
 
@@ -101,7 +101,7 @@ class QSpaceEval:
         y_ft = np.fft.rfft(y)
         t_axis = np.fft.rfftfreq(len(y), d=dt)
 
-        q_val = np.abs(y_ft)[0:]
+        q_val_axis = np.abs(y_ft)[0:]
         t_axis = t_axis[0:]
 
         fp_spacing = self.settings.sample_properties.fp_spacing
@@ -109,7 +109,7 @@ class QSpaceEval:
         t1 = np.argmin(np.abs(t_axis - (fp_spacing + 2)))
         if en_plot:
             plt.figure("qval")
-            plt.plot(t_axis, q_val, label=str(opt_res_["d"]) + " µm")
+            plt.plot(t_axis, q_val_axis, label=str(opt_res_["d"]) + " µm")
             plt.axvline(x=t_axis[t0], color='r', linestyle='--', linewidth=2)
             plt.axvline(x=t_axis[t1], color='r', linestyle='--', linewidth=2)
             # plt.plot(q_val, label=opt_res_["d"])
@@ -124,9 +124,24 @@ class QSpaceEval:
         # t_diff = np.abs(self._delay_from_phaseslope(meas_, ref_meas_))
         # exit()
 
-        return np.max(q_val[t0:t1])
+        q_val, peak_idx = np.max(q_val_axis[t0:t1]), np.argmax(q_val_axis[t0:t1])
+        q_sum = np.sum(q_val_axis[t0:t1])
 
-    def model_opt(self, d_, f_idx_range_):
+        # plt.figure("TESTFFT")
+        # plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
+
+        fs = 1 / np.mean(np.diff(self.freq_axis))
+        Q = 0.5  # quality factor: higher = narrower
+
+        peak_freq = t_axis[t0:t1][peak_idx]
+        # print(peak_freq, fs)
+        b, a = iirnotch(peak_freq / (fs / 2), Q)
+
+        y_filtered = filtfilt(b, a, y)
+
+        return {"q_val": q_val, "q_sum": q_sum, "q_y": y_filtered}
+
+    def model_opt(self, d_, shift, f_idx_range_):
         min_kwargs_comp = self.dataset_eval.shgo_options.minimizer_kwargs
         minimizer_kwargs = min_kwargs_comp.traits(group=MinimizerOptions.minimizer_opt_grp)
         minimizer_kwargs["method"] = min_kwargs_comp.method
@@ -137,21 +152,27 @@ class QSpaceEval:
 
         freq_axis = self.freq_axis[f_idx_range_]
 
-        n0 = self.opt_consts["single_layer_approx"]["refr_idx"]
+        n0 = self.model_kwargs["single_layer_approx"]["refr_idx"]
         n0_ = n0[f_idx_range_]
 
-        t_exp = self.opt_consts["meas_quants"]["t_exp"]
+        t_exp = self.model_kwargs["meas_quants"]["t_exp"]
         t_exp_ = t_exp[f_idx_range_, 1]  # * np.exp(1j * 2*np.pi*freq_axis*0.150)
+
+        shift_fs = shift * 1e-3
+        phase_shift = np.exp(1j * 2*np.pi * shift_fs * freq_axis)
+        t_exp_ *= phase_shift
 
         # phi_corrected = self.ana_eval_res["phi_corrected"][f_idx_range_]
         # t_exp_ = np.abs(t_exp_) * np.exp(1j * phi_corrected)
 
-        self.opt_consts["d"] = d_
+        self.model_kwargs["d"] = d_
+
+        gof = 0
         n_opt_res_ = np.zeros_like(freq_axis, dtype=complex)
         for f_idx, f_ in enumerate(freq_axis):
             def opt_fun(p):
                 n = p[0] + 1j * p[1]
-                t_mod = self.transmission_model(n, f_, self.opt_consts)
+                t_mod = self.transmission_model(n, f_, self.model_kwargs)
 
                 return self.cost_fun(t_exp_[f_idx], t_mod)
 
@@ -173,6 +194,8 @@ class QSpaceEval:
 
                 x = shgo_opt_res_.x
                 n_opt_res_[f_idx] = x[0] + 1j * x[1]
+                gof += shgo_opt_res_.fun
+
                 if f_idx == 0:
                     break
 
@@ -197,20 +220,21 @@ class QSpaceEval:
 
         alpha_ = freq_axis * 4 * np.pi * n_opt_res_.imag / (1e-4 * c_thz)
 
-        opt_res_ = {"freq_axis": freq_axis,
+        opt_res_ = {"freq_axis": freq_axis, "gof": gof / len(freq_axis),
                     "d": d_, "n": n_opt_res_.real,
                     "k": n_opt_res_.imag, "alpha": alpha_, "n0": n0_}
         # fp_spacing_estimate = ...
-        opt_res_["q_val"] = self.calc_q_val(opt_res_, en_plot=False)
+        q_val_calc_res = self.calc_q_val(opt_res_, en_plot=False)
+        opt_res_.update(q_val_calc_res)
 
-        t_mod_ = self.transmission_model(n_opt_res_, freq_axis, self.opt_consts)
+        t_mod_ = self.transmission_model(n_opt_res_, freq_axis, self.model_kwargs)
 
         opt_res_["t_mod"] = t_mod_
-        opt_res_["sam_mod"] = self.opt_consts["meas_quants"]["ref_fd"][f_idx_range_, 1] * t_mod_
+        opt_res_["sam_mod"] = self.model_kwargs["meas_quants"]["ref_fd"][f_idx_range_, 1] * t_mod_
 
         return opt_res_
 
-    def q_space_eval(self, fit_range=None, q_space_range=None, **kwargs):
+    def q_space_eval(self, fit_range=None, **kwargs):
         if fit_range is None:
             fit_range = self.settings.eval_opt.fit_range
 
@@ -230,23 +254,25 @@ class QSpaceEval:
             custom_format = f"{GREEN}{{l_bar}}{{bar}}{GREEN}{{r_bar}}{RESET}"
             pbar_ = tqdm(d_axis_, total=len(d_axis_), colour="green", bar_format=custom_format)
             for d in pbar_:
-                desc = ""
-                if it_prog:
-                    desc += f"Step {it_prog[0] + 1}/{it_prog[1]}: "
+                for shift in [*np.arange(-0, 1, 1.0)]:
+                    desc = ""
+                    if it_prog:
+                        desc += f"Step {it_prog[0] + 1}/{it_prog[1]}: "
 
-                desc += f"Optimizing thickness {np.round(d, 2)} µm"
-                desc += f" of {d_axis_}"
-                pbar_.set_description(desc)
-                opt_res = self.model_opt(d, f_idx_fit_range)
-                opt_results.append(opt_res)
+                    desc += f"Optimizing thickness {np.round(d, 2)} µm"
+                    desc += f" of {d_axis_}"
+                    pbar_.set_description(desc)
+                    opt_res = self.model_opt(d, shift, f_idx_fit_range)
+                    opt_results.append(opt_res)
 
-                q_val = opt_res["q_val"]
-                if q_val < self.opt_state["q_min"]:
-                    self.opt_state["d"] = d
-                    self.opt_state["q_min"] = q_val
+                    q_val = opt_res["q_val"]
+                    if q_val < self.opt_state["q_min"]:
+                        self.opt_state["d"] = d
+                        self.opt_state["shift"] = shift
+                        self.opt_state["q_min"] = q_val
 
-        d_axis = self.settings["eval_opt"]["d_opt_axis"]
-        if d_axis is not None:
+        if self.dataset_eval.use_custom_d_opt_axis:
+            d_axis = np.arange(*self.dataset_eval.d_opt_axis_bounds, self.dataset_eval.d_opt_axis_step)
             opt_d_axis(d_axis)
         else:
             iterations = 3
@@ -264,10 +290,8 @@ class QSpaceEval:
         q_vals = np.array([res["q_val"] for res in opt_results])
         q_vals = q_vals / np.max(q_vals)
 
-        opt_d_res = opt_results[np.argmin(q_vals)]
-        d_opt = np.round(opt_d_res["d"], 2)
-
-        best_res = self.model_opt(d_opt, f_idx_plot_range)
+        best_res = opt_results[np.argmin(q_vals)]
+        d_opt = np.round(best_res["d"], 2)
 
         best_res = self.calc_uncertainties(best_res)
 

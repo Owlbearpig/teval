@@ -37,6 +37,8 @@ def action(name=None, help=None, **kwargs):
 
 class ComponentBase(HasTraits):
 
+    script_name = None
+
     def __init__(self, object_name : str = None):
         self.is_initialized = False
 

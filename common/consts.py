@@ -12,6 +12,8 @@ if 'posix' in os_name:
 else:
     result_dir = Path(r"C:\Users\alexj\Mega\AG\Projects\Conductivity\ErrorAnalysis")
 
+result_dir = Path(r"eval_scripts\results")
+
 # physical constants
 THz = 1e12
 c_thz = c0 * 1e-6  # µm / ps -> 1e6 / 1e-12 = 1e-6

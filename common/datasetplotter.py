@@ -6,8 +6,6 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 from common.default_appsettings import Domain, Dist, Direction, ClimateQuantity, QuantityFunc, QuantityEnum
 from functools import partial
-
-from common.eval_component.transfer_functions import t_tmm_model_1layer
 from common.functions import moving_average, f_axis_idx_map, local_minima_1d
 import logging
 from datetime import datetime
@@ -21,7 +19,6 @@ import matplotlib as mpl
 from scipy.stats import pearsonr
 from tqdm import tqdm
 import pandas as pd
-from common.eval_component.q_space_eval import QSpaceEval
 from copy import deepcopy
 
 class DataSetPlotter(ComponentBase):
@@ -411,8 +408,8 @@ class DataSetPlotter(ComponentBase):
         if self.settings.enable_q_eval:
             ana_eval_res = self.dataset.single_layer_eval(selected_meas)
 
-            q_eval = QSpaceEval(self.settings, meas_quants, ana_eval_res)
-            q_eval_res = q_eval.q_space_eval()
+            #q_eval = QSpaceEval(self.settings, meas_quants, ana_eval_res)
+            #q_eval_res = q_eval.q_space_eval()
 
         logging.info(f"Plotting point {point}")
         logging.info(f"Reference measurement: {ref_meas}")

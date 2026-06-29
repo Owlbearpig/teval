@@ -4,7 +4,7 @@ from common.settings import Settings
 from copy import deepcopy
 from pathlib import Path
 import numpy as np
-from common.functions import (unwrap, window, local_minima_1d, WindowTypes, butter_filt,
+from common.functions import (unwrap, window, local_minima_1d, butter_filt,
                        phase_correction, do_fft, do_ifft, f_axis_idx_map, remove_offset, arr_statistics)
 from common.measurements import Measurement, meas_id_func
 from mpl_settings import mpl_style_params
@@ -605,6 +605,28 @@ class DataSet(ComponentBase):
                 val[i, :, 1] = op(*(a[i, :, :] for a in arrs))
 
         return val
+
+    def ref_std(self):
+        all_refs = self.measurements["refs"]
+        ref_data = np.zeros((len(all_refs), len(self.freq_axis)), dtype=complex)
+        for ref_idx, ref_meas in enumerate(all_refs):
+            ref_fd = self.get_data(ref_meas, domain=Domain.Frequency)
+            ref_data[ref_idx] = ref_fd[:, 1]
+
+        freq_range = (0.35 < self.freq_axis)*(self.freq_axis < 4.0)
+        amp_argmin = np.argmin(np.abs(ref_data[:, freq_range]))
+        amp_argmin = np.unravel_index(amp_argmin, ref_data[:, freq_range].shape)[0]
+        amp_min = ref_data[amp_argmin]
+
+        amp_argmax = np.argmax(np.abs(ref_data[:, freq_range]))
+        amp_argmax = np.unravel_index(amp_argmax, ref_data[:, freq_range].shape)[0]
+        amp_max = ref_data[amp_argmax]
+
+        amp_mean, amp_std = np.mean(np.abs(ref_data), axis=0), np.std(np.abs(ref_data), axis=0)
+        phi = np.unwrap(np.angle(ref_data))
+        phi_mean, phi_std = np.mean(phi, axis=0), np.std(phi, axis=0)
+
+        return amp_mean, amp_std, phi_mean, phi_std
 
     def calc_meas_quantities(self, ref_meas_, meas_):
         meas_quants = {}
