@@ -20,7 +20,7 @@ along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 import typing as t
 
 import traitlets
-from common.eval_component.eval_result import QuantitySet as EvalResultClass
+from common.eval_component.quantity_set import QuantitySet as QuantitySetClass
 from traitlets import TraitError, Undefined, TraitType, List as TList, Float, Integer
 
 if float(traitlets.__version__[0]) <= 4:
@@ -49,14 +49,14 @@ class TraitTypePatched(TraitType):
 
 # TraitType = type(TraitType.__name__, (TraitType,), {"instance_init": instance_init})
 
-class EvalResult(TraitTypePatched):
-    """A trait for an EvalResult"""
+class QuantitySet(TraitTypePatched):
+    """A trait for an QuantitySet"""
 
-    default_value = EvalResultClass()
+    default_value = QuantitySetClass()
     info_text = "an evaluation result instance"
 
     def validate(self, obj, value):
-        if isinstance(value, EvalResultClass):
+        if isinstance(value, QuantitySetClass):
             value.checkConsistency()
             return value
         self.error(obj, value)

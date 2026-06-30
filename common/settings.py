@@ -1,7 +1,7 @@
 from enum import Enum
 from pathlib import Path
 import json
-
+from common.eval_component.eval_result import EvalResult
 from common.traits import ValueRange, Path as TPath, Quantity
 from common.units import Q_
 from traitlets import Instance, Tuple, List, Bool, Integer, Float, Enum as TEnum
@@ -69,6 +69,8 @@ class Settings(AppSettings):
 
                     dump_dict[k] = val
                 else:
+                    if issubclass(trait.klass, EvalResult):
+                        return
                     dump_dict[k] = {}
 
                     make_dump_dict(dump_dict[k], val)
@@ -81,7 +83,7 @@ class Settings(AppSettings):
             settings_dict = {comp_class_name: {}}
 
         make_dump_dict(settings_dict[comp_class_name], component_instance)
-
+        return
         with open(self.config_path, 'w') as fp:
             json.dump(settings_dict, fp, indent=4)
 

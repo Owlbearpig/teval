@@ -221,7 +221,7 @@ class QSpaceEval:
         alpha_ = freq_axis * 4 * np.pi * n_opt_res_.imag / (1e-4 * c_thz)
 
         opt_res_ = {"freq_axis": freq_axis, "gof": gof / len(freq_axis),
-                    "d": d_, "n": n_opt_res_.real,
+                    "d": d_, "n": n_opt_res_.real, "shift": shift,
                     "k": n_opt_res_.imag, "alpha": alpha_, "n0": n0_}
         # fp_spacing_estimate = ...
         q_val_calc_res = self.calc_q_val(opt_res_, en_plot=False)

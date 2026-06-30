@@ -1,61 +1,27 @@
-# -*- coding: utf-8 -*-
-"""
-This file is part of Taipan.
+from common.components import ComponentBase
+from common.traits import QuantitySet
+from traitlets import Bool, Float, Int
+from common.traits import Quantity, Q_
 
-Copyright (C) 2015 - 2016 Arno Rehn <arno@arnorehn.de>
+class EvalResult(ComponentBase):
 
-Taipan is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+    quantity_set = QuantitySet()
 
-Taipan is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+    d = Quantity(Q_(0, "µm"), read_only=True)
+    q_val = Float(0.0, read_only=True)
+    gof = Float(0.0, read_only=True)
+    shift = Quantity(Q_(0.0, "fs"), read_only=True)
 
-You should have received a copy of the GNU General Public License
-along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
-"""
-
-import numpy as np
-from common.units import Q_
-
-class QuantitySet:
-
-
-
-    def __init__(self, opt_res=None, data=None, axes=None):
-        super().__init__()
-        if opt_res is None:
+    def __init__(self, opt_res_dict=None):
+        if opt_res_dict is None:
             return
 
-        if data is None:
-            data = Q_(np.array(0.0))
-        if axes is None:
-            axes = []
-        self.data = data
-        self.axes = axes
+        self.process(opt_res_dict)
 
-    @property
-    def isConsistent(self):
-        return len(self.axes) == self.data.ndim and \
-               all([len(ax) == shape
-                    for (ax, shape) in zip(self.axes, self.data.shape)])
-
-    def checkConsistency(self):
-        if not self.isConsistent:
-            raise Exception("DataSet is inconsistent! "
-                            "Number of axes: %d, data dimension: %d, "
-                            "axes lengths: %s, data shape: %s" %
-                            (len(self.axes), self.data.ndim,
-                             [len(ax) for ax in self.axes],
-                             self.data.shape))
-
-    def __repr__(self):
-        return 'DataSet(%s, %s)' % (repr(self.data), repr(self.axes))
-
-    def __str__(self):
-        return 'DataSet with:\n    %s\n  and axes:\n    %s' % \
-                (repr(self.data).replace('\n', '\n    '),
-                 repr(self.axes).replace('\n', '\n    '))
+    def process(self, opt_res_dict):
+        for k, v in opt_res_dict.items():
+            if isinstance(v, (float, int, str)):
+                self.set_trait(k, v)
+            else:
+                # vectors: collect and pass to QuantitySet
+                pass

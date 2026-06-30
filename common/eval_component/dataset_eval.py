@@ -23,6 +23,7 @@ from common.eval_component.transfer_functions import (t_tmm_model_1layer, model_
                                                       model_2layer, _t_model_2layer)
 from common.eval_component.shgo_settings import SHGOOptions, MinimizerOptions
 from common.save import ResultSaver, test_result
+from common.eval_component.eval_result import EvalResult
 
 def abs_cost_fun(y_meas, y_mod):
 
@@ -94,7 +95,7 @@ class DatasetEval(ComponentBase):
     wp = Quantity(Q_(10, "THz"), group="Initial optimization values")
     wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group="Optimization bounds")
 
-    current_result = ComponentBase(object_name="Eval result")
+    current_result = Instance(EvalResult)
 
     result_saver = Instance(ResultSaver)
 
@@ -114,6 +115,8 @@ class DatasetEval(ComponentBase):
         self.freq_axis = self.dataset.freq_axis
 
         self._opt_conf = {}
+
+        self.current_result = EvalResult()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.settings.save_configuration(self)
@@ -235,10 +238,11 @@ class DatasetEval(ComponentBase):
 
         qs_eval = QSpaceEval(self)
         # qs_res = qs_eval.q_space_eval()
-
         qs_res = test_result
 
-        self.result_saver.process(qs_res)
+        self.current_result = EvalResult(qs_res)
+
+        self.result_saver.process(self.current_result)
 
         return qs_res
 
