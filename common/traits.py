@@ -17,9 +17,10 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 """
+import typing as t
 
 import traitlets
-from common.consts import result_dir
+from common.eval_component.eval_result import QuantitySet as EvalResultClass
 from traitlets import TraitError, Undefined, TraitType, List as TList, Float, Integer
 
 if float(traitlets.__version__[0]) <= 4:
@@ -38,10 +39,30 @@ def instance_init(self, obj):
                 self.set(obj, v)
 
 
-TraitType = type(TraitType.__name__, (TraitType,), {"instance_init": instance_init})
+class TraitTypePatched(TraitType):
+    def instance_init(self, obj: t.Any) -> None:
+        with obj.cross_validation_lock:
+            if self.default_value is not Undefined:
+                v = self._validate(obj, self.default_value)
+                if self.name is not None:
+                    self.set(obj, v)
+
+# TraitType = type(TraitType.__name__, (TraitType,), {"instance_init": instance_init})
+
+class EvalResult(TraitTypePatched):
+    """A trait for an EvalResult"""
+
+    default_value = EvalResultClass()
+    info_text = "an evaluation result instance"
+
+    def validate(self, obj, value):
+        if isinstance(value, EvalResultClass):
+            value.checkConsistency()
+            return value
+        self.error(obj, value)
 
 
-class Path(TraitType):
+class Path(TraitTypePatched):
 
     default_value = pathlib.Path()
     info_text = 'a path'
@@ -68,7 +89,7 @@ class Path(TraitType):
         return value
 
 
-class Quantity(TraitType):
+class Quantity(TraitTypePatched):
 
     default_value = Q_(0)
     info_text = 'a quantity'
@@ -99,7 +120,7 @@ class Quantity(TraitType):
                                             self.min, self.max, value))
         return value
 
-class ValueRange(TraitType):
+class ValueRange(TraitTypePatched):
     info_text = 'a value range'
     default_value = [0.0, 1.0]
 

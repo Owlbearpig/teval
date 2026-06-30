@@ -22,7 +22,7 @@ from common.default_appsettings import QuantityEnum
 from common.eval_component.transfer_functions import (t_tmm_model_1layer, model_1layer, t_tmm_model_2layer,
                                                       model_2layer, _t_model_2layer)
 from common.eval_component.shgo_settings import SHGOOptions, MinimizerOptions
-from common.save import ResultSaver, test_dict
+from common.save import ResultSaver, test_result
 
 def abs_cost_fun(y_meas, y_mod):
 
@@ -94,9 +94,9 @@ class DatasetEval(ComponentBase):
     wp = Quantity(Q_(10, "THz"), group="Initial optimization values")
     wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group="Optimization bounds")
 
-    eval_result = ComponentBase(object_name="Eval result")
+    current_result = ComponentBase(object_name="Eval result")
 
-    # result_saver = Instance(ResultSaver)
+    result_saver = Instance(ResultSaver)
 
     def __init__(self, dataset: DataSet, dataset_sub: DataSet=None,
                  plotter: DataSetPlotter=None, object_name: str = None):
@@ -108,7 +108,7 @@ class DatasetEval(ComponentBase):
 
         self.shgo_options = SHGOOptions()
 
-        # self.result_saver = ResultSaver()
+        self.result_saver = ResultSaver()
         # register regression, optimization 1 and 2 layer. Opt res dict -> npz
 
         self.freq_axis = self.dataset.freq_axis
@@ -236,7 +236,7 @@ class DatasetEval(ComponentBase):
         qs_eval = QSpaceEval(self)
         # qs_res = qs_eval.q_space_eval()
 
-        qs_res = test_dict
+        qs_res = test_result
 
         self.result_saver.process(qs_res)
 

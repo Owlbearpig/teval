@@ -329,7 +329,7 @@ class SampleProperties(ComponentBase):
 
 
 class SaveSettings(ComponentBase):
-    path = TPath(default_value=common.consts.result_dir)
+    path = TPath(Path(""))
     filetype = Unicode("pdf")
     suffix = Unicode("")
     bbox_inches = Unicode("tight")
@@ -412,7 +412,7 @@ class DatasetOpt(ComponentBase):
 
 class AppSettings(ComponentBase):
     log_level = TEnum(LogLevel, default_value=LogLevel.info)
-    result_dir = TPath(default_value=common.consts.result_dir)
+    export_csv_dir = TPath(Path(""))
 
     save_settings = Instance(SaveSettings, args=())
     pp_opt = Instance(PpOpt, args=())

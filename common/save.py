@@ -28,39 +28,25 @@ from copy import deepcopy
 from common.consts import result_dir
 from pathlib import Path
 
-test_dict = {
-    # --- Scalars (Metrics) ---
+test_result = {
+    # --- Scalars ---
     "d_um": 10.03,
     "q_val": 0.0035,
     "epochs": 150,
     "converged": True,
 
-    # --- Strings / Metadata ---
+    # --- Strings ---
     "model_name": "ResNet-50_Eval",
     "timestamp": "2026-06-29_12:35:00",
 
-    # --- 1D NumPy Arrays (Lists of Metrics) ---
+    # --- 1D NumPy Arrays ---
     "losses": np.array([0.69, 0.45, 0.31, 0.18, 0.09]),
     "accuracies": np.array([0.55, 0.72, 0.84, 0.91, 0.96]),
     "freq_axis": np.ones(4001),
     "n_sub": np.ones(4001)*3.1415,
 
-    # --- 2D & 3D NumPy Arrays (Weights/Matrices) ---
-    "confusion_matrix": np.array([
-        [45, 2, 3],
-        [1, 48, 1],
-        [4, 0, 46]
-    ]),
-    "dummy_image_patch": np.random.rand(4, 4, 3), # 4x4 RGB image patch
-
     # --- Standard Python Collections ---
     "class_labels": ["cat", "dog", "frog"],
-
-    # --- Nested Structure (Warning: Requires allow_pickle=True to save in npz) ---
-    "hyperparameters": {
-        "learning_rate": 0.001,
-        "optimizer": "Adam"
-    }
 }
 
 

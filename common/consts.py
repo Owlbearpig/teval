@@ -12,7 +12,7 @@ if 'posix' in os_name:
 else:
     result_dir = Path(r"C:\Users\alexj\Mega\AG\Projects\Conductivity\ErrorAnalysis")
 
-result_dir = Path(r"eval_scripts\results")
+result_dir = Path(r"eval_scripts") / "results"
 
 # physical constants
 THz = 1e12

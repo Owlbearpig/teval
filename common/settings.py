@@ -10,8 +10,6 @@ from common.default_appsettings import AppSettings
 
 class Settings(AppSettings):
 
-    # script_name = None
-
     def __init__(self, settings_file: Path | str = None, **kwargs):
         super().__init__(**kwargs)
 

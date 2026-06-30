@@ -1418,7 +1418,7 @@ class DataSetPlotter(ComponentBase):
         return
 
     def save_fig(self, fig_num_, filename=None, **kwargs):
-        save_dir = Path(self.settings.result_dir)
+        save_dir = Path(self.settings.export_csv_dir)
         filetype = self.settings.save_settings.filetype
         kwargs.setdefault("dpi", self.settings.save_settings.dpi)
         kwargs.setdefault("bbox_inches", self.settings.save_settings.bbox_inches)

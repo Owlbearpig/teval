@@ -225,7 +225,7 @@ class DataSet(ComponentBase):
         return None
 
     def _apply_options(self):
-        new_rc_params = {"savefig.directory": self.settings.result_dir}
+        new_rc_params = {"savefig.directory": self.settings.save_settings.path}
 
         mpl.rcParams.update(mpl_style_params(new_rc_params))
         logger_config(self.settings)
@@ -1033,7 +1033,7 @@ class DataSet(ComponentBase):
         return (m2.meas_time - m1.meas_time).total_seconds() / 3600
 
     def export_as_csv(self, dict_, file_app=""):
-        save_dir = self.settings.result_dir
+        save_dir = self.settings.export_csv_dir
         save_path = save_dir / f"plotted_data_{file_app}.csv"
         logging.info(f"Exporting data to {save_path}")
 
