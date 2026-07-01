@@ -21,9 +21,23 @@ along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 import numpy as np
 from common.units import Q_
 
-class QuantitySet:
+class QuantityDict(dict):
+    def __init__(self, data_dict=None, axes=None):
+        super(QuantityDict, self).__init__()
+        if data_dict is None:
+            self[None] = DataSet()
+        if axes is None:
+            axes = []
 
-    def __init__(self, opt_res=None, data=None, axes=None):
+        for k, v in data_dict.items():
+            self[k] = DataSet(data=v, axes=axes)
+
+    def checkConsistency(self):
+        for k, v in self.items():
+            v.checkConsistency()
+
+class DataSet:
+    def __init__(self, data=None, axes=None):
         super().__init__()
 
         if data is None:
@@ -55,3 +69,20 @@ class QuantitySet:
         return 'DataSet with:\n    %s\n  and axes:\n    %s' % \
                 (repr(self.data).replace('\n', '\n    '),
                  repr(self.axes).replace('\n', '\n    '))
+
+freq_axis = np.ones(4001)
+
+test_dict = {
+    "delta_n": np.ones(4001),
+    "delta_alpha": np.ones(4001),
+    "n0": np.ones(4001)*3.1,
+    "n": np.ones(4001)*3.1415,
+    "k": np.ones(4001)*3.1415,
+    "alpha": np.ones(4001)*3.1415,
+    "t_mod": np.ones(4001)*3.1415,
+    "sam_mod": np.ones(4001)*3.1415,
+}
+
+result_dict = QuantityDict(test_dict, axes=[freq_axis])
+
+print(result_dict["n0"])

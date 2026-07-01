@@ -32,21 +32,21 @@ test_result = {
     # --- Scalars ---
     "d_um": 10.03,
     "q_val": 0.0035,
-    "epochs": 150,
     "converged": True,
 
     # --- Strings ---
-    "model_name": "ResNet-50_Eval",
     "timestamp": "2026-06-29_12:35:00",
 
     # --- 1D NumPy Arrays ---
-    "losses": np.array([0.69, 0.45, 0.31, 0.18, 0.09]),
-    "accuracies": np.array([0.55, 0.72, 0.84, 0.91, 0.96]),
     "freq_axis": np.ones(4001),
-    "n_sub": np.ones(4001)*3.1415,
-
-    # --- Standard Python Collections ---
-    "class_labels": ["cat", "dog", "frog"],
+    "delta_n": np.ones(4001),
+    "delta_alpha": np.ones(4001),
+    "n0": np.ones(4001),
+    "n": np.ones(4001)*3.1415,
+    "k": np.ones(4001)*3.1415,
+    "alpha": np.ones(4001)*3.1415,
+    "t_mod": np.ones(4001)*3.1415,
+    "sam_mod": np.ones(4001)*3.1415,
 }
 
 

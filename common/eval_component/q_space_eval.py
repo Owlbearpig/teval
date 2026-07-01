@@ -247,7 +247,6 @@ class QSpaceEval:
         """
 
         f_idx_fit_range = f_axis_idx_map(self.freq_axis, fit_range)
-        f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.settings.plot_opt.plot_range)
 
         opt_results = []
         def opt_d_axis(d_axis_, it_prog=None):
