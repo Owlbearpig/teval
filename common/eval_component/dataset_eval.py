@@ -43,8 +43,6 @@ def combined_cost_fun(y_meas, y_mod):
 
 # logging.basicConfig(level=logging.WARNING)
 
-class OptRes:
-    pass
 
 class RegressionModels(Enum):
     drude = member(drude)
@@ -95,7 +93,9 @@ class DatasetEval(ComponentBase):
     wp = Quantity(Q_(10, "THz"), group="Initial optimization values")
     wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group="Optimization bounds")
 
-    current_result = Instance(EvalResult)
+    current_result = Instance(EvalResult).tag(name="Current result",
+                                            data_label="y",
+                                            axes_labels=["frequency"])
 
     result_saver = Instance(ResultSaver)
 
@@ -179,6 +179,15 @@ class DatasetEval(ComponentBase):
 
         self._opt_conf["bounds"] = bounds
 
+    @observe("selected_result_path")
+    def set_result(self, change):
+        result_dict = dict(np.load(change["new"], allow_pickle=False))
+        for k, v in result_dict.items():
+            if v.ndim != 0:
+                continue
+            result_dict[k] = v.item()
+        self.current_result.process_dict(result_dict)
+
     @observe("cost_fun")
     def setup_cost(self, change=None):
         if change is None:
@@ -238,9 +247,9 @@ class DatasetEval(ComponentBase):
 
         qs_eval = QSpaceEval(self)
         # qs_res = qs_eval.q_space_eval()
-        qs_res = test_result
+        qs_res = test_result.copy()
 
-        self.current_result = EvalResult(qs_res)
+        self.current_result.process_dict(qs_res)
 
         self.result_saver.process(self.current_result)
 

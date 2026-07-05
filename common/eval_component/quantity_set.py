@@ -22,18 +22,20 @@ import numpy as np
 from common.units import Q_
 
 class QuantityDict(dict):
-    def __init__(self, data_dict=None, axes=None):
+    def __init__(self, arr_dict=None):
         super(QuantityDict, self).__init__()
-        if data_dict is None:
-            self[None] = DataSet()
-        if axes is None:
-            axes = []
 
-        for k, v in data_dict.items():
-            self[k] = DataSet(data=v, axes=axes)
+        if arr_dict is None:
+            self[0] = DataSet()
+        else:
+            for k, v in arr_dict.items():
+                if v.ndim != 2 or v.shape[1] != 2:
+                    continue
+                self[k] = DataSet(data=Q_(v[:, 1]), axes=[Q_(v[:, 0])])
+
 
     def checkConsistency(self):
-        for k, v in self.items():
+        for v in self.values():
             v.checkConsistency()
 
 class DataSet:
@@ -70,19 +72,21 @@ class DataSet:
                 (repr(self.data).replace('\n', '\n    '),
                  repr(self.axes).replace('\n', '\n    '))
 
-freq_axis = np.ones(4001)
+if __name__ == '__main__':
 
-test_dict = {
-    "delta_n": np.ones(4001),
-    "delta_alpha": np.ones(4001),
-    "n0": np.ones(4001)*3.1,
-    "n": np.ones(4001)*3.1415,
-    "k": np.ones(4001)*3.1415,
-    "alpha": np.ones(4001)*3.1415,
-    "t_mod": np.ones(4001)*3.1415,
-    "sam_mod": np.ones(4001)*3.1415,
-}
+    freq_axis = np.ones(4001)
 
-result_dict = QuantityDict(test_dict, axes=[freq_axis])
+    test_dict = {
+        "delta_n": np.ones(4001),
+        "delta_alpha": np.ones(4001),
+        "n0": np.ones(4001)*3.1,
+        "n": np.ones(4001)*3.1415,
+        "k": np.ones(4001)*3.1415,
+        "alpha": np.ones(4001)*3.1415,
+        "t_mod": np.ones(4001)*3.1415,
+        "sam_mod": np.ones(4001)*3.1415,
+    }
 
-print(result_dict["n0"])
+    result_dict = QuantityDict(test_dict, axes=[freq_axis])
+
+    print(result_dict["n0"])

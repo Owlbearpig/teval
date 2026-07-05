@@ -18,7 +18,7 @@ You should have received a copy of the GNU General Public License
 along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 """
 from common.components import ComponentBase
-from common.traits import Path as PathTrait
+from common.traits import Path as PathTrait, QuantityDictClass, Q_
 from enum import Enum, unique
 from traitlets import Bool, Enum as EnumTrait, Unicode
 import numpy as np
@@ -28,25 +28,30 @@ from copy import deepcopy
 from common.consts import result_dir
 from pathlib import Path
 
+
+rnd_arr = np.random.random
+
 test_result = {
     # --- Scalars ---
-    "d_um": 10.03,
-    "q_val": 0.0035,
+    "d": 10.03,
+    "q_val": 0.035,
+    "gof": 0.0,
+    "shift": 1.203,
     "converged": True,
 
     # --- Strings ---
-    "timestamp": "2026-06-29_12:35:00",
+    # "timestamp": "2026-06-29_12:35:00",
+    "timestamp": "2026-06-29_13:35:00000000000000000000000000000",
 
     # --- 1D NumPy Arrays ---
-    "freq_axis": np.ones(4001),
-    "delta_n": np.ones(4001),
-    "delta_alpha": np.ones(4001),
-    "n0": np.ones(4001),
-    "n": np.ones(4001)*3.1415,
-    "k": np.ones(4001)*3.1415,
-    "alpha": np.ones(4001)*3.1415,
-    "t_mod": np.ones(4001)*3.1415,
-    "sam_mod": np.ones(4001)*3.1415,
+    "delta_n": np.array([3*np.arange(1, 4002), rnd_arr(4001)]).T,
+    "delta_alpha": np.array([3*np.arange(1, 4002), rnd_arr(4001)]).T,
+    "n0": np.array([3*np.arange(1, 4002), rnd_arr(4001)]).T,
+    "n": np.array([3*np.arange(1, 4002), rnd_arr(4001)]).T,
+    "k": np.array([3*np.arange(1, 4002), rnd_arr(4001)]).T,
+    "alpha": np.array([3*np.arange(1, 4002), rnd_arr(4001)]).T,
+    "t_mod": np.array([3*np.arange(1, 4002), rnd_arr(4001)]).T,
+    "sam_mod": np.array([3*np.arange(1, 4002), rnd_arr(4001)]).T,
 }
 
 
@@ -73,7 +78,7 @@ class ResultSaver(ComponentBase):
                                name="File name template")
     mainFileName = Unicode('data').tag(name="Main file name")
 
-    enabled = Bool(False, help="Whether data storage is enabled").tag(
+    enabled = Bool(True, help="Whether data storage is enabled").tag(
                          name="Enabled")
 
     _manipulators = {}
@@ -115,8 +120,8 @@ class ResultSaver(ComponentBase):
 
     def _getFileName(self):
 
-        self.base_path /= Path(self.script_name).stem
-        self.base_path.mkdir(parents=True, exist_ok=True)
+        save_path = self.base_path / Path(self.script_name).stem
+        save_path.mkdir(parents=True, exist_ok=True)
 
         date = datetime.now().isoformat().replace(':', '-')
 
@@ -133,25 +138,31 @@ class ResultSaver(ComponentBase):
                                                      **attributeValues)
         formattedName = formattedName.translate(self._fileNameTranslationTable)
 
-        return str(self.base_path.joinpath(formattedName))
+        return str(save_path.joinpath(formattedName))
 
-
-    def _saveNumpy(self, data):
+    def _saveNumpy(self, eval_result):
         fileName = self._getFileName()
-        print(fileName)
-        return
-        axesUnits = ['{:C}'.format(ax.units) for ax in data.axes]
-        dataUnits = '{:C}'.format(data.data.units)
-        unitlessAxes = [ax.magnitude for ax in data.axes]
-        np.savez_compressed(fileName, axes=unitlessAxes, axesUnits=axesUnits,
-                            data=data.data.magnitude, dataUnits=dataUnits)
+
+        attributes = {
+            k: (v.magnitude if hasattr(v, "magnitude") else v)
+            for k, v in eval_result.trait_values().items()
+            if not isinstance(v, QuantityDictClass)
+        }
+
+        for key, dataset in eval_result.quantity_dict.items():
+            data = dataset.data.magnitude if isinstance(dataset.data, Q_) else dataset.data
+            axis = dataset.axes[0].magnitude if isinstance(dataset.axes[0], Q_) else dataset.axes[0]
+            attributes[key] = np.array([axis, data]).T
+
+        np.savez_compressed(fileName, **attributes, allow_pickle=False)
+
         return fileName
 
-    def process(self, data):
+    def process(self, eval_result):
         if not self.enabled:
             logging.info("Data storage is disabled, not saving results.")
             return
 
-        filename = self._saveNumpy(data)
+        filename = self._saveNumpy(eval_result)
 
         logging.info("Saved result as {}".format(filename))

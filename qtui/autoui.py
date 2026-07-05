@@ -14,7 +14,9 @@ from collections import OrderedDict
 from itertools import chain
 import numpy as np
 from qtui.flowlayout import FlowLayout
-from common.traits import Q_
+from common.traits import Q_, QuantityDict
+from qtui.mplcanvas import MPLCanvas
+
 
 def is_component_trait(x):
     return (isinstance(x, Instance) and issubclass(x.klass, ComponentBase))
@@ -378,6 +380,21 @@ def create_path_selector(component, name, prettyName, trait):
 
     return layout
 
+def create_plot_area(component, name, prettyName, trait):
+    def draw(change):
+        canvas.dataIsPower = trait.metadata.get('is_power', False)
+        canvas.drawDataSet(change["new"],
+                           trait.metadata.get('axes_labels', None),
+                           trait.metadata.get('data_label', None))
+
+    canvas = MPLCanvas()
+
+    component.observe(draw, name)
+
+    canvas.setTitle(prettyName)
+
+    return canvas
+
 def _group(trait):
     return trait.metadata.get('group', 'General')
 
@@ -427,7 +444,12 @@ def generate_component_ui(name, component):
     # pre-create group boxes
     groups = OrderedDict()
 
+    hasPlots = False
     for name, trait in traits:
+        if isinstance(trait, QuantityDict):
+            hasPlots = True
+            continue
+
         group = _group(trait)
 
         if group not in groups:
@@ -436,10 +458,13 @@ def generate_component_ui(name, component):
             groups[group] = box
 
     for name, trait in traits:
+        if isinstance(trait, QuantityDict):
+            continue
 
         prettyName = _prettyName(trait, name)
         group = _group(trait)
         layout = groups[group].layout()
+
         if (isinstance(trait, ValueRange)):
             layout.addRow(prettyName + ": ",
                           create_range_entry(component, name, trait))
@@ -498,7 +523,28 @@ def generate_component_ui(name, component):
     if not groups:
         scrollArea.hide()
 
-    return scrollArea
+    if not hasPlots:
+        return scrollArea
+
+    plotWidget = QtWidgets.QWidget()
+    plotBox = QtWidgets.QVBoxLayout(plotWidget)
+    plotBox.setContentsMargins(0, 0, 0, 0)
+
+    for name, trait in traits:
+        if not isinstance(trait, QuantityDict):
+            continue
+        prettyName = _prettyName(trait, name)
+
+        plotBox.addWidget(create_plot_area(component, name, prettyName, trait))
+
+    splitter = QtWidgets.QSplitter()
+    splitter.addWidget(plotWidget)
+    splitter.addWidget(scrollArea)
+    splitter.setStretchFactor(1, 0)
+    splitter.setStretchFactor(0, 1)
+    splitter.setChildrenCollapsible(False)
+
+    return splitter
 
 def generate_ui(component):
     stack = QtWidgets.QStackedWidget()
