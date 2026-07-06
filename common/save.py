@@ -18,7 +18,8 @@ You should have received a copy of the GNU General Public License
 along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 """
 from common.components import ComponentBase
-from common.traits import Path as PathTrait, QuantityDictClass, Q_
+from common.traits import Path as PathTrait, QuantityDictClass
+from common.units import Q_
 from enum import Enum, unique
 from traitlets import Bool, Enum as EnumTrait, Unicode
 import numpy as np
@@ -33,7 +34,7 @@ rnd_arr = np.random.random
 
 test_result = {
     # --- Scalars ---
-    "d": 10.03,
+    "d": Q_(10.03, "µm"),
     "q_val": 0.035,
     "gof": 0.0,
     "shift": 1.203,
