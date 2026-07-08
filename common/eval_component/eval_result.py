@@ -25,13 +25,12 @@ class EvalResult(ComponentBase):
 
     def process_dict(self, opt_res_dict):
         for k, v in opt_res_dict.items():
-            if isinstance(v, str):
+            if isinstance(v, (int, str, float)):
                 self.set_trait(k, v)
             elif (k in self.attributes) and isinstance(self.attributes[k], Quantity):
                 unit = self.attributes[k].default_value.units
                 self.set_trait(k, v * unit)
-            elif isinstance(v, (int, float)):
-                self.set_trait(k, v)
+
 
         arr_dict = {k: v for k, v in opt_res_dict.items() if
                     isinstance(v, np.ndarray) and (v.ndim == 2 and v.shape[1] == 2)}

@@ -18,7 +18,8 @@ You should have received a copy of the GNU General Public License
 along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 """
 from common.components import ComponentBase
-from common.traits import Path as PathTrait, QuantityDictClass
+from common.eval_component.quantity_set import QuantityDict as QuantityDictClass
+
 from common.units import Q_
 from enum import Enum, unique
 from traitlets import Bool, Enum as EnumTrait, Unicode
@@ -35,17 +36,17 @@ rnd_arr = np.random.random
 test_result = {
     # --- Scalars ---
     "d": Q_(10.03, "µm"),
-    "q_val": 0.035,
-    "gof": 0.0,
-    "shift": 1.203,
+    "q_val": Q_(0.035, ""),
+    "gof": Q_(0.0, ""),
+    "shift": Q_(1.203, ""),
     "converged": True,
 
     # --- Strings ---
     # "timestamp": "2026-06-29_12:35:00",
     "timestamp": "2026-06-29_13:35:00000000000000000000000000000",
 
-    # --- 1D NumPy Arrays ---
-    "delta_n": np.array([3*np.arange(1, 4002), rnd_arr(4001)]).T,
+    # --- Datasets ( Q_(x) ) ---
+    # "delta_n": Data# np.array([3*np.arange(1, 4002), rnd_arr(4001)]).T,
     "delta_alpha": np.array([3*np.arange(1, 4002), rnd_arr(4001)]).T,
     "n0": np.array([3*np.arange(1, 4002), rnd_arr(4001)]).T,
     "n": np.array([3*np.arange(1, 4002), rnd_arr(4001)]).T,
