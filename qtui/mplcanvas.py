@@ -61,7 +61,7 @@ class MPLCanvas(QtWidgets.QGroupBox):
     dataSet = None
     prevDataSet = None
     _prevAxesLabels = None
-    _axesLabels = None
+    _axesLabel = None
     _prevDataLabel = None
     _dataLabel = None
 
@@ -138,7 +138,16 @@ class MPLCanvas(QtWidgets.QGroupBox):
         if quantity_key is None:
             return
         self.dataSet = self.quantity_dict[quantity_key]
-        self._replot()
+
+        axes_labels = self.dataSet.axes_labels
+        if len(axes_labels) != 0:
+            self._axesLabel = axes_labels[0]
+        if not self.dataSet.data_label:
+            self._dataLabel = quantity_key
+        else:
+            self._dataLabel = self.dataSet.data_label
+
+        self._replot(redraw_data_label=True, redraw_axes_labels=True)
 
     def _redraw_artists(self, *args):
         if not self._isLiveData:
@@ -189,9 +198,9 @@ class MPLCanvas(QtWidgets.QGroupBox):
             self._dataSetToLines(self.prevDataSet, self._lines[0])
         self._dataSetToLines(self.dataSet, self._lines[1])
 
-        if self._axesLabels and redraw_axes_labels:
+        if self._axesLabel and redraw_axes_labels:
             self.axes.set_xlabel('{} [{:C~}]'.format(
-                self._axesLabels[0],
+                self._axesLabel,
                 self.dataSet.axes[0].units))
 
         if self._dataLabel and redraw_data_label:
@@ -249,7 +258,7 @@ class MPLCanvas(QtWidgets.QGroupBox):
                     redraw_axes = True
                     break
 
-        redraw_axes_labels = (self._axesLabels != axes_labels or
+        redraw_axes_labels = (self._axesLabel != axes_labels or
                               self.prevDataSet and self.dataSet and
                               self.prevDataSet.axes[0].units !=
                               self.dataSet.axes[0].units)
@@ -258,7 +267,7 @@ class MPLCanvas(QtWidgets.QGroupBox):
                              self.prevDataSet.data.units !=
                              self.dataSet.data.units)
 
-        self._axesLabels = axes_labels
+        self._axesLabel = axes_labels
         self._dataLabel = data_label
 
         self._replot(redraw_axes, redraw_axes_labels, redraw_data_label)

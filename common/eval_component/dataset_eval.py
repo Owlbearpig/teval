@@ -93,9 +93,7 @@ class DatasetEval(ComponentBase):
     wp = Quantity(Q_(10, "THz"), group="Initial optimization values")
     wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group="Optimization bounds")
 
-    current_result = Instance(EvalResult).tag(name="Current result",
-                                            data_label="y",
-                                            axes_labels=["frequency"])
+    current_result = Instance(EvalResult)
 
     result_saver = Instance(ResultSaver)
 
@@ -142,9 +140,6 @@ class DatasetEval(ComponentBase):
         else:
             return self, self.sub_dataset
 
-    def load_result(self, path):
-        pass
-
     def set_y_meas(self):
         meas_quantity = self.settings.eval_opt.meas_quantity
         func = self.dataset.func_map(meas_quantity)
@@ -181,12 +176,9 @@ class DatasetEval(ComponentBase):
 
     @observe("selected_result_path")
     def set_result(self, change):
-        result_dict = dict(np.load(change["new"], allow_pickle=False))
-        for k, v in result_dict.items():
-            if v.ndim != 0:
-                continue
-            result_dict[k] = v.item()
-        self.current_result.process_dict(result_dict)
+        result_path = change["new"]
+
+        self.current_result.load_result(result_path)
 
     @observe("cost_fun")
     def setup_cost(self, change=None):

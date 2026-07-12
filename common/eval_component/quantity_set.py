@@ -21,25 +21,21 @@ along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 import numpy as np
 from common.units import Q_
 
-class QuantityDict(dict):
-    def __init__(self, arr_dict=None):
-        super(QuantityDict, self).__init__()
+class DataSetDict(dict):
+    def __init__(self, dataset_dict=None):
+        super(DataSetDict, self).__init__()
 
-        if arr_dict is None:
-            self[0] = DataSet()
+        if dataset_dict is None:
+            self[""] = DataSet()
         else:
-            for k, v in arr_dict.items():
-                if v.ndim != 2 or v.shape[1] != 2:
-                    continue
-                self[k] = DataSet(data=Q_(v[:, 1]), axes=[Q_(v[:, 0])])
-
+            self.update(dataset_dict)
 
     def checkConsistency(self):
         for v in self.values():
             v.checkConsistency()
 
 class DataSet:
-    def __init__(self, data=None, axes=None):
+    def __init__(self, data=None, axes=None, axes_labels=None, data_label=""):
         super().__init__()
 
         if data is None:
@@ -48,6 +44,11 @@ class DataSet:
             axes = []
         self.data = data
         self.axes = axes
+
+        if axes_labels is None:
+            axes_labels = []
+        self.axes_labels = axes_labels
+        self.data_label = data_label
 
     @property
     def isConsistent(self):
@@ -87,6 +88,6 @@ if __name__ == '__main__':
         "sam_mod": np.ones(4001)*3.1415,
     }
 
-    result_dict = QuantityDict(test_dict, axes=[freq_axis])
+    result_dict = DataSetDict(test_dict, axes=[freq_axis])
 
     print(result_dict["n0"])
