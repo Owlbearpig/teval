@@ -9,7 +9,7 @@ import h5py
 
 class EvalResult(ComponentBase):
 
-    quantity_dict = QuantityDict().tag(data_label="Amplitude", axes_labels=["Ti22me"])
+    quantity_dict = QuantityDict()
 
     d = Quantity(Q_(0, "µm"), read_only=True)
     q_val = Quantity(Q_(0.0, ""), read_only=True)
@@ -26,7 +26,7 @@ class EvalResult(ComponentBase):
         self.process_dict(opt_res_dict)
 
     def load_result(self, res_path):
-        res_dict = None
+        res_dict = {}
         if res_path.suffix == ".npz":
             res_dict = self.parse_npz(res_path)
         elif res_path.suffix == ".hdf5":

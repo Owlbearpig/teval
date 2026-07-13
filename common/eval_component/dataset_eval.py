@@ -24,6 +24,11 @@ from common.eval_component.transfer_functions import (t_tmm_model_1layer, model_
 from common.eval_component.shgo_settings import SHGOOptions, MinimizerOptions
 from common.save import ResultSaver, test_result
 from common.eval_component.eval_result import EvalResult
+from concurrent.futures import ThreadPoolExecutor
+from PySide6.QtCore import QObject, Signal
+
+class ProgressSignalCarrier(QObject):
+    progress_changed = Signal(float)
 
 def abs_cost_fun(y_meas, y_mod):
 
@@ -84,7 +89,7 @@ class DatasetEval(ComponentBase):
     selected_result_path = TPath(Path(""))
 
     d_opt_axis_bounds = ValueRange([Q_(500, "µm"), Q_(700, "µm", )], group="Q-Space eval")
-    d_opt_axis_step = Quantity(Q_(50, "µm"), group="Q-Space eval")
+    d_opt_axis_step = Quantity(Q_(10, "µm"), group="Q-Space eval")
     use_custom_d_opt_axis = Bool(True, group="Q-Space eval")
 
     sig0 = Quantity(Q_(10, "S/cm"), group="Initial optimization values")
@@ -92,6 +97,9 @@ class DatasetEval(ComponentBase):
 
     wp = Quantity(Q_(10, "THz"), group="Initial optimization values")
     wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group="Optimization bounds")
+
+    optimization_progress = Float(0, min=0, max=1,
+                                  group="Optimization progress", read_only=True).tag(name="Progress")
 
     current_result = Instance(EvalResult)
 
@@ -121,6 +129,16 @@ class DatasetEval(ComponentBase):
 
     def __enter__(self):
         self.settings.load_configuration(self)
+
+    def update_progress(self, progress_value: float):
+        """
+        Slot method that PySide6 will safely execute on the Main GUI Thread.
+        """
+        try:
+            # Directly update the traitlet property
+            self.set_trait("optimization_progress", progress_value)
+        except Exception as exc:
+            logging.error(f"Failed to update progress traitlet: {exc}")
 
     def _link_sub_dataset(self, dataset: DataSet = None):
         if dataset is None:
@@ -238,14 +256,29 @@ class DatasetEval(ComponentBase):
     def fit_1layer(self):
 
         qs_eval = QSpaceEval(self)
-        # qs_res = qs_eval.q_space_eval()
-        qs_res = test_result.copy()
+        qs_res = qs_eval.q_space_eval()
+        # qs_res = test_result.copy()
 
-        self.current_result.process_dict(qs_res)
+        # self.current_result.process_dict(qs_res)
 
-        self.result_saver.process(self.current_result)
+        # self.result_saver.process(self.current_result)
 
         return qs_res
+
+
+    # Inside your DatasetEval class:
+    @action("Fit 1 layer mp")
+    def fit_1layer_mp(self):
+
+        progress_carrier = ProgressSignalCarrier()
+        progress_carrier.progress_changed.connect(self.update_progress)
+
+        def bg_worker():
+            qs_eval = QSpaceEval(self)
+            qs_res = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(bg_worker)
 
     @action("Fit 2 layers")
     def fit_2layer(self):

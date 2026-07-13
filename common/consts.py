@@ -4,6 +4,7 @@ from scipy.constants import epsilon_0 as eps0
 from numpy import pi
 import os
 from os import name as os_name
+# from common.traits import Q_
 
 if 'posix' in os_name:
     result_dir = Path(r"/home/alex/MEGA/AG/Projects/Conductivity/ErrorAnalysis")

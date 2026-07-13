@@ -673,7 +673,7 @@ class DataSet(ComponentBase):
         if self.settings.sample_properties.default_values:
             logging.warning(f"Using default sample properties: {self.settings.sample_properties}")
 
-        d = self.settings.sample_properties.d
+        d = self.settings.sample_properties.d.magnitude
 
         og_pp_opt = deepcopy(self.settings.pp_opt)
 
@@ -703,6 +703,7 @@ class DataSet(ComponentBase):
 
         with np.errstate(divide='ignore', invalid='ignore'):
             n = 1 + phi_corrected * c_thz / (omega * d)
+
             n[0] = n[1]
             n[n < 0] = 1
             kap = -c_thz * np.log(np.abs(sam_fd[:, 1] / ref_fd[:, 1]) * (1 + n) ** 2 / (4 * n)) / (omega * d)
@@ -740,7 +741,7 @@ class DataSet(ComponentBase):
         else:
             meas = self.get_measurement(*sub_pnt)
             single_layer_approx = self.single_layer_eval(meas)
-            t = self.transmission(sub_pnt)
+            t = self.transmission(meas)
 
         ret = {"meas": meas, "single_layer_approx": single_layer_approx, "t": t}
 

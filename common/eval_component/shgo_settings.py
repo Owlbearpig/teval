@@ -35,3 +35,14 @@ class SHGOOptions(ComponentBase):
 
         self.minimizer_kwargs = MinimizerOptions()
 
+    def get_shgo_options(self):
+        return {attr: getattr(self, attr) for attr in self.traits(group=self.shgo_options_grp)}
+
+    def get_minimizer_kwargs(self):
+        traits = self.minimizer_kwargs.traits(group=self.minimizer_kwargs.minimizer_opt_grp)
+        return {attr: getattr(self.minimizer_kwargs, attr) for attr in traits}
+
+if __name__ == '__main__':
+    shgo_options = SHGOOptions()
+    opt = shgo_options.get_minimizer_kwargs()
+    print(opt)

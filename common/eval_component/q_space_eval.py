@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy
@@ -7,7 +9,11 @@ from common.consts import c_thz, GREEN, RESET
 from tqdm import tqdm
 from scipy.optimize import shgo
 from scipy.signal import iirnotch, filtfilt
-from common.eval_component.shgo_settings import SHGOOptions, MinimizerOptions
+
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
+from common.eval_component.single_opt import optimize_transmission
+
 
 class QSpaceEval:
 
@@ -18,11 +24,11 @@ class QSpaceEval:
         self.freq_axis = self.dataset.freq_axis
 
         self.model_kwargs = {}
-        self.cost_fun = self.dataset_eval.cost_fun
-        self.transmission_model = self.dataset_eval.transmission_model
+        self.cost_fun = self.dataset_eval.cost_fun.value
+        self.transmission_model = self.dataset_eval.transmission_model.value
 
         self.opt_state = {
-            "d": self.settings.sample_properties.d,
+            "d": self.settings.sample_properties.d.magnitude,
             "q_min": np.inf
         }
 
@@ -80,7 +86,7 @@ class QSpaceEval:
 
         return uncertainties
 
-    def calc_q_val(self, opt_res_, en_plot=False):
+    def calc_q_val(self, opt_res_):
         q_space_range = self.settings.eval_opt.q_space_range
         q_space_idx_range = f_axis_idx_map(opt_res_["freq_axis"], q_space_range)
 
@@ -104,19 +110,9 @@ class QSpaceEval:
         q_val_axis = np.abs(y_ft)[0:]
         t_axis = t_axis[0:]
 
-        fp_spacing = self.settings.sample_properties.fp_spacing
+        fp_spacing = self.settings.sample_properties.fp_spacing.magnitude
         t0 = np.argmin(np.abs(t_axis - (fp_spacing - 2)))
         t1 = np.argmin(np.abs(t_axis - (fp_spacing + 2)))
-        if en_plot:
-            plt.figure("qval")
-            plt.plot(t_axis, q_val_axis, label=str(opt_res_["d"]) + " µm")
-            plt.axvline(x=t_axis[t0], color='r', linestyle='--', linewidth=2)
-            plt.axvline(x=t_axis[t1], color='r', linestyle='--', linewidth=2)
-            # plt.plot(q_val, label=opt_res_["d"])
-            plt.xlabel("Time (ps)")
-            plt.ylabel("Oscillation amplitude")
-            plt.legend()
-            plt.show()
 
         # t0, t1 = 0.85*3*t_diff, 1.15*3*t_diff
         # t0_idx, t1_idx = np.argmin(np.abs(t0-t_axis)), np.argmin(np.abs(t1-t_axis))
@@ -142,11 +138,9 @@ class QSpaceEval:
         return {"q_val": q_val, "q_sum": q_sum, "q_y": y_filtered}
 
     def model_opt(self, d_, shift, f_idx_range_):
-        min_kwargs_comp = self.dataset_eval.shgo_options.minimizer_kwargs
-        minimizer_kwargs = min_kwargs_comp.traits(group=MinimizerOptions.minimizer_opt_grp)
-        minimizer_kwargs["method"] = min_kwargs_comp.method
-
-        shgo_options = self.dataset_eval.shgo_options.traits(group=SHGOOptions.shgo_options_grp)
+        minimizer_kwargs = self.dataset_eval.shgo_options.get_minimizer_kwargs()
+        minimizer_kwargs["method"] = self.dataset_eval.shgo_options.minimizer_kwargs.method.value
+        shgo_options = self.dataset_eval.shgo_options.get_shgo_options()
 
         self.set_opt_consts()
 
@@ -172,7 +166,7 @@ class QSpaceEval:
         for f_idx, f_ in enumerate(freq_axis):
             def opt_fun(p):
                 n = p[0] + 1j * p[1]
-                t_mod = self.transmission_model(n, f_, self.model_kwargs)
+                t_mod = self.transmission_model(n, f_, **self.model_kwargs)
 
                 return self.cost_fun(t_exp_[f_idx], t_mod)
 
@@ -224,10 +218,10 @@ class QSpaceEval:
                     "d": d_, "n": n_opt_res_.real, "shift": shift,
                     "k": n_opt_res_.imag, "alpha": alpha_, "n0": n0_}
         # fp_spacing_estimate = ...
-        q_val_calc_res = self.calc_q_val(opt_res_, en_plot=False)
+        q_val_calc_res = self.calc_q_val(opt_res_)
         opt_res_.update(q_val_calc_res)
 
-        t_mod_ = self.transmission_model(n_opt_res_, freq_axis, self.model_kwargs)
+        t_mod_ = self.transmission_model(n_opt_res_, freq_axis, **self.model_kwargs)
 
         opt_res_["t_mod"] = t_mod_
         opt_res_["sam_mod"] = self.model_kwargs["meas_quants"]["ref_fd"][f_idx_range_, 1] * t_mod_
@@ -237,14 +231,6 @@ class QSpaceEval:
     def q_space_eval(self, fit_range=None, **kwargs):
         if fit_range is None:
             fit_range = self.settings.eval_opt.fit_range
-
-        """ # TODO add to final result dict and plot
-        for k in simple_eval_res:
-            plt.figure()
-            plt.plot(self.freq_axis, simple_eval_res[k], label=k)
-            plt.legend()
-        plt.show()
-        """
 
         f_idx_fit_range = f_axis_idx_map(self.freq_axis, fit_range)
 
@@ -271,7 +257,9 @@ class QSpaceEval:
                         self.opt_state["q_min"] = q_val
 
         if self.dataset_eval.use_custom_d_opt_axis:
-            d_axis = np.arange(*self.dataset_eval.d_opt_axis_bounds, self.dataset_eval.d_opt_axis_step)
+            bnds = self.dataset_eval.d_opt_axis_bounds
+            step = self.dataset_eval.d_opt_axis_step
+            d_axis = np.arange(bnds[0].magnitude, bnds[1].magnitude, step.magnitude)
             opt_d_axis(d_axis)
         else:
             iterations = 3
@@ -301,47 +289,64 @@ class QSpaceEval:
         for q in smoothed_quantities:
             best_res[q] = moving_average(best_res[q], iterations=sas[0], n=sas[1])
 
-        fig_num = "Optimal result"
-        if not plt.fignum_exists(fig_num):
-            fig, (ax0, ax1) = plt.subplots(2, 1, num=fig_num, sharex=True, gridspec_kw={"hspace": 0})
-            ax1.set_xlabel("Frequency (THz)")
-            ax0.set_ylabel("Refractive index")
-            ax1.set_ylabel("Extinction coefficient")
-        else:
-            fig = plt.figure(fig_num)
-            ax0, ax1 = fig.get_axes()
-        if "label" in kwargs:
-            label = kwargs["label"] + f" ({d_opt} µm)"
-        else:
-            label = f"{d_opt} µm"
-
-        ax0.plot(best_res["freq_axis"], best_res["n"], label=label)
-        ax0.fill_between(best_res["freq_axis"],
-                         best_res["n"] + delta_n.real,
-                         best_res["n"] - delta_n.real, alpha=0.3)
-
-        ax1.plot(best_res["freq_axis"], best_res["k"], label=label)
-        ax1.fill_between(best_res["freq_axis"],
-                         best_res["k"] + delta_n.imag,
-                         best_res["k"] - delta_n.imag, alpha=0.3)
-
-        plt.figure("Absorption coefficient optimum")
-        plt.plot(best_res["freq_axis"], best_res["alpha"], label=label)
-        plt.fill_between(best_res["freq_axis"],
-                         best_res["alpha"] + delta_alpha,
-                         best_res["alpha"] - delta_alpha, alpha=0.3)
-        plt.xlabel("Frequency (THz)")
-        plt.ylabel("Absorption coefficient (1/cm)")
-
-        plt.figure("Q-Space maxima")
-        plt.plot(d_vals, q_vals, marker="o")
-        plt.xlabel("Thickness (µm)")
-        plt.ylabel("Normalized maximum of q-space")
-        # plt.legend()
-        # plt.show()
-
-        plt.figure("Spectrum")
-        plt.plot(best_res["freq_axis"], 20 * np.log10(np.abs(best_res["sam_mod"])), label="Model")
+        best_res["d_vals"] = d_vals
+        best_res["d_opt"] = d_opt
+        best_res["delta_n"] = delta_n
+        best_res["delta_alpha"] = delta_alpha
 
         return best_res
 
+    def q_space_eval_mp(self, fit_range=None, progress_carrier=None, **kwargs):
+
+        if fit_range is None:
+            fit_range = self.settings.eval_opt.fit_range
+
+        f_idx_fit_range = f_axis_idx_map(self.freq_axis, fit_range)
+
+        self.set_opt_consts()
+
+        opt_config = {
+            "f_idx_range_": f_idx_fit_range,
+            "freq_axis": self.freq_axis,
+            "single_layer_approx": self.model_kwargs["single_layer_approx"],
+            "t_exp": self.model_kwargs["meas_quants"]["t_exp"],
+            "transmission_model": self.transmission_model,
+            "cost_fun": self.cost_fun,
+            "minimizer_kwargs": self.dataset_eval.shgo_options.get_minimizer_kwargs(),
+            "shgo_options": self.dataset_eval.shgo_options.get_shgo_options()
+        }
+
+        tasks = []
+        if self.dataset_eval.use_custom_d_opt_axis:
+            bnds = self.dataset_eval.d_opt_axis_bounds
+            step = self.dataset_eval.d_opt_axis_step
+            d_axis = np.arange(bnds[0].magnitude, bnds[1].magnitude, step.magnitude)
+        else:
+            d_axis = np.linspace(self.opt_state["d"] - 20, self.opt_state["d"] + 20, 5)
+
+        for d in d_axis:
+            for shift in [0.0]:
+                tasks.append((d, shift))
+
+        opt_results = []
+        with ProcessPoolExecutor(max_workers=8) as executor:
+            worker_func = partial(optimize_transmission, config_dict=opt_config)
+            futures = [executor.submit(worker_func, d, shift) for d, shift in tasks]
+
+            for fut_idx, future in enumerate(futures):
+                res = future.result()
+                logging.info(res["d"])
+
+                progress = (fut_idx + 1) / len(futures)
+                if progress_carrier is not None:
+                    progress_carrier.progress_changed.emit(progress)
+
+                q_val_calc_res = self.calc_q_val(res)
+                res.update(q_val_calc_res)
+                opt_results.append(res)
+
+        opt_results = sorted(opt_results, key=lambda res: res["d"])
+
+        best_res = opt_results[np.argmin([r["q_val"] for r in opt_results])]
+
+        return best_res

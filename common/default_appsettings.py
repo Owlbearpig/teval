@@ -326,6 +326,7 @@ class SampleProperties(ComponentBase):
     d_film = TQuantity(Q_(0.0, "µm")).tag(name="Film thickness")
     layers = Int(1)
     default_values = Bool(True, read_only=True)
+    fp_spacing = TQuantity(Q_(12, "fs"))
 
 
 class SaveSettings(ComponentBase):
