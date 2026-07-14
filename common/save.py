@@ -44,7 +44,7 @@ test_result = {
 
     # --- Strings ---
     # "timestamp": "2026-06-29_12:35:00",
-    "timestamp": "2026-06-29_13:35:00000000000000000000000000000",
+    "timestamp": str(datetime.now().isoformat()),
 
     # --- Datasets ( Q_(x) ) ---
     "delta_n": DataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "S"), axes_labels=["Frequency"]),

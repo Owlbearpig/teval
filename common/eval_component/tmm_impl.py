@@ -1,7 +1,20 @@
 from tmm import array, list_snell, seterr, cos, zeros, interface_r, interface_t, make_2x2_array, exp
 import numpy as np
 
+def coh_tmm_wrapper(pol, n_list, d_list, th_0, lam_vac):
+    lam_vac = array(lam_vac)
+    if lam_vac.ndim == 0:
+        return coh_tmm(pol, n_list, d_list, th_0, lam_vac)
+    elif lam_vac.ndim == 1:
+        n_arr = np.zeros((len(n_list), len(lam_vac)), dtype=complex)
+        for n_idx in range(len(n_list)):
+            n_arr[n_idx] = n_list[n_idx] * np.ones_like(lam_vac, dtype=complex)
 
+        t_arr = np.zeros(len(lam_vac), dtype=complex)
+        for f_idx, lv in enumerate(lam_vac):
+            t_arr[f_idx] = coh_tmm(pol, n_arr[:, f_idx], d_list, th_0, lv)
+
+        return t_arr
 
 def coh_tmm(pol, n_list, d_list, th_0, lam_vac):
 

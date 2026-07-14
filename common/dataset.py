@@ -703,10 +703,12 @@ class DataSet(ComponentBase):
 
         with np.errstate(divide='ignore', invalid='ignore'):
             n = 1 + phi_corrected * c_thz / (omega * d)
+            n = np.nan_to_num(n, nan=1)
 
             n[0] = n[1]
             n[n < 0] = 1
             kap = -c_thz * np.log(np.abs(sam_fd[:, 1] / ref_fd[:, 1]) * (1 + n) ** 2 / (4 * n)) / (omega * d)
+            kap = np.nan_to_num(kap, nan=0)
             alpha = 1e4 * 2 * omega * kap / c_thz
             refr_idx = n + 1j * kap
 

@@ -1,6 +1,6 @@
 import numpy as np
 from common.consts import c_thz
-from common.eval_component.tmm_impl import coh_tmm
+from common.eval_component.tmm_impl import coh_tmm_wrapper
 
 # n is the free parameter of the unknown layer
 
@@ -13,7 +13,7 @@ def t_tmm_model_1layer(n, freq, **opt_kwargs):
     lam_vac = c_thz / freq
     w_ = 2 * np.pi * freq
 
-    e_sam = coh_tmm(pol, n_list, d_list, th_0, lam_vac)
+    e_sam = coh_tmm_wrapper(pol, n_list, d_list, th_0, lam_vac)
     e_ref = np.exp(1j * (d * w_ / c_thz))
 
     t = e_sam / e_ref
@@ -34,7 +34,7 @@ def t_tmm_model_2layer(n, freq, **opt_kwargs):
     lam_vac = c_thz / freq
     w_ = 2 * np.pi * freq
 
-    e_sam = coh_tmm(pol, n_list, d_list, th_0, lam_vac)
+    e_sam = coh_tmm_wrapper(pol, n_list, d_list, th_0, lam_vac)
     e_ref = np.exp(1j * ((d + h) * w_ / c_thz))
 
     t = e_sam / e_ref

@@ -1,19 +1,20 @@
 import logging
-
 import numpy as np
-import matplotlib.pyplot as plt
 import scipy
+
+from common.default_appsettings import AppSettings
 from common.functions import f_axis_idx_map, moving_average
 from common.eval_component.transfer_functions import model_1layer, transferfunction_error, dtdn, dtdd
+from common.eval_component.quantity_set import DataSet
+from common.units import Q_
 from common.consts import c_thz, GREEN, RESET
 from tqdm import tqdm
 from scipy.optimize import shgo
 from scipy.signal import iirnotch, filtfilt
-
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from common.eval_component.single_opt import optimize_transmission
-
+from datetime import datetime
 
 class QSpaceEval:
 
@@ -29,10 +30,11 @@ class QSpaceEval:
 
         self.opt_state = {
             "d": self.settings.sample_properties.d.magnitude,
+            "shift": 0,
             "q_min": np.inf
         }
 
-    def set_opt_consts(self):
+    def set_model_kwargs(self):
         single_layer_properties = self.dataset.get_single_layer_properties()
         meas = single_layer_properties["meas"]
         ref_meas = self.dataset.get_nearest_ref(meas)
@@ -49,7 +51,7 @@ class QSpaceEval:
 
         meas_quants = self.model_kwargs["meas_quants"]
 
-        f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.settings.plot_opt.plot_range)
+        f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.settings.eval_opt.fit_range)
 
         sam_fd_, sam_fd_std = meas_quants["sam_fd"], meas_quants["sam_fd_std"]
         ref_fd_, ref_fd_std = meas_quants["ref_fd"], meas_quants["ref_fd_std"]
@@ -137,173 +139,13 @@ class QSpaceEval:
 
         return {"q_val": q_val, "q_sum": q_sum, "q_y": y_filtered}
 
-    def model_opt(self, d_, shift, f_idx_range_):
-        minimizer_kwargs = self.dataset_eval.shgo_options.get_minimizer_kwargs()
-        minimizer_kwargs["method"] = self.dataset_eval.shgo_options.minimizer_kwargs.method.value
-        shgo_options = self.dataset_eval.shgo_options.get_shgo_options()
-
-        self.set_opt_consts()
-
-        freq_axis = self.freq_axis[f_idx_range_]
-
-        n0 = self.model_kwargs["single_layer_approx"]["refr_idx"]
-        n0_ = n0[f_idx_range_]
-
-        t_exp = self.model_kwargs["meas_quants"]["t_exp"]
-        t_exp_ = t_exp[f_idx_range_, 1]  # * np.exp(1j * 2*np.pi*freq_axis*0.150)
-
-        shift_fs = shift * 1e-3
-        phase_shift = np.exp(1j * 2*np.pi * shift_fs * freq_axis)
-        t_exp_ *= phase_shift
-
-        # phi_corrected = self.ana_eval_res["phi_corrected"][f_idx_range_]
-        # t_exp_ = np.abs(t_exp_) * np.exp(1j * phi_corrected)
-
-        self.model_kwargs["d"] = d_
-
-        gof = 0
-        n_opt_res_ = np.zeros_like(freq_axis, dtype=complex)
-        for f_idx, f_ in enumerate(freq_axis):
-            def opt_fun(p):
-                n = p[0] + 1j * p[1]
-                t_mod = self.transmission_model(n, f_, **self.model_kwargs)
-
-                return self.cost_fun(t_exp_[f_idx], t_mod)
-
-
-            n0_f_idx = n0_[f_idx]
-            n_min, n_max = 0.90 * n0_f_idx.real, 1.10 * n0_f_idx.real
-            k_min, k_max = 0.10 * n0_f_idx.imag, 1.10 * n0_f_idx.imag
-            bounds = [(n_min, n_max), (k_min, k_max)]
-
-            conv, i_ = False, 0
-            while not conv:
-                i_ += 1
-                shgo_opt_res_ = shgo(opt_fun,
-                                     bounds=bounds,
-                                     minimizer_kwargs=minimizer_kwargs,
-                                     options=shgo_options,
-                                     # n=1, iters=200,
-                                     )
-
-                x = shgo_opt_res_.x
-                n_opt_res_[f_idx] = x[0] + 1j * x[1]
-                gof += shgo_opt_res_.fun
-
-                if f_idx == 0:
-                    break
-
-                diff = (n_opt_res_[f_idx].real - n_opt_res_[f_idx - 1].real)
-                if np.abs(diff) < 0.10:
-                    conv = True
-                else:
-                    c0, c1 = 0.90 + i_ * 0.02, 1.10 - i_ * 0.02
-                    n_bounds = (n0_f_idx.real * c0, n0_f_idx.real * c1)
-                    k_bounds = (n0_f_idx.imag * c0, n0_f_idx.imag * c1)
-
-                    bounds = [(min(n_bounds), max(n_bounds)), (min(k_bounds), max(k_bounds))]
-                if i_ > 4:
-                    n_prev = n_opt_res_[f_idx - 1]
-                    c0, c1 = 0.90 + i_ * 0.01, 1.10 - i_ * 0.01
-                    n_bounds = (n_prev.real * c0, n_prev.real * c1)
-                    k_bounds = (n_prev.imag * c0, n_prev.imag * c1)
-
-                    bounds = [(min(n_bounds), max(n_bounds)), (min(k_bounds), max(k_bounds))]
-                if i_ > 5:
-                    break
-
-        alpha_ = freq_axis * 4 * np.pi * n_opt_res_.imag / (1e-4 * c_thz)
-
-        opt_res_ = {"freq_axis": freq_axis, "gof": gof / len(freq_axis),
-                    "d": d_, "n": n_opt_res_.real, "shift": shift,
-                    "k": n_opt_res_.imag, "alpha": alpha_, "n0": n0_}
-        # fp_spacing_estimate = ...
-        q_val_calc_res = self.calc_q_val(opt_res_)
-        opt_res_.update(q_val_calc_res)
-
-        t_mod_ = self.transmission_model(n_opt_res_, freq_axis, **self.model_kwargs)
-
-        opt_res_["t_mod"] = t_mod_
-        opt_res_["sam_mod"] = self.model_kwargs["meas_quants"]["ref_fd"][f_idx_range_, 1] * t_mod_
-
-        return opt_res_
-
-    def q_space_eval(self, fit_range=None, **kwargs):
+    def q_space_eval_mp(self, fit_range=None, progress_carrier=None):
         if fit_range is None:
             fit_range = self.settings.eval_opt.fit_range
 
         f_idx_fit_range = f_axis_idx_map(self.freq_axis, fit_range)
 
-        opt_results = []
-        def opt_d_axis(d_axis_, it_prog=None):
-            custom_format = f"{GREEN}{{l_bar}}{{bar}}{GREEN}{{r_bar}}{RESET}"
-            pbar_ = tqdm(d_axis_, total=len(d_axis_), colour="green", bar_format=custom_format)
-            for d in pbar_:
-                for shift in [*np.arange(-0, 1, 1.0)]:
-                    desc = ""
-                    if it_prog:
-                        desc += f"Step {it_prog[0] + 1}/{it_prog[1]}: "
-
-                    desc += f"Optimizing thickness {np.round(d, 2)} µm"
-                    desc += f" of {d_axis_}"
-                    pbar_.set_description(desc)
-                    opt_res = self.model_opt(d, shift, f_idx_fit_range)
-                    opt_results.append(opt_res)
-
-                    q_val = opt_res["q_val"]
-                    if q_val < self.opt_state["q_min"]:
-                        self.opt_state["d"] = d
-                        self.opt_state["shift"] = shift
-                        self.opt_state["q_min"] = q_val
-
-        if self.dataset_eval.use_custom_d_opt_axis:
-            bnds = self.dataset_eval.d_opt_axis_bounds
-            step = self.dataset_eval.d_opt_axis_step
-            d_axis = np.arange(bnds[0].magnitude, bnds[1].magnitude, step.magnitude)
-            opt_d_axis(d_axis)
-        else:
-            iterations = 3
-            step_size = [20, 5, 1]
-            for i in range(iterations):
-                d0 = self.opt_state["d"]
-                d_min, d_max = d0 - step_size[i], d0 + step_size[i]
-                d_axis = np.linspace(d_min, d_max, 5)
-
-                opt_d_axis(d_axis, it_prog=(i, iterations))
-
-        opt_results = sorted(opt_results, key=lambda res: res["d"])
-
-        d_vals = np.array([res["d"] for res in opt_results])
-        q_vals = np.array([res["q_val"] for res in opt_results])
-        q_vals = q_vals / np.max(q_vals)
-
-        best_res = opt_results[np.argmin(q_vals)]
-        d_opt = np.round(best_res["d"], 2)
-
-        best_res = self.calc_uncertainties(best_res)
-
-        delta_n, delta_alpha = best_res["delta_n"], best_res["delta_alpha"]
-
-        sas = (5, 20)
-        smoothed_quantities = ["n", "k", "alpha"]
-        for q in smoothed_quantities:
-            best_res[q] = moving_average(best_res[q], iterations=sas[0], n=sas[1])
-
-        best_res["d_vals"] = d_vals
-        best_res["d_opt"] = d_opt
-        best_res["delta_n"] = delta_n
-        best_res["delta_alpha"] = delta_alpha
-
-        return best_res
-
-    def q_space_eval_mp(self, fit_range=None, progress_carrier=None, **kwargs):
-
-        if fit_range is None:
-            fit_range = self.settings.eval_opt.fit_range
-
-        f_idx_fit_range = f_axis_idx_map(self.freq_axis, fit_range)
-
-        self.set_opt_consts()
+        self.set_model_kwargs()
 
         opt_config = {
             "f_idx_range_": f_idx_fit_range,
@@ -316,37 +158,126 @@ class QSpaceEval:
             "shgo_options": self.dataset_eval.shgo_options.get_shgo_options()
         }
 
-        tasks = []
+        def process_tasks(tasks, iteration=None):
+            if iteration is not None:
+                it_idx, tot_it = iteration
+                logging.info(f"Thickness refinement iteration {it_idx} / {tot_it}")
+            if iteration is None or iteration[0] == 0:
+                logging.info(f"Starting optimization")
+
+            results = []
+            with ProcessPoolExecutor(max_workers=8) as executor:
+                worker_func = partial(optimize_transmission, config_dict=opt_config)
+                futures = [executor.submit(worker_func, d, shift) for d, shift in tasks]
+                total_tasks = len(futures)
+
+                for fut_idx, future in enumerate(futures):
+                    res = future.result()
+
+                    completed_tasks = fut_idx + 1
+                    percentage = (completed_tasks / total_tasks) * 100
+
+                    progress_str = f"Processed task {completed_tasks}/{total_tasks} ({percentage:.1f}%)"
+                    logging.info(progress_str)
+                    info_str = f"Finished optimizing thickness {np.round(res['d'], 2)} µm "
+                    info_str += f"with a shift of {res['shift']} fs"
+                    logging.info(info_str)
+
+                    progress = (fut_idx + 1) / len(futures)
+                    if progress_carrier is not None:
+                        progress_carrier.progress_changed.emit(progress)
+
+                    # fp_spacing_estimate = ... or use GUI value
+                    q_val_calc_res = self.calc_q_val(res)
+                    res.update(q_val_calc_res)
+
+                    q_val = q_val_calc_res["q_val"]
+                    if q_val < self.opt_state["q_min"]:
+                        self.opt_state["d"] = res["d"]
+                        self.opt_state["shift"] = res["shift"]
+                        self.opt_state["q_min"] = q_val
+
+                    results.append(res)
+
+            results = sorted(results, key=lambda res: res["d"])
+
+            return results
+
+        shift_axis = [*np.arange(-0, 3, 1.0)]
         if self.dataset_eval.use_custom_d_opt_axis:
             bnds = self.dataset_eval.d_opt_axis_bounds
             step = self.dataset_eval.d_opt_axis_step
             d_axis = np.arange(bnds[0].magnitude, bnds[1].magnitude, step.magnitude)
+
+            tasks = []
+            for d in d_axis:
+                for shift in shift_axis:
+                    tasks.append((d, shift))
+
+            opt_results = process_tasks(tasks)
         else:
-            d_axis = np.linspace(self.opt_state["d"] - 20, self.opt_state["d"] + 20, 5)
+            iterations = 3
+            step_size = [20, 5, 1]
+            for i in range(iterations):
+                tasks = []
+                d0 = self.opt_state["d"]
+                d_min = np.max((d0 - step_size[i], 0))
+                d_max = np.max((d0 + step_size[i], 0))
+                d_axis = np.linspace(d_min, d_max, 5)
+                for d in d_axis:
+                    for shift in shift_axis:
+                        tasks.append((d, shift))
+                opt_results = process_tasks(tasks, iteration=(i, iterations))
 
-        for d in d_axis:
-            for shift in [0.0]:
-                tasks.append((d, shift))
+        q_vals = np.array([res["q_val"] for res in opt_results])
+        q_vals = q_vals / np.max(q_vals)
 
-        opt_results = []
-        with ProcessPoolExecutor(max_workers=8) as executor:
-            worker_func = partial(optimize_transmission, config_dict=opt_config)
-            futures = [executor.submit(worker_func, d, shift) for d, shift in tasks]
+        best_res = opt_results[np.argmin(q_vals)]
+        best_res["d_vals"] = np.array([res["d"] for res in opt_results])
 
-            for fut_idx, future in enumerate(futures):
-                res = future.result()
-                logging.info(res["d"])
+        best_res = self.calc_uncertainties(best_res)
 
-                progress = (fut_idx + 1) / len(futures)
-                if progress_carrier is not None:
-                    progress_carrier.progress_changed.emit(progress)
+        n_opt_res_ = best_res["n"] + 1j * best_res["k"]
+        self.model_kwargs["shift"] = best_res["shift"]
+        self.model_kwargs["d"] = best_res["d"]
 
-                q_val_calc_res = self.calc_q_val(res)
-                res.update(q_val_calc_res)
-                opt_results.append(res)
+        t_mod_ = self.transmission_model(n_opt_res_, self.freq_axis[f_idx_fit_range], **self.model_kwargs)
 
-        opt_results = sorted(opt_results, key=lambda res: res["d"])
+        best_res["t_mod"] = t_mod_
+        best_res["sam_mod"] = self.model_kwargs["meas_quants"]["ref_fd"][f_idx_fit_range, 1] * t_mod_
 
-        best_res = opt_results[np.argmin([r["q_val"] for r in opt_results])]
+        sas = (5, 20)
+        smoothed_quantities = ["n", "k", "alpha"]
+        for q in smoothed_quantities:
+            best_res[q] = moving_average(best_res[q], iterations=sas[0], n=sas[1])
 
-        return best_res
+        return self.prepare_result(best_res)
+
+    def prepare_result(self, res_dict):
+        rd = res_dict
+
+        freq_axis = Q_(rd["freq_axis"], "THz")
+        parsed_dict = {
+            # --- Scalars ---
+            "d": Q_(rd["d"], "µm"),
+            "q_val": Q_(rd["q_val"], ""),
+            "gof": Q_(rd["gof"], ""),
+            "shift": Q_(rd["shift"], "fs"),
+            "converged": True,
+
+            # --- Strings ---
+            "timestamp": str(datetime.now().isoformat()),
+
+            # --- Datasets ( Q_(x) ) ---
+            "n0_real": DataSet(axes=[freq_axis], data=Q_(rd["n0_real"], "T"),
+                               data_label="Simple n", axes_labels=["Frequency"]),
+            "delta_n": DataSet(axes=[freq_axis], data=Q_(rd["delta_n"], "S"), axes_labels=["Frequency"]),
+            "delta_alpha": DataSet(axes=[freq_axis], data=Q_(rd["delta_alpha"], "m"), axes_labels=["Frequency"]),
+            "n": DataSet(axes=[freq_axis], data=Q_(rd["n"], "nm"), axes_labels=["Frequency"]),
+            "k": DataSet(axes=[freq_axis], data=Q_(rd["k"], "W"), axes_labels=["Frequency"]),
+            "alpha": DataSet(axes=[freq_axis], data=Q_(rd["alpha"], "1/cm"), axes_labels=["Frequency"]),
+            "t_mod": DataSet(axes=[freq_axis], data=Q_(rd["t_mod"], "V"), axes_labels=["ABE"]),
+            "sam_mod": DataSet(axes=[freq_axis], data=Q_(rd["sam_mod"], "J")),
+        }
+
+        return parsed_dict

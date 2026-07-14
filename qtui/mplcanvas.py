@@ -226,6 +226,8 @@ class MPLCanvas(QtWidgets.QGroupBox):
     def drawDataSet(self, quantity_dict, axes_labels, data_label):
         self.quantity_dict = quantity_dict
         self.update_combobox(self.quantity_dict)
+        if self.quantity_combobox.currentData() is None:
+            return
         newDataSet = self.quantity_dict[self.quantity_combobox.currentData()]
 
         plotTime = time.perf_counter()

@@ -1,6 +1,7 @@
 import numpy as np
-from teval.common.eval_component.shgo import shgo
+from common.eval_component.shgo import shgo
 import time
+from common.consts import c_thz
 
 def optimize_transmission(d, shift, config_dict):
     f_idx_range_ = config_dict["f_idx_range_"]
@@ -15,15 +16,14 @@ def optimize_transmission(d, shift, config_dict):
     freq_axis_slice = freq_axis[f_idx_range_]
     n0_ = single_layer_approx["refr_idx"][f_idx_range_]
     t_exp_ = t_exp[f_idx_range_, 1] * np.exp(1j * 2 * np.pi * (shift * 1e-3) * freq_axis_slice)
-    time.sleep(1000/d)
-    model_kwargs = {
-        "single_layer_approx": single_layer_approx,
-        "n1": 1, "n4": 1, "d": d
-    }
+
+    time.sleep(1000/(min(500, d)))
+
+    model_kwargs_keys = ["single_layer_approx", "d", "n_sub", "n1", "n4", "h", "nfp"]
+    model_kwargs = {k: config_dict[k] for k in model_kwargs_keys if k in config_dict}
 
     gof = 0
     n_opt_res_ = np.zeros_like(freq_axis_slice, dtype=complex)
-
     for f_idx, f_ in enumerate(freq_axis_slice):
         def opt_fun(p):
             n = p[0] + 1j * p[1]
@@ -75,10 +75,10 @@ def optimize_transmission(d, shift, config_dict):
             if i_ > 5:
                 break
 
-    alpha_ = freq_axis_slice * 4 * np.pi * n_opt_res_.imag / (1e-4 * 299.792)
+    alpha_ = freq_axis_slice * 4 * np.pi * n_opt_res_.imag / (1e-4 * c_thz)
 
     return {
         "d": d, "shift": shift, "freq_axis": freq_axis_slice, "gof": gof / len(freq_axis_slice),
-        "n": n_opt_res_.real, "k": n_opt_res_.imag, "alpha": alpha_
+        "n": n_opt_res_.real, "k": n_opt_res_.imag, "alpha": alpha_, "n0_real": n0_.real, "n0_imag": n0_.imag,
     }
 

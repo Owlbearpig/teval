@@ -1,3 +1,4 @@
+import logging
 from common.components import ComponentBase
 from common.traits import QuantityDict
 from common.eval_component.quantity_set import DataSetDict as QuantityDictClass, DataSet

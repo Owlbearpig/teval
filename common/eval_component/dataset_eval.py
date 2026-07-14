@@ -88,7 +88,7 @@ class DatasetEval(ComponentBase):
 
     selected_result_path = TPath(Path(""))
 
-    d_opt_axis_bounds = ValueRange([Q_(500, "µm"), Q_(700, "µm", )], group="Q-Space eval")
+    d_opt_axis_bounds = ValueRange([Q_(500, "µm"), Q_(580, "µm", )], group="Q-Space eval")
     d_opt_axis_step = Quantity(Q_(10, "µm"), group="Q-Space eval")
     use_custom_d_opt_axis = Bool(True, group="Q-Space eval")
 
@@ -253,29 +253,17 @@ class DatasetEval(ComponentBase):
         self.transmission_model = getattr(self.transmission_model, change["new"])
 
     @action("Fit 1 layer")
-    def fit_1layer(self):
-
-        qs_eval = QSpaceEval(self)
-        qs_res = qs_eval.q_space_eval()
-        # qs_res = test_result.copy()
-
-        # self.current_result.process_dict(qs_res)
-
-        # self.result_saver.process(self.current_result)
-
-        return qs_res
-
-
-    # Inside your DatasetEval class:
-    @action("Fit 1 layer mp")
     def fit_1layer_mp(self):
-
         progress_carrier = ProgressSignalCarrier()
         progress_carrier.progress_changed.connect(self.update_progress)
 
         def bg_worker():
             qs_eval = QSpaceEval(self)
             qs_res = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
+
+            self.current_result.process_dict(qs_res)
+
+            self.result_saver.process(self.current_result)
 
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(bg_worker)
