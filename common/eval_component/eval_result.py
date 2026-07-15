@@ -19,12 +19,12 @@ class EvalResult(ComponentBase):
     timestamp = Unicode("", read_only=True)
     converged = Bool(False, read_only=True)
 
-    def __init__(self, opt_res_dict=None):
-        super().__init__()
+    def __init__(self, opt_res_dict=None, **kwargs):
+        super().__init__(**kwargs)
         if opt_res_dict is None:
             return
 
-        self.process_dict(opt_res_dict)
+        self.assign_traits_from_dict(opt_res_dict)
 
     def load_result(self, res_path):
         res_dict = {}
@@ -33,7 +33,7 @@ class EvalResult(ComponentBase):
         elif res_path.suffix == ".hdf5":
             res_dict = self.parse_hdf5(res_path)
 
-        self.process_dict(res_dict)
+        self.assign_traits_from_dict(res_dict)
 
     def parse_hdf5(self, res_path):
         with h5py.File(res_path, "r") as f:
@@ -126,7 +126,7 @@ class EvalResult(ComponentBase):
 
         return parsed_result_dict
 
-    def process_dict(self, opt_res_dict):
+    def assign_traits_from_dict(self, opt_res_dict):
         for k, v in opt_res_dict.items():
             if isinstance(v, (int, str, float, Q_)):
                 self.set_trait(k, v)

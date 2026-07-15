@@ -19,9 +19,9 @@ along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 """
 from common.components import ComponentBase
 from common.eval_component.quantity_set import DataSetDict as QuantityDictClass, DataSet
-
 from common.units import Q_
 from enum import Enum, unique
+from common.traits import ValueRange
 from traitlets import Bool, Enum as EnumTrait, Unicode
 import numpy as np
 from datetime import datetime
@@ -80,7 +80,7 @@ class ResultSaver(ComponentBase):
     fileFormat = EnumTrait(Formats, Formats.HDF5).tag(name="File format")
 
     textFileWithHeaders = Bool(False).tag(name="Write header to text files")
-    fileNameTemplate = Unicode('{date}-{name}',
+    fileNameTemplate = Unicode('{date}-{name}-{sel_point}',
                                help="File name template, valid identifiers "
                                     "are:\n"
                                     "{name}: The main file name\n"
@@ -127,6 +127,17 @@ class ResultSaver(ComponentBase):
             trait.metadata['help'] += additionalHelpString
         self.add_traits(fileNameTemplate=trait)
 
+    def _format_attribute(self, inst, name):
+        attr = getattr(inst, name)
+        if isinstance(attr, list) and len(attr) == 2:
+            if isinstance(attr[0], Q_):
+                s = 'x{} {:C~}'.format(attr[0].magnitude, attr[0].units)
+                s +='-y{} {:C~}'.format(attr[1].magnitude, attr[1].units)
+            else:
+                s = "x{}-y{}".format(*attr)
+            return s
+        else:
+            return str(attr)
 
     def _getFileName(self):
 
@@ -139,7 +150,7 @@ class ResultSaver(ComponentBase):
                        .format(_getManipulatorValueInPreferredUnits(m))
                        for k, m in self._manipulators.items()}
 
-        attributeValues = {k: str(getattr(inst, name))
+        attributeValues = {k: self._format_attribute(inst, name)
                            for k, (inst, name) in self._attributes.items()}
 
         formattedName = self.fileNameTemplate.format(date=date,

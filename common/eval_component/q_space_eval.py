@@ -1,7 +1,8 @@
 import logging
+from cmath import inf
+
 import numpy as np
 import scipy
-
 from common.default_appsettings import AppSettings
 from common.functions import f_axis_idx_map, moving_average
 from common.eval_component.transfer_functions import model_1layer, transferfunction_error, dtdn, dtdd
@@ -34,6 +35,29 @@ class QSpaceEval:
             "q_min": np.inf
         }
 
+    def _is_two_layer_model(self):
+        try:
+            # check if transmission model expects n_sub
+            test_kwargs = self.model_kwargs.copy()
+            test_kwargs["d"] = 1
+            self.transmission_model(n=1, freq=1, **test_kwargs)
+            return False
+        except KeyError as e:
+            logging.info(e)
+            return True
+
+    def set_two_layer_kwargs(self):
+        self.model_kwargs["h"] = self.settings.sample_properties.d_film.magnitude
+
+        substrate_result = self.dataset_eval.selected_substrate_result.quantity_dict
+        try:
+            n_sub_real_dataset = substrate_result["n"]
+            n_sug_imag_dataset = substrate_result["k"]
+            n_sub = n_sub_real_dataset.data.magnitude + 1j * n_sug_imag_dataset.data.magnitude
+        except KeyError:
+            raise Exception("Substrate result required for two layer model optimization")
+        self.model_kwargs["n_sub"] = n_sub
+
     def set_model_kwargs(self):
         single_layer_properties = self.dataset.get_single_layer_properties()
         meas = single_layer_properties["meas"]
@@ -43,8 +67,12 @@ class QSpaceEval:
 
         self.model_kwargs["meas_quants"] = meas_quants
         self.model_kwargs["single_layer_approx"] = single_layer_properties["single_layer_approx"]
+        self.model_kwargs["nfp"] = self.settings.eval_opt.fp_count
         self.model_kwargs["n1"] = 1
         self.model_kwargs["n4"] = 1
+
+        if self._is_two_layer_model():
+            self.set_two_layer_kwargs()
 
     def calc_uncertainties(self, result):
         uncertainties = {**result}

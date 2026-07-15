@@ -1,3 +1,5 @@
+import traceback
+
 from common.dataset import DataSet, Domain
 from common.components import ComponentBase, action
 from common.datasetplotter import DataSetPlotter
@@ -86,22 +88,24 @@ class DatasetEval(ComponentBase):
     regression_model = TEnum(RegressionModels, default_value=RegressionModels.drude, group="Regression")
     convert_sigma_to_t = Bool(default_value=False, group="Regression")
 
-    selected_result_path = TPath(Path(""))
+    selected_result_path = TPath(Path("")).tag(name="Load result")
+    selected_substrate_result_path = TPath(Path("")).tag(name="Substrate result")
 
     d_opt_axis_bounds = ValueRange([Q_(500, "µm"), Q_(580, "µm", )], group="Q-Space eval")
     d_opt_axis_step = Quantity(Q_(10, "µm"), group="Q-Space eval")
     use_custom_d_opt_axis = Bool(True, group="Q-Space eval")
 
     sig0 = Quantity(Q_(10, "S/cm"), group="Initial optimization values")
-    sig0_bounds = ValueRange([Q_(10, "S/cm"), Q_(20, "S/cm")], group="Optimization bounds")
+    sig0_bounds = ValueRange([Q_(10, "S/cm"), Q_(20, "S/cm")], group="Regression")
 
     wp = Quantity(Q_(10, "THz"), group="Initial optimization values")
-    wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group="Optimization bounds")
+    wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group="Regression")
 
     optimization_progress = Float(0, min=0, max=1,
                                   group="Optimization progress", read_only=True).tag(name="Progress")
 
     current_result = Instance(EvalResult)
+    selected_substrate_result = Instance(EvalResult)
 
     result_saver = Instance(ResultSaver)
 
@@ -115,14 +119,14 @@ class DatasetEval(ComponentBase):
 
         self.shgo_options = SHGOOptions()
 
-        self.result_saver = ResultSaver()
-        # register regression, optimization 1 and 2 layer. Opt res dict -> npz
+        self.result_saver = self.setup_saver()
 
         self.freq_axis = self.dataset.freq_axis
 
         self._opt_conf = {}
 
-        self.current_result = EvalResult()
+        self.current_result = EvalResult(object_name="Current result")
+        self.selected_substrate_result = EvalResult(object_name="Substrate result")
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.settings.save_configuration(self)
@@ -130,12 +134,14 @@ class DatasetEval(ComponentBase):
     def __enter__(self):
         self.settings.load_configuration(self)
 
+    def setup_saver(self):
+        res_saver = ResultSaver()
+        res_saver.registerObjectAttribute(self, "sel_point")
+
+        return res_saver
+
     def update_progress(self, progress_value: float):
-        """
-        Slot method that PySide6 will safely execute on the Main GUI Thread.
-        """
         try:
-            # Directly update the traitlet property
             self.set_trait("optimization_progress", progress_value)
         except Exception as exc:
             logging.error(f"Failed to update progress traitlet: {exc}")
@@ -170,10 +176,8 @@ class DatasetEval(ComponentBase):
 
     @observe("regression_model")
     def select_regression_model(self, change):
-        fun = getattr(self.regression_model, change["new"])
-
-        self._opt_conf["model"] = partial(fun, self._opt_conf["freq_axis"])
-
+        self.update_freq_axis()
+        self._opt_conf["model"] = partial(change["new"].value, self._opt_conf["freq_axis"])
 
     def update_freq_axis(self):
         f_idx = f_axis_idx_map(self.freq_axis, self.settings.eval_opt.fit_range)
@@ -195,8 +199,12 @@ class DatasetEval(ComponentBase):
     @observe("selected_result_path")
     def set_result(self, change):
         result_path = change["new"]
-
         self.current_result.load_result(result_path)
+
+    @observe("selected_substrate_result_path")
+    def set_result(self, change):
+        result_path = change["new"]
+        self.selected_substrate_result.load_result(result_path)
 
     @observe("cost_fun")
     def setup_cost(self, change=None):
@@ -223,13 +231,11 @@ class DatasetEval(ComponentBase):
 
     def update_opt_config(self):
         self.update_freq_axis()
-        self._opt_conf["h"] = self.settings.sample_properties.d_film
+        self._opt_conf["h"] = self.settings.sample_properties.d_film.magnitude
 
         self.set_y_meas()
         self.setup_cost()
         self.setup_bounds()
-
-        self.selected_result_path = Path(f"results/{self._settings_file}.json")
 
     @action("Fit regression model", group="Regression")
     def perform_regression(self):
@@ -247,31 +253,23 @@ class DatasetEval(ComponentBase):
                         )
         return opt_res_
 
-    @observe("transmission_model")
-    def select_model(self, change):
-
-        self.transmission_model = getattr(self.transmission_model, change["new"])
-
-    @action("Fit 1 layer")
-    def fit_1layer_mp(self):
+    @action("Fit transmission model")
+    def fit_unknown_layer(self):
         progress_carrier = ProgressSignalCarrier()
         progress_carrier.progress_changed.connect(self.update_progress)
 
         def bg_worker():
-            qs_eval = QSpaceEval(self)
-            qs_res = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
+            try:
+                qs_eval = QSpaceEval(self)
+                qs_res = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
 
-            self.current_result.process_dict(qs_res)
-
-            self.result_saver.process(self.current_result)
+                self.current_result.assign_traits_from_dict(qs_res)
+                self.result_saver.process(self.current_result)
+            except Exception:
+                traceback.print_exc()
 
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(bg_worker)
-
-    @action("Fit 2 layers")
-    def fit_2layer(self):
-        pass
-
 
     def sigma_to_n(self, freq, sigma):
         w = 2 * np.pi * freq
@@ -281,91 +279,6 @@ class DatasetEval(ComponentBase):
 
         return n_
 
-
-    def _opt_fun_2layer(self, x_, freq, n_sub_, t_exp_):
-        #if x_[0] < 1 or x_[1] < 0:
-        #    return np.inf
-
-        n_film_ = x_[0] + 1j * x_[1]
-
-        t_mod = self._t_model_2layer(freq, n_sub=n_sub_, n_film=n_film_)
-
-        mag = (np.abs(t_mod) - np.abs(t_exp_))**2
-        ang = (np.angle(t_mod) - np.angle(t_exp_))**2
-
-        # real_part = (t_mod.real - t_exp_.real) ** 2
-        # imag_part = (t_mod.imag - t_exp_.imag) ** 2
-
-        return mag + ang
-
-    def _fit_2layer(self, t_exp_, n_sub_):
-        pnt = self.options["eval_opt"]["sub_pnt"]
-        bounds_ = self.options["eval_opt"]["film_bounds"]
-        # bounds_ = [(1, 15), (1, 15)]
-
-        min_kwargs = {"method": "Nelder-Mead",
-                      "options": {
-                          "maxfev": 1500,
-                          "maxiter": 2000,
-                          "tol": 1e-10,
-                          "fatol": 1e-10,
-                          "xatol": 1e-10,
-                      }
-                      }
-        shgo_options = {
-            "maxfev": 1650,
-            "maxiter": 2000,
-            # "f_tol": 1e-12,
-            # "maxiter": 50,
-            # "ftol": 1e-12,
-            # "xtol": 1e-12,
-            # "maxev": 4000,
-            # "minimize_every_iter": True,
-            "disp": False,
-        }
-        shgo_iters = 2
-        shgo_n = 200
-
-        f0, f1 = self.options["eval_opt"]["fit_range_film"]
-        freq_mask = (f0 <= self.freq_axis) * (self.freq_axis <= f1)
-
-        best_ = (None, np.inf)
-        n_opt_best = None
-        d_sub0 = self.options["sample_properties"]["d_1"]
-        for d_sub in [*np.arange(d_sub0, d_sub0 + 1, 1.0)]:#[*np.arange(640.00, 655, 5.0)]: # [656.8]:# 650
-            for shift in [0]:  # [61.1]: # 30
-                # self.options["sample_properties"]["d_film"] = d_film
-                self.options["sample_properties"]["d_2"] = d_sub
-                self.options["eval_opt"]["shift_film"] = shift
-
-                gof = 0
-                n_opt = np.zeros((len(self.freq_axis), len(bounds_)), dtype=complex)
-                for f_idx in np.arange(len(self.freq_axis))[freq_mask]:
-                    args_ = (self.freq_axis[f_idx], n_sub_[f_idx], t_exp_[f_idx])
-
-                    opt_res_ = shgo(self._opt_fun_2layer,
-                                    bounds=bounds_,
-                                    minimizer_kwargs=min_kwargs,
-                                    options=shgo_options,
-                                    args=args_,
-                                    iters=shgo_iters,
-                                    n=shgo_n
-                                    )
-                    n_opt[f_idx] = opt_res_.x
-                    # print(self.freq_axis[f_idx], n_opt[f_idx])
-                    gof += opt_res_.fun
-
-                n_opt = n_opt[:, 0] + 1j * n_opt[:, 1]
-                n_imag = n_opt.imag
-
-                peak_val, sum_val, n_imag_filt_ = self._q_val(n_imag)
-
-                if peak_val < best_[1]:
-                    best_ = ((shift, d_sub), peak_val, gof)
-                    n_opt_best = n_opt
-
-        print("Best q-val film: ", best_)
-        return n_opt_best
 
     def conductivity_model(self, sigma_exp):
         self._opt_conf["sigma_exp"] = sigma_exp

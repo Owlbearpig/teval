@@ -66,6 +66,8 @@ class Settings(AppSettings):
                     elif issubclass(trait.__class__, ValueRange):
                         if isinstance(val[0], Q_):
                             val = [val[0].magnitude, val[1].magnitude]
+                        else:
+                            val = [val[0], val[1]]
 
                     dump_dict[k] = val
                 else:

@@ -203,3 +203,6 @@ def dtdd(n, d, freq):
 
     return (dfdd*g-f*dgdd) / (g*g)
 
+if __name__ == '__main__':
+    model_2layer(1, 1, **{"d": 1, "h": 2, "n1": 1, "n4": 5})
+
