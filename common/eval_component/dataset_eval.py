@@ -312,6 +312,7 @@ class DatasetEval(ComponentBase):
 
         return t_sim
 
+    # should be included in the transmission fit result (also calculates t spectrum)
     def sub_meas_sim(self):
         t_sim = self.t_sim_1layer()
 
@@ -342,7 +343,8 @@ class DatasetEval(ComponentBase):
 
         return t_sim_meas
 
-
+    # should be covered by fit single layer model to point selected on substrate
+    # -> 2 layer fit to film point /w substrate result selected
     def eval_point_n_fit(self, film_pnt=None):
         """
         Fit refractive index to the substrate measurement (n_sub)
@@ -400,7 +402,7 @@ class DatasetEval(ComponentBase):
 
         return res
 
-
+    # check if regression can handle this. Result saving? plotting?
     def eval_point_model_fit(self, film_pnt=None):
         """
         Fit model with frequency independent parameters to the full spectrum
