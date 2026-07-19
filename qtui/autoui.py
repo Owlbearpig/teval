@@ -382,10 +382,9 @@ def create_path_selector(component, name, prettyName, trait):
 
 def create_plot_area(component, name, prettyName, trait):
     def draw(change):
-        canvas.dataIsPower = trait.metadata.get('is_power', False)
-        canvas.drawDataSet(change["new"],
-                           trait.metadata.get('axes_labels', None),
-                           trait.metadata.get('data_label', None))
+        canvas.set_canvas_values(change["new"],
+                                 trait.metadata.get("axes_labels", None),
+                                 trait.metadata.get("data_label", None))
 
     canvas = MPLCanvas()
 
@@ -393,14 +392,20 @@ def create_plot_area(component, name, prettyName, trait):
 
     canvas.setTitle(prettyName)
 
+    initial_value = trait.get(component)
+    if initial_value:
+        canvas.set_canvas_values(initial_value,
+                                 trait.metadata.get("axes_labels", None),
+                                 trait.metadata.get("data_label", None))
+
     return canvas
 
 def _group(trait):
-    return trait.metadata.get('group', 'General')
+    return trait.metadata.get("group", "General")
 
 
 def _prettyName(trait, name):
-    return trait.metadata.get('name', name)
+    return trait.metadata.get("name", name)
 
 
 traitPriority = {
@@ -427,7 +432,7 @@ def _traitSortingKey(args):
     if prio is None:
         prio = 999
 
-    userPrio = trait.metadata.get('priority', 999)
+    userPrio = trait.metadata.get("priority", 999)
 
     return prio, userPrio, name
 
@@ -441,7 +446,6 @@ def generate_component_ui(name, component):
                               component.actions), key=_traitSortingKey)
               if not is_component_trait(trait)]
 
-    # pre-create group boxes
     groups = OrderedDict()
 
     hasPlots = False
@@ -457,6 +461,7 @@ def generate_component_ui(name, component):
             QtWidgets.QFormLayout(box)
             groups[group] = box
 
+    controlWidget.param_widgets = {}
     for name, trait in traits:
         if isinstance(trait, QuantityDict):
             continue
@@ -465,40 +470,34 @@ def generate_component_ui(name, component):
         group = _group(trait)
         layout = groups[group].layout()
 
+        field_widget = None
         if (isinstance(trait, ValueRange)):
-            layout.addRow(prettyName + ": ",
-                          create_range_entry(component, name, trait))
+            field_widget = create_range_entry(component, name, trait)
         elif (isinstance(trait, Quantity)):
-            layout.addRow(prettyName + ": ",
-                          create_spinbox_entry(component, name, trait))
+            field_widget = create_spinbox_entry(component, name, trait)
         elif (isinstance(trait, Integer)):
-            layout.addRow(prettyName + ": ",
-                          create_spinbox_entry(component, name, trait))
+            field_widget = create_spinbox_entry(component, name, trait)
         elif isinstance(trait, Enum) and not trait.read_only:
-            layout.addRow(prettyName + ": ",
-                          create_combobox(component, name, trait))
+            field_widget = create_combobox(component, name, trait)
         elif isinstance(trait, Float):
-            if trait.read_only and not (np.isinf(trait.min) or
-                                        np.isinf(trait.max)):
-                layout.addRow(prettyName + ": ",
-                              create_progressbar(component, name, trait))
+            if trait.read_only and not (np.isinf(trait.min) or np.isinf(trait.max)):
+                field_widget = create_progressbar(component, name, trait)
             else:
-                layout.addRow(prettyName + ": ",
-                              create_spinbox_entry(component, name, trait))
+                field_widget = create_spinbox_entry(component, name, trait)
         elif isinstance(trait, Bool):
-            layout.addRow(" ",
-                          create_checkbox(component, name, prettyName, trait))
+            field_widget = create_checkbox(component, name, prettyName, trait)
         elif isinstance(trait, Unicode):
             if trait.read_only:
-                layout.addRow(prettyName + ": ",
-                              create_label(component, name, trait))
+                field_widget = create_label(component, name, trait)
             else:
-                layout.addRow(prettyName + ": ",
-                              create_lineedit(component, name, trait))
+                field_widget = create_lineedit(component, name, trait)
         elif isinstance(trait, PathTrait):
-                layout.addRow(prettyName + ": ",
-                              create_path_selector(component, name, prettyName,
-                                                   trait))
+                field_widget = create_path_selector(component, name, prettyName, trait)
+
+        if field_widget:
+            label_widget = QtWidgets.QLabel(prettyName + ": ")
+            layout.addRow(label_widget, field_widget)
+            controlWidget.param_widgets[name] = (label_widget, field_widget)
         elif callable(trait):
             qaction = create_action(component, trait)
             qaction.setParent(controlWidget)
@@ -523,6 +522,7 @@ def generate_component_ui(name, component):
     if not groups:
         scrollArea.hide()
 
+    component._ui_control_widget = controlWidget
     if not hasPlots:
         return scrollArea
 

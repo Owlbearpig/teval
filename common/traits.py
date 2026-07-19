@@ -47,8 +47,6 @@ class TraitTypePatched(TraitType):
                 if self.name is not None:
                     self.set(obj, v)
 
-# TraitType = type(TraitType.__name__, (TraitType,), {"instance_init": instance_init})
-
 class QuantityDict(TraitTypePatched):
 
     default_value = DataSetDictClass()

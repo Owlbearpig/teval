@@ -262,8 +262,7 @@ class QuantityFunc:
         self.label = label
         self.domain = Domain.Time if domain is None else domain
         self.func = func if func is not None else lambda x: x
-
-        self.unit = bool(unit)*" (" + unit + bool(unit)*")"
+        self.unit = unit
 
     def __repr__(self):
         return self.label
@@ -423,3 +422,8 @@ class AppSettings(ComponentBase):
     dataset_opt = Instance(DatasetOpt, args=())
 
     enable_q_eval = Bool(False)
+
+if __name__ == '__main__':
+    settings = AppSettings()
+
+    print([getattr(settings.sample_properties, k) for k in settings.sample_properties.traits()])

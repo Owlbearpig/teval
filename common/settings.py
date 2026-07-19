@@ -7,6 +7,7 @@ from common.units import Q_
 from traitlets import Instance, Tuple, List, Bool, Integer, Float, Enum as TEnum
 from common.components import is_component_trait
 from common.default_appsettings import AppSettings
+from traitlets.traitlets import TraitError
 
 class Settings(AppSettings):
 
@@ -72,7 +73,7 @@ class Settings(AppSettings):
                     dump_dict[k] = val
                 else:
                     if issubclass(trait.klass, EvalResult):
-                        return
+                        continue
                     dump_dict[k] = {}
 
                     make_dump_dict(dump_dict[k], val)
@@ -85,14 +86,14 @@ class Settings(AppSettings):
             settings_dict = {comp_class_name: {}}
 
         make_dump_dict(settings_dict[comp_class_name], component_instance)
-        return
+
         with open(self.config_path, 'w') as fp:
             json.dump(settings_dict, fp, indent=4)
 
     def load_configuration(self, component_instance):
-        return
+        component_class_name = component_instance.__class__.__name__
         config_path = self.config_path
-        print(f"Loading settings from {config_path}")
+        print(f"Loading settings from {config_path} for component {component_class_name}")
 
         if self._settings_file is None:
             print(f"No config file path set. Using default values.")
@@ -114,10 +115,27 @@ class Settings(AppSettings):
                     value = getattr(instance, trait_name)
                     instance.set_trait(trait_name, dict_val * value.units)
                 elif issubclass(actual_type, TEnum):
-                    enum_attr = getattr(instance, trait_name)
-                    instance.set_trait(trait_name, enum_attr)
+                    trait_definition = instance.traits()[trait_name]
+                    target_enum_member = None
+                    for member in trait_definition.values:
+                        if hasattr(member, "name") and member.name == dict_val:
+                            target_enum_member = member
+                            break
+                        elif hasattr(member, "value") and member.value == dict_val:
+                            target_enum_member = member
+                            break
+                        elif member == dict_val:
+                            target_enum_member = member
+                            break
+                    if target_enum_member is not None:
+                        instance.set_trait(trait_name, target_enum_member)
+                    else:
+                        instance.set_trait(trait_name, dict_val)
                 elif issubclass(actual_type, TPath):
-                    instance.set_trait(trait_name, Path(dict_val))
+                    try:
+                        instance.set_trait(trait_name, Path(dict_val))
+                    except TraitError:
+                        instance.set_trait(trait_name, Path("."))
                 elif issubclass(actual_type, ValueRange):
                     value = getattr(instance, trait_name)
                     if isinstance(value[0], Q_):
@@ -127,7 +145,6 @@ class Settings(AppSettings):
 
         with open(config_path, "r") as f:
             json_dict = json.load(f)
-            component_class_name = component_instance.__class__.__name__
             if component_class_name in json_dict:
                 set_trait_values(component_instance, json_dict[component_class_name])
             else:

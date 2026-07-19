@@ -406,7 +406,7 @@ class DataSetPlotter(ComponentBase):
         meas_quants = self.dataset.calc_meas_quantities(ref_meas, selected_meas)
 
         if self.settings.enable_q_eval:
-            ana_eval_res = self.dataset.single_layer_eval(selected_meas)
+            ana_eval_res = self.dataset.windowing_eval(selected_meas)
 
             #q_eval = QSpaceEval(self.settings, meas_quants, ana_eval_res)
             #q_eval_res = q_eval.q_space_eval()
@@ -481,7 +481,7 @@ class DataSetPlotter(ComponentBase):
         t = sam_fd[:, 1] / ref_fd[:, 1]
         absorb = np.abs(1/t)
 
-        simple_eval_res = self.dataset.single_layer_eval(selected_meas)
+        simple_eval_res = self.dataset.windowing_eval(selected_meas)
         phi = simple_eval_res["phi"]
         phi_corrected = simple_eval_res["phi_corrected"]
         refr_idx = simple_eval_res["refr_idx"]
@@ -599,8 +599,8 @@ class DataSetPlotter(ComponentBase):
         ref_fd = self.dataset.get_data(ref_meas0, domain=Domain.Frequency)
         freq_axis = ref_fd[:, 0].real
 
-        simple_eval_res0 = self.dataset.single_layer_eval(sam_meas0)
-        simple_eval_res1 = self.dataset.single_layer_eval(sam_meas1)
+        simple_eval_res0 = self.dataset.windowing_eval(sam_meas0)
+        simple_eval_res1 = self.dataset.windowing_eval(sam_meas1)
         phi0 = simple_eval_res0["phi_corrected"]
         phi1 = simple_eval_res1["phi_corrected"]
         phi_diff = phi0-phi1

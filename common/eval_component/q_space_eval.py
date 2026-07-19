@@ -194,7 +194,7 @@ class QSpaceEval:
                 logging.info(f"Starting optimization")
 
             results = []
-            with ProcessPoolExecutor(max_workers=8) as executor:
+            with ProcessPoolExecutor(max_workers=self.dataset_eval.number_of_workers) as executor:
                 worker_func = partial(optimize_transmission, config_dict=opt_config)
                 futures = [executor.submit(worker_func, d, shift) for d, shift in tasks]
                 total_tasks = len(futures)
@@ -215,7 +215,6 @@ class QSpaceEval:
                     if progress_carrier is not None:
                         progress_carrier.progress_changed.emit(progress)
 
-                    # fp_spacing_estimate = ... or use GUI value
                     q_val_calc_res = self.calc_q_val(res)
                     res.update(q_val_calc_res)
 
@@ -299,7 +298,8 @@ class QSpaceEval:
             # --- Datasets ( Q_(x) ) ---
             "n0_real": DataSet(axes=[freq_axis], data=Q_(rd["n0_real"], "T"),
                                data_label="Simple n", axes_labels=["Frequency"]),
-            "delta_n": DataSet(axes=[freq_axis], data=Q_(rd["delta_n"], "S"), axes_labels=["Frequency"]),
+            "delta_n": DataSet(axes=[freq_axis], data=Q_(rd["delta_n"], "S"),
+                               data_label="delta_n", axes_labels=["Frequency"]),
             "delta_alpha": DataSet(axes=[freq_axis], data=Q_(rd["delta_alpha"], "m"), axes_labels=["Frequency"]),
             "n": DataSet(axes=[freq_axis], data=Q_(rd["n"], "nm"), axes_labels=["Frequency"]),
             "k": DataSet(axes=[freq_axis], data=Q_(rd["k"], "W"), axes_labels=["Frequency"]),
@@ -307,5 +307,7 @@ class QSpaceEval:
             "t_mod": DataSet(axes=[freq_axis], data=Q_(rd["t_mod"], "V"), axes_labels=["ABE"]),
             "sam_mod": DataSet(axes=[freq_axis], data=Q_(rd["sam_mod"], "J")),
         }
+
+        parsed_dict["result_type"] = "Transmission fit"
 
         return parsed_dict

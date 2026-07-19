@@ -669,13 +669,16 @@ class DataSet(ComponentBase):
 
         return meas_quants
 
-    def single_layer_eval(self, meas_):
+    def windowing_eval(self, meas_):
         if self.settings.sample_properties.default_values:
-            logging.warning(f"Using default sample properties: {self.settings.sample_properties}")
+            sam_props = self.settings.sample_properties
+            sam_prop_dict = {k: getattr(sam_props, k) for k in sam_props.traits()}
+            logging.warning(f"Using default sample properties: {sam_prop_dict}")
 
         d = self.settings.sample_properties.d.magnitude
 
-        og_pp_opt = deepcopy(self.settings.pp_opt)
+        og_pp_opt_state = {name: trait.get(self.settings.pp_opt)
+                           for name, trait in self.settings.pp_opt.traits().items()}
 
         self.settings.pp_opt.enabled = True
         self.settings.pp_opt.win_width = 10
@@ -685,7 +688,8 @@ class DataSet(ComponentBase):
         ref_td, ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Both)
         sam_td, sam_fd = self.get_data(meas_, Domain.Both)
 
-        self.settings.pp_opt = og_pp_opt
+        for name, value in og_pp_opt_state.items():
+            setattr(self.settings.pp_opt, name, value)
 
         freq_axis = self.freq_axis
 
@@ -719,13 +723,13 @@ class DataSet(ComponentBase):
         return ret
 
     def refractive_idx(self, meas_):
-        return np.real(self.single_layer_eval(meas_)["refr_idx"])
+        return np.real(self.windowing_eval(meas_)["refr_idx"])
 
     def _extinction_coe(self, meas_):
-        return np.imag(self.single_layer_eval(meas_)["refr_idx"])
+        return np.imag(self.windowing_eval(meas_)["refr_idx"])
 
     def absorption_coef(self, meas_):
-        n_cmplx_res = self.single_layer_eval(meas_)
+        n_cmplx_res = self.windowing_eval(meas_)
         freq_axis = n_cmplx_res["freq_axis"]
         kap = n_cmplx_res["refr_idx"].imag
 
@@ -742,7 +746,7 @@ class DataSet(ComponentBase):
             t = self.sub_dataset.transmission(meas)
         else:
             meas = self.get_measurement(*sub_pnt)
-            single_layer_approx = self.single_layer_eval(meas)
+            single_layer_approx = self.windowing_eval(meas)
             t = self.transmission(meas)
 
         ret = {"meas": meas, "single_layer_approx": single_layer_approx, "t": t}
@@ -984,14 +988,16 @@ class DataSet(ComponentBase):
         n_sub = sub_properties["single_layer_approx"]["refr_idx"]
         t_sub = sub_properties["t"]
 
-        d_film = self.settings.sample_properties.d_film
+        d_film = self.settings.sample_properties.d_film.magnitude
+        if np.isclose(d_film, 0):
+            d_film = 1e-3
 
         # [eps0_thz] = ps * Siemens / µm, [c_thz] = µm / ps, [1/d_film] = 1/um -> conversion: 1e4 (S/cm)
         # 1 / µm = 1 / (1e-6 m) = 1 / (1e-6 * 1e2 cm) = 1 / (1e-4 cm) = 1e4 * 1 / cm
         sigma = 1e4 * (1/d_film) * eps0_thz * c_thz * (1 + n_sub) * (t_sub/t_sam - 1)
 
         # phase correction, [dt] = fs
-        dt = self.settings.eval_opt.dt
+        dt = self.settings.eval_opt.dt.magnitude
         dt *= 1e-3
         sigma *= np.exp(-1j*dt*2*np.pi*self.freq_axis)
 

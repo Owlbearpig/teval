@@ -23,12 +23,8 @@ from PySide6 import QtCore, QtWidgets, QtGui
 from matplotlib.backends.backend_qt5agg import (FigureCanvasQTAgg,
                                                 NavigationToolbar2QT)
 from matplotlib.figure import Figure
+import matplotlib.colors as mcolors
 import matplotlib
-import numpy as np
-from scipy.signal import windows
-import enum
-import time
-
 
 def style_mpl():
     _defPal = QtGui.QPalette()
@@ -53,13 +49,57 @@ def style_mpl():
                   color=_defPal.color(QtGui.QPalette.AlternateBase).name())
 
 
+class CheckableComboBox(QtWidgets.QComboBox):
+    checkedItemsChanged = QtCore.Signal(list)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setView(QtWidgets.QListView(self))
+        self.setModel(QtGui.QStandardItemModel(self))
+
+        self.view().pressed.connect(self._handle_item_pressed)
+        self._changed_lock = False
+
+    def _handle_item_pressed(self, index):
+        item = self.model().itemFromIndex(index)
+        if item.checkState() == QtCore.Qt.CheckState.Checked:
+            item.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        else:
+            item.setCheckState(QtCore.Qt.CheckState.Checked)
+
+        self._emit_checked()
+
+    def _emit_checked(self):
+        checked = []
+        for i in range(self.model().rowCount()):
+            item = self.model().item(i)
+            if item.checkState() == QtCore.Qt.CheckState.Checked:
+                checked.append(item.data(QtCore.Qt.ItemDataRole.UserRole))
+
+        self.checkedItemsChanged.emit(checked)
+
+    def addItem(self, text, data=None):
+        item = QtGui.QStandardItem(text)
+        item.setData(data if data is not None else text, QtCore.Qt.ItemDataRole.UserRole)
+        item.setCheckable(False)
+        item.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        self.model().appendRow(item)
+        self._emit_checked()
+
+    def clear(self):
+        self.model().clear()
+        self._emit_checked()
+
+    def hidePopup(self):
+        if not self.view().underMouse():
+            super().hidePopup()
+
 class MPLCanvas(QtWidgets.QGroupBox):
     """Ultimately, this is a QWidget (as well as a FigureCanvasAgg, etc.)."""
 
-    dataIsPower = False
     quantity_dict = None
-    dataSet = None
-    prevDataSet = None
+    activeDataSets = {}
+
     _prevAxesLabels = None
     _axesLabel = None
     _prevDataLabel = None
@@ -89,11 +129,17 @@ class MPLCanvas(QtWidgets.QGroupBox):
         self.autoscaleAction.setChecked(True)
         self.autoscaleAction.triggered.connect(self._autoscale)
 
-        self.mpl_toolbar.addWidget(QtWidgets.QLabel("Selected quantity: "))
+        self.mpl_toolbar.addWidget(QtWidgets.QLabel("Selected quantities: "))
 
-        self.quantity_combobox = QtWidgets.QComboBox(self.mpl_toolbar)
+        self.quantity_combobox = CheckableComboBox(self.mpl_toolbar)
+        self.quantity_combobox.setEditable(True)
+        self.quantity_combobox.lineEdit().setReadOnly(True)
+        self.quantity_combobox.setMinimumWidth(40)
+        self.quantity_combobox.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
+                                             QtWidgets.QSizePolicy.Preferred)
         self.mpl_toolbar.addWidget(self.quantity_combobox)
-        self.quantity_combobox.currentIndexChanged.connect(self._select_dataset)
+
+        self.quantity_combobox.checkedItemsChanged.connect(self._select_datasets)
 
         vbox = QtWidgets.QVBoxLayout(self)
         vbox.addWidget(self.mpl_toolbar)
@@ -110,56 +156,35 @@ class MPLCanvas(QtWidgets.QGroupBox):
 
         self.fig.tight_layout()
 
-        self._lines = self.axes.plot([], [], [], [], animated=True)
-        self._lines[0].set_alpha(0.25)
-        self.axes.legend(['Previous', 'Current'])
-        self.axes.set_title('Data')
-        self._redraw()
+        self.axes.clear()
+        self._plot_lines = {}
+        self._line_cmap = {}
 
-        # Use a timer with a timeout of 0 to initiate redrawing of the canvas.
-        # This ensures that the eventloop has run once more and prevents
-        # artifacts.
         self._redrawTimer = QtCore.QTimer(self)
         self._redrawTimer.setSingleShot(True)
         self._redrawTimer.setInterval(100)
         self._redrawTimer.timeout.connect(self._redraw)
 
-        # will be disconnected in drawDataSet() when live data is detected.
-        self._redraw_id = self.canvas.mpl_connect('draw_event',
-                                                  self._redraw_artists)
-
-    def update_combobox(self, quantity_dict):
+    def update_combobox(self, quantity_dict=None):
+        if quantity_dict is None:
+            quantity_dict = self.quantity_dict
         self.quantity_combobox.clear()
         for k in quantity_dict:
             self.quantity_combobox.addItem(k, k)
 
-    def _select_dataset(self):
+    def _select_datasets(self, checked_keys):
         quantity_key = self.quantity_combobox.currentData()
         if quantity_key is None:
             return
-        self.dataSet = self.quantity_dict[quantity_key]
+        self.activeDataSets = {k: self.quantity_dict[k] for k in checked_keys if k in self.quantity_dict}
 
-        axes_labels = self.dataSet.axes_labels
-        if len(axes_labels) != 0:
-            self._axesLabel = axes_labels[0]
-        if not self.dataSet.data_label:
-            self._dataLabel = quantity_key
-        else:
-            self._dataLabel = self.dataSet.data_label
+        self._replot(redraw_axes_labels=True)
 
-        self._replot(redraw_data_label=True, redraw_axes_labels=True)
-
-    def _redraw_artists(self, *args):
-        if not self._isLiveData:
-            self.axes.draw_artist(self._lines[0])
-
-        self.axes.draw_artist(self._lines[1])
 
     def _redraw(self):
         self.fig.tight_layout()
         self.canvas.draw()
         self.backgrounds = [self.fig.canvas.copy_from_bbox(self.axes.bbox)]
-        self._redraw_artists()
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -170,12 +195,16 @@ class MPLCanvas(QtWidgets.QGroupBox):
         self._redrawTimer.start()
 
     def _dataSetToLines(self, data, line):
-        if data is None:
+        if data is None or not data.axes:
             line.set_data([], [])
             return
 
         # data.data -= np.mean(data.data)
         line.set_data(data.axes[0].magnitude, data.data.magnitude)
+
+    def _redraw(self):
+        self.fig.tight_layout()
+        self.canvas.draw()
 
     def _autoscale(self, *, redraw=True):
         prev_xlim = self.axes.get_xlim()
@@ -192,87 +221,84 @@ class MPLCanvas(QtWidgets.QGroupBox):
 
         return need_redraw
 
-    def _replot(self, redraw_axes=False, redraw_axes_labels=False,
-                redraw_data_label=False):
-        if not self._isLiveData:
-            self._dataSetToLines(self.prevDataSet, self._lines[0])
-        self._dataSetToLines(self.dataSet, self._lines[1])
+    def _replot(self, redraw_axes_labels=True):
+        current_keys = set(self.activeDataSets.keys())
+        for existing_key in list(self._plot_lines.keys()):
+            if existing_key not in current_keys:
+                self._plot_lines[existing_key].remove()
+                del self._plot_lines[existing_key]
 
-        if self._axesLabel and redraw_axes_labels:
-            self.axes.set_xlabel('{} [{:C~}]'.format(
-                self._axesLabel,
-                self.dataSet.axes[0].units))
+        for key, dataset in self.activeDataSets.items():
+            if dataset is not None and dataset.axes:
+                x_vals = dataset.axes[0].magnitude
+                y_vals = dataset.data.magnitude.real
 
-        if self._dataLabel and redraw_data_label:
-            self.axes.set_ylabel('{} [{:C~}]'.format(
-                self._dataLabel,
-                self.dataSet.data.units))
+                if key in self._plot_lines:
+                    self._plot_lines[key].set_data(x_vals, y_vals)
+                else:
+                    color = self._line_cmap.get(key, "black")
+                    line, = self.axes.plot(x_vals, y_vals, label=key, color=color)
+                    self._plot_lines[key] = line
 
-        axis_limits_changed = False
-        if (self.autoscaleAction.isChecked()):
-            axis_limits_changed = self._autoscale(redraw=False)
+        if self.activeDataSets:
+            last_ds_name = list(self.activeDataSets.keys())[-1]
+            last_ds = self.activeDataSets[last_ds_name]
+            if redraw_axes_labels and last_ds.axes:
+                x_label = f"{last_ds.axes_labels[0] if last_ds.axes_labels else "X"} [{last_ds.axes[0].units:C~}]"
+                y_label = f"{last_ds.data_label if last_ds.data_label else last_ds_name} [{last_ds.data.units:C~}]"
 
-        # check whether a full redraw is necessary or if simply redrawing
-        # the data lines is enough
-        if (redraw_axes or redraw_axes_labels or
-                redraw_data_label or axis_limits_changed):
-            self._redraw()
+                self.axes.set_xlabel(x_label)
+                self.axes.set_ylabel(y_label)
+            if self._plot_lines:
+                self.axes.legend(loc="upper right")
         else:
-            for bg in self.backgrounds:
-                self.canvas.restore_region(bg)
-            self._redraw_artists()
-            self.canvas.blit(self.axes.bbox)
+            if self._plot_lines:
+                self.axes.legend().remove()
 
-    def drawDataSet(self, quantity_dict, axes_labels, data_label):
+        if self.autoscaleAction.isChecked():
+            self.axes.relim()
+            self.axes.autoscale()
+
+        self.fig.tight_layout()
+        self.canvas.draw()
+
+    def set_canvas_values(self, quantity_dict, axes_labels, data_label):
         self.quantity_dict = quantity_dict
-        self.update_combobox(self.quantity_dict)
-        if self.quantity_combobox.currentData() is None:
-            return
-        newDataSet = self.quantity_dict[self.quantity_combobox.currentData()]
 
-        plotTime = time.perf_counter()
+        color_palette = list(mcolors.TABLEAU_COLORS.values())
+        self._line_cmap = {
+            key: color_palette[i % len(color_palette)]
+            for i, key in enumerate(self.quantity_dict.keys())
+        }
 
-        looksLikeLiveData = plotTime - self._lastPlotTime < 1
+        previously_checked = []
+        if hasattr(self.quantity_combobox, "model"):
+            for i in range(self.quantity_combobox.model().rowCount()):
+                item = self.quantity_combobox.model().item(i)
+                if item.checkState() == QtCore.Qt.CheckState.Checked:
+                    previously_checked.append(item.data(QtCore.Qt.ItemDataRole.UserRole))
 
-        if looksLikeLiveData != self._isLiveData:
-            if looksLikeLiveData:
-                self.canvas.mpl_disconnect(self._redraw_id)
-            else:
-                self._redraw_id = self.canvas.mpl_connect('draw_event',
-                                                          self._redraw_artists)
+        self.quantity_combobox.clear()
+        for k in self.quantity_dict:
+            self.quantity_combobox.addItem(k, k)
 
-        self._isLiveData = looksLikeLiveData
+        if previously_checked:
+            for i in range(self.quantity_combobox.model().rowCount()):
+                item = self.quantity_combobox.model().item(i)
+                key_name = item.data(QtCore.Qt.ItemDataRole.UserRole)
+                if key_name in previously_checked:
+                    item.setCheckState(QtCore.Qt.CheckState.Checked)
+        else:
+            if self.quantity_combobox.model().rowCount() > 0:
+                first_item = self.quantity_combobox.model().item(0)
+                first_item.setCheckState(QtCore.Qt.CheckState.Checked)
 
-        # artificially limit the replot rate to 5 Hz
-        if (plotTime - self._lastPlotTime < 0.2):
-            return
-
-        self._lastPlotTime = plotTime
-
-        self.prevDataSet = self.dataSet
-        self.dataSet = newDataSet
-
-        redraw_axes = (self.prevDataSet is None or
-                       len(self.prevDataSet.axes) != len(self.dataSet.axes))
-        if not redraw_axes:
-            for x, y in zip(self.prevDataSet.axes, self.dataSet.axes):
-                if x.units != y.units:
-                    redraw_axes = True
-                    break
-
-        redraw_axes_labels = (self._axesLabel != axes_labels or
-                              self.prevDataSet and self.dataSet and
-                              self.prevDataSet.axes[0].units !=
-                              self.dataSet.axes[0].units)
-        redraw_data_label = (self._dataLabel != data_label or
-                             self.prevDataSet and self.dataSet and
-                             self.prevDataSet.data.units !=
-                             self.dataSet.data.units)
+        self.quantity_combobox._emit_checked()
 
         self._axesLabel = axes_labels
         self._dataLabel = data_label
 
-        self._replot(redraw_axes, redraw_axes_labels, redraw_data_label)
+        self._replot(redraw_axes_labels=True)
 
 
 class MPLCanvasDoubleDataset(MPLCanvas):

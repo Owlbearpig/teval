@@ -166,13 +166,13 @@ def create_action(component, action):
 def create_plot_area(component, name, prettyName, trait):
     if usePyQtGraph:
         def draw(change):
-            canvas.drawDataSet(change['new'])
+            canvas.set_canvas_values(change['new'])
     else:
         def draw(change):
             canvas.dataIsPower = trait.metadata.get('is_power', False)
-            canvas.drawDataSet(change['new'],
-                               trait.metadata.get('axes_labels', None),
-                               trait.metadata.get('data_label', None))
+            canvas.set_canvas_values(change['new'],
+                                     trait.metadata.get('axes_labels', None),
+                                     trait.metadata.get('data_label', None))
 
     if usePyQtGraph:
         canvas = PyQtGraphPlotter()

@@ -49,7 +49,7 @@ def drude2(freq_, sig0, tau, wp, eps_inf):
 def drude_smith(freq_, sig0, tau, c1):
     tau *= 1e-3
     tau /= 2 * pi
-    return sig0 * c1 / (tau - 1j * tau) # TODO CHECK THIS!!!
+    return sig0 * c1 / (tau - 1j * tau) # TODO CHECK THIS!!! It's wrong!
 
 def lattice_contrib(freq_, tau, wp, eps_s, eps_inf):
     tau *= 1e-3  # fs = 1e-3 ps
