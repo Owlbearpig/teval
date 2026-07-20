@@ -304,29 +304,26 @@ class DatasetEval(ComponentBase):
     @action("Fit regression model", group="Regression")
     def perform_regression(self):
         def bg_worker():
-            try:
-                self.update_opt_config()
+            self.update_opt_config()
 
-                min_kwargs = self.shgo_options.minimizer_kwargs.traits(group=MinimizerOptions.minimizer_opt_grp)
-                min_kwargs["method"] = str(self.shgo_options.minimizer_kwargs.method.value)
+            min_kwargs = self.shgo_options.minimizer_kwargs.traits(group=MinimizerOptions.minimizer_opt_grp)
+            min_kwargs["method"] = str(self.shgo_options.minimizer_kwargs.method.value)
 
-                opt_res_ = shgo(func=self._opt_conf["func"],
-                                bounds=self._opt_conf["bounds"],
-                                n=self.shgo_options.n,
-                                iters=self.shgo_options.iters,
-                                minimizer_kwargs=min_kwargs,
-                                options=self.shgo_options.get_shgo_options(),
-                                )
-                logging.info("Fit result: {}".format(opt_res_))
+            opt_res_ = shgo(func=self._opt_conf["func"],
+                            bounds=self._opt_conf["bounds"],
+                            n=self.shgo_options.n,
+                            iters=self.shgo_options.iters,
+                            minimizer_kwargs=min_kwargs,
+                            options=self.shgo_options.get_shgo_options(),
+                            )
+            logging.info("Fit result: {}".format(opt_res_))
 
-                opt_res_.x = [2, 3]
-                opt_res_.fun = 1e-5
-                reg_res = self.prepare_regression_result(opt_res_)
+            opt_res_.x = [2, 3]
+            opt_res_.fun = 1e-5
+            reg_res = self.prepare_regression_result(opt_res_)
 
-                self.current_result.set_traits_from_dict(reg_res)
-                #self.result_saver.process(self.current_result)
-            except Exception:
-                traceback.print_exc()
+            self.current_result.set_traits_from_dict(reg_res)
+            #self.result_saver.process(self.current_result)
 
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(bg_worker)
