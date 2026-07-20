@@ -9,7 +9,6 @@ from common.traits import Quantity, Path as PathTrait, ValueRange
 from pathlib import Path
 import types
 import logging
-from functools import partial
 from collections import OrderedDict
 from itertools import chain
 import numpy as np

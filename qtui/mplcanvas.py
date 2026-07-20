@@ -244,7 +244,7 @@ class MPLCanvas(QtWidgets.QGroupBox):
             last_ds_name = list(self.activeDataSets.keys())[-1]
             last_ds = self.activeDataSets[last_ds_name]
             if redraw_axes_labels and last_ds.axes:
-                x_label = f"{last_ds.axes_labels[0] if last_ds.axes_labels else "X"} [{last_ds.axes[0].units:C~}]"
+                x_label = f"{last_ds.axes_labels[0] if last_ds.axes_labels else 'X'} [{last_ds.axes[0].units:C~}]"
                 y_label = f"{last_ds.data_label if last_ds.data_label else last_ds_name} [{last_ds.data.units:C~}]"
 
                 self.axes.set_xlabel(x_label)
