@@ -27,7 +27,7 @@ class QSpaceEval:
 
         self.model_kwargs = {}
         self.cost_fun = self.dataset_eval.cost_fun.value
-        self.transmission_model = self.dataset_eval.transmission_model.value
+        self.transmission_model = self.dataset_eval.transmission_model
 
         self.opt_state = {
             "d": self.settings.sample_properties.d.magnitude,
@@ -40,7 +40,7 @@ class QSpaceEval:
             # check if transmission model expects n_sub
             test_kwargs = self.model_kwargs.copy()
             test_kwargs["d"] = 1
-            self.transmission_model(n=1, freq=1, **test_kwargs)
+            self.transmission_model.value(n=1, freq=1, **test_kwargs)
             return False
         except KeyError as e:
             logging.info(e)
@@ -180,7 +180,7 @@ class QSpaceEval:
             "freq_axis": self.freq_axis,
             "single_layer_approx": self.model_kwargs["single_layer_approx"],
             "t_exp": self.model_kwargs["meas_quants"]["t_exp"],
-            "transmission_model": self.transmission_model,
+            "transmission_model": self.transmission_model.value,
             "cost_fun": self.cost_fun,
             "minimizer_kwargs": self.dataset_eval.shgo_options.get_minimizer_kwargs(),
             "shgo_options": self.dataset_eval.shgo_options.get_shgo_options()
@@ -277,6 +277,9 @@ class QSpaceEval:
         smoothed_quantities = ["n", "k", "alpha"]
         for q in smoothed_quantities:
             best_res[q] = moving_average(best_res[q], iterations=sas[0], n=sas[1])
+
+        best_res["measurement_quantity"] = "Transmission"
+        best_res["model_name"] = self.transmission_model.name
 
         return self.prepare_result(best_res)
 

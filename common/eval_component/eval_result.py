@@ -1,12 +1,13 @@
-import logging
 from common.components import ComponentBase
 from common.traits import QuantityDict
 from common.eval_component.quantity_set import DataSetDict as QuantityDictClass, DataSet
+from common.eval_component.conductivity_models import model_params
 from traitlets import Bool, Float, Int, Unicode, Integer
 from common.traits import Quantity, Q_
 import numpy as np
 from common.eval_component.quantity_set import DataSet as SingleQuantityDataSet
 import h5py
+import inspect
 
 
 class EvalResult(ComponentBase):
@@ -14,22 +15,25 @@ class EvalResult(ComponentBase):
     quantity_dict = QuantityDict()
 
     d = Quantity(Q_(0, "µm"), read_only=True, group="Transmission fit result values")
-    q_val = Quantity(Q_(0.0, ""), read_only=True, group="Transmission fit result values")
-    gof = Quantity(Q_(0.0, ""), read_only=True, group="Transmission fit result values")
-    shift = Quantity(Q_(0.0, "fs"), read_only=True, group="Transmission fit result values")
+    q_val = Quantity(Q_(0, ""), read_only=True, group="Transmission fit result values")
+    gof = Quantity(Q_(0, ""), read_only=True, group="Transmission fit result values")
+    shift = Quantity(Q_(0, "fs"), read_only=True, group="Transmission fit result values")
 
-    fun = Float(0.0, read_only=True, group="Regression result values")
-    nit = Integer(0, read_only=True, group="Regression result values")
-    sig0 = Quantity(Q_(10, "S/cm"), read_only=True, group="Regression result values").tag(name="σ₀")
-    tau = Quantity(Q_(10, "fs"), read_only=True, group="Regression result values").tag(name="τ")
-    wp = Quantity(Q_(-10, "THz"), read_only=True, group="Regression result values").tag(name="ωₚ")
-    eps_inf = Float(-10, read_only=True, group="Regression result values").tag(name="ε_inf")
-    eps_s = Float(-10, read_only=True, group="Regression result values").tag(name="ε_s")
-    c1 = Float(-10, read_only=True, group="Regression result values").tag(name="c₁")
+    reg_res_grp_name = "Regression result values"
+    fun = Float(0, read_only=True, group=reg_res_grp_name)
+    nit = Integer(0, read_only=True, group=reg_res_grp_name)
+    sig0 = Quantity(Q_(0, "S/cm"), read_only=True, group=reg_res_grp_name).tag(name="σ₀")
+    tau = Quantity(Q_(0, "fs"), read_only=True, group=reg_res_grp_name).tag(name="τ")
+    wp = Quantity(Q_(0, "THz"), read_only=True, group=reg_res_grp_name).tag(name="ωₚ")
+    eps_inf = Float(0, read_only=True, group=reg_res_grp_name).tag(name="ε_inf")
+    eps_s = Float(0, read_only=True, group=reg_res_grp_name).tag(name="ε_s")
+    c1 = Float(0, read_only=True, group=reg_res_grp_name).tag(name="c₁")
 
     result_type = Unicode("None", read_only=True).tag(priority=1)
     timestamp = Unicode("", read_only=True)
     converged = Bool(False, read_only=True)
+    model_name = Unicode("", read_only=True)
+    measurement_quantity = Unicode("", read_only=True)
 
     def __init__(self, opt_res_dict=None, **kwargs):
         super().__init__(**kwargs)
@@ -137,10 +141,14 @@ class EvalResult(ComponentBase):
 
         return parsed_result_dict
 
-    def set_traits_from_dict(self, opt_res_dict):
-        for k, v in opt_res_dict.items():
+    def set_traits_from_dict(self, trait_value_dict):
+        for k, v in trait_value_dict.items():
             if isinstance(v, (int, str, float, Q_)):
                 self.set_trait(k, v)
 
-        dataset_dict = {k: v for k, v in opt_res_dict.items() if isinstance(v, DataSet)}
+        dataset_dict = {k: v for k, v in trait_value_dict.items() if isinstance(v, DataSet)}
         self.quantity_dict = QuantityDictClass(dataset_dict)
+
+        if "model_name" in trait_value_dict:
+            param_keys = model_params(trait_value_dict["model_name"])
+            self.toggle_traits(param_keys, self, group_filter=self.reg_res_grp_name)

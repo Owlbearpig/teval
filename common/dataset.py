@@ -122,6 +122,7 @@ class DataSet(ComponentBase):
                     QuantityEnum.RefPhase: self.ref_phase,
                     QuantityEnum.ZeroCrossing: self.get_zero_crossing,
                     QuantityEnum.TimeOfFlight: self.time_of_flight,
+                    QuantityEnum.Transmission: self.transmission,
                     QuantityEnum.TransmissionAmp: self.amplitude_transmission,
                     QuantityEnum.TransmissionPhase: self.phase_transmission,
                     QuantityEnum.RefractiveIdx: self.refractive_idx,

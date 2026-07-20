@@ -1,5 +1,6 @@
 from traitlets import HasTraits, Unicode, Bool, Int, Instance
 import traitlets
+from PySide6 import QtWidgets
 
 def is_component_trait(x):
     return isinstance(x, Instance) and issubclass(x.klass, ComponentBase)
@@ -66,6 +67,21 @@ class ComponentBase(HasTraits):
                 trait.get(self).__exit__(*args)
 
         return False
+
+    def toggle_traits(self, active_traits, component_inst, group_filter="", endswith_filter=""):
+        ui_widget = getattr(component_inst, "_ui_control_widget", None)
+        if ui_widget and hasattr(ui_widget, "param_widgets"):
+            for trait_name, widgets in ui_widget.param_widgets.items():
+                if trait_name.endswith(endswith_filter) and trait_name in component_inst.traits(group=group_filter):
+                    is_visible = (trait_name in active_traits)
+                    widgets[0].setVisible(is_visible)
+
+                    if isinstance(widgets[1], QtWidgets.QLayout):
+                        for i in range(widgets[1].count()):
+                            w = widgets[1].itemAt(i).widget()
+                            if w: w.setVisible(is_visible)
+                    else:
+                        widgets[1].setVisible(is_visible)
 
     @property
     def actions(self):

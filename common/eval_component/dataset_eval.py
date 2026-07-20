@@ -14,21 +14,20 @@ import inspect
 from scipy.signal import iirnotch, filtfilt
 from common.eval_component.q_space_eval import QSpaceEval
 from common.eval_component.quantity_set import DataSet as SingleQuantityDataSet
-from numpy import polyfit
-from enum import Enum, member
-from common.eval_component.conductivity_models import *
+from common.eval_component.conductivity_models import RegressionModels, model_params
 from common.traits import Quantity, Q_, ValueRange, Path as TPath
 from pathlib import Path
 from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance
 from common.default_appsettings import QuantityEnum
 from common.eval_component.transfer_functions import (t_tmm_model_1layer, model_1layer, t_tmm_model_2layer,
                                                       model_2layer, _t_model_2layer)
+from common.consts import eps0_thz
 from common.eval_component.shgo_settings import SHGOOptions, MinimizerOptions
 from common.save import ResultSaver
 from common.eval_component.eval_result import EvalResult
 from concurrent.futures import ThreadPoolExecutor
-from PySide6 import QtWidgets
 from PySide6.QtCore import QObject, Signal
+from enum import Enum, member
 
 class ProgressSignalCarrier(QObject):
     progress_changed = Signal(float)
@@ -48,15 +47,6 @@ def phi_cost_fun(y_meas, y_mod):
 
 def combined_cost_fun(y_meas, y_mod):
     return abs_cost_fun(y_meas, y_mod) + phi_cost_fun(y_meas, y_mod)
-
-# logging.basicConfig(level=logging.WARNING)
-
-
-class RegressionModels(Enum):
-    drude = member(drude)
-    drude2 = member(drude2)
-    lattice_drude = member(total_response)
-    drude_smith = member(drude_smith)
 
 class TransmissionModels(Enum):
     tmm_1layer = member(t_tmm_model_1layer)
@@ -86,17 +76,18 @@ class DatasetEval(ComponentBase):
     optimization_progress = Float(0, min=0, max=1,
                                   group="General", read_only=True).tag(name="Progress")
 
+    regression_grp_name = "Regression"
     meas_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.TransmissionAmp,
-                          group="Regression").tag(name="Measurement quantity")
-    regression_model = TEnum(RegressionModels, default_value=RegressionModels.drude, group="Regression")
-    convert_sigma_to_t = Bool(default_value=False, group="Regression")
+                          group=regression_grp_name).tag(name="Measurement quantity")
+    regression_model = TEnum(RegressionModels, default_value=RegressionModels.drude, group=regression_grp_name)
+    convert_sigma_to_t = Bool(default_value=False, group=regression_grp_name)
 
-    sig0_bounds = ValueRange([Q_(10, "S/cm"), Q_(20, "S/cm")], group="Regression").tag(name="σ₀ Bounds")
-    tau_bounds = ValueRange([Q_(10, "fs"), Q_(1000, "fs")], group="Regression").tag(name="τ Bounds")
-    wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group="Regression").tag(name="ωₚ Bounds")
-    eps_inf_bounds = ValueRange([1.0, 100.0], group="Regression").tag(name="ε_inf Bounds")
-    eps_s_bounds = ValueRange([1.0, 100.0], group="Regression").tag(name="ε_s Bounds")
-    c1_bounds = ValueRange([-1.0, 1.0], group="Regression").tag(name="c₁ Bounds")
+    sig0_bounds = ValueRange([Q_(10, "S/cm"), Q_(20, "S/cm")], group=regression_grp_name).tag(name="σ₀ Bounds")
+    tau_bounds = ValueRange([Q_(10, "fs"), Q_(1000, "fs")], group=regression_grp_name).tag(name="τ Bounds")
+    wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group=regression_grp_name).tag(name="ωₚ Bounds")
+    eps_inf_bounds = ValueRange([1.0, 100.0], group=regression_grp_name).tag(name="ε_inf Bounds")
+    eps_s_bounds = ValueRange([1.0, 100.0], group=regression_grp_name).tag(name="ε_s Bounds")
+    c1_bounds = ValueRange([-1.0, 1.0], group=regression_grp_name).tag(name="c₁ Bounds")
 
     transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.tmm_1layer,
                                group="Transmission fit")
@@ -186,34 +177,16 @@ class DatasetEval(ComponentBase):
         if value:
             self.select_regression_model()
 
-    def toggle_traits(self, active_traits, component_inst, group_filter="", endswith_filter=""):
-        ui_widget = getattr(component_inst, "_ui_control_widget", None)
-        if ui_widget and hasattr(ui_widget, "param_widgets"):
-            for trait_name, widgets in ui_widget.param_widgets.items():
-                if trait_name.endswith(endswith_filter) and trait_name in component_inst.traits(group=group_filter):
-                    is_visible = (trait_name in active_traits)
-                    widgets[0].setVisible(is_visible)
-
-                    if isinstance(widgets[1], QtWidgets.QLayout):
-                        for i in range(widgets[1].count()):
-                            w = widgets[1].itemAt(i).widget()
-                            if w: w.setVisible(is_visible)
-                    else:
-                        widgets[1].setVisible(is_visible)
-
     @observe("regression_model")
     def select_regression_model(self, change=None):
         self.update_freq_axis()
         model = self.regression_model.value if change is None else change["new"].value
         self._opt_conf["model"] = partial(model, self._opt_conf["freq_axis"])
-        self._opt_conf["model_signature"] = inspect.signature(self._opt_conf["model"])
 
-        param_keys = self._opt_conf["model_signature"].parameters.keys()
-        active_bounds = [f"{p}_bounds" for p in param_keys if p not in ['freq', 'freq_']]
-        param_traits = [p for p in param_keys if p not in ['freq', 'freq_']]
+        param_keys = model_params(self.regression_model.name)
+        active_bounds = [f"{p}_bounds" for p in param_keys]
 
-        self.toggle_traits(active_bounds, self, group_filter="Regression", endswith_filter="_bounds")
-        self.toggle_traits(param_traits, self.current_result, group_filter="Regression result")
+        self.toggle_traits(active_bounds, self, group_filter=self.regression_grp_name, endswith_filter="_bounds")
 
         return self._opt_conf["model"]
 
@@ -274,11 +247,14 @@ class DatasetEval(ComponentBase):
         self.setup_cost()
         self.setup_bounds()
 
+        return self._opt_conf
+
     def prepare_regression_result(self, opt_res):
-        param_keys = self._opt_conf["model_signature"].parameters.keys()
+        model_name = self.regression_model.name
+        param_keys = model_params(model_name)
         x = opt_res.x
 
-        opt_res_dict = {}
+        opt_res_dict = {"model_name": model_name}
         for param_idx, p in enumerate(param_keys):
             bound = getattr(self, p + "_bounds", None)
             if bound is None or not isinstance(bound[0], Q_):
@@ -301,17 +277,17 @@ class DatasetEval(ComponentBase):
         opt_res_dict["result_type"] = "Regression"
         return opt_res_dict
 
-    @action("Fit regression model", group="Regression")
+    @action("Fit regression model", group=regression_grp_name)
     def perform_regression(self):
         def bg_worker():
             try:
-                self.update_opt_config()
+                opt_config = self.update_opt_config()
 
                 min_kwargs = self.shgo_options.minimizer_kwargs.traits(group=MinimizerOptions.minimizer_opt_grp)
                 min_kwargs["method"] = str(self.shgo_options.minimizer_kwargs.method.value)
 
-                opt_res_ = shgo(func=self._opt_conf["func"],
-                                bounds=self._opt_conf["bounds"],
+                opt_res_ = shgo(func=opt_config["func"],
+                                bounds=opt_config["bounds"],
                                 n=self.shgo_options.n,
                                 iters=self.shgo_options.iters,
                                 minimizer_kwargs=min_kwargs,
@@ -319,12 +295,11 @@ class DatasetEval(ComponentBase):
                                 )
                 logging.info("Fit result: {}".format(opt_res_))
 
-                opt_res_.x = [2, 3]
-                opt_res_.fun = 1e-5
                 reg_res = self.prepare_regression_result(opt_res_)
+                reg_res["measurement_quantity"] = self.meas_quantity.name
 
                 self.current_result.set_traits_from_dict(reg_res)
-                #self.result_saver.process(self.current_result)
+                self.result_saver.process(self.current_result)
             except Exception:
                 traceback.print_exc()
 
