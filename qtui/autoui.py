@@ -371,6 +371,18 @@ def create_path_selector(component, name, prettyName, trait):
 
     choose.clicked.connect(choose_path)
 
+    def sizeHint(self):
+        original_hint = QtWidgets.QLineEdit.sizeHint(self)
+
+        user_width = trait.metadata.get("width", None)
+        og_width = original_hint.width()
+        width = og_width if user_width is None else max(og_width, user_width)
+
+        return QtCore.QSize(width, original_hint.height())
+
+    lineEdit.sizeHint = types.MethodType(sizeHint, lineEdit)
+    lineEdit.updateGeometry()
+
     layout.addWidget(lineEdit)
     layout.addWidget(choose)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -433,7 +445,7 @@ def _traitSortingKey(args):
 
     userPrio = trait.metadata.get("priority", 999)
 
-    return prio, userPrio, name
+    return userPrio, prio, name
 
 
 def generate_component_ui(name, component):
@@ -446,7 +458,6 @@ def generate_component_ui(name, component):
               if not is_component_trait(trait)]
 
     groups = OrderedDict()
-
     hasPlots = False
     for name, trait in traits:
         if isinstance(trait, QuantityDict):
@@ -468,6 +479,8 @@ def generate_component_ui(name, component):
         prettyName = _prettyName(trait, name)
         group = _group(trait)
         layout = groups[group].layout()
+        if trait.metadata.get("fullwidth", False):
+            groups[group].fullwidth = True
 
         field_widget = None
         if (isinstance(trait, ValueRange)):

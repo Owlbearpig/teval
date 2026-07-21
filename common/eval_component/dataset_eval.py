@@ -182,6 +182,8 @@ class DatasetEval(ComponentBase):
 
     @observe("regression_model")
     def select_regression_model(self, change=None):
+        if self.freq_axis is None:
+            return None
         self.update_freq_axis()
         model = self.regression_model.value if change is None else change["new"].value
         self._opt_conf["model"] = partial(model, self._opt_conf["freq_axis"])

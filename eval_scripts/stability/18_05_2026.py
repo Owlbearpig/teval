@@ -44,9 +44,9 @@ class AppRoot(ComponentBase):
         self.settings = Settings(settings_file, object_name="Settings")
         self.settings_sub = Settings(sub_settings_file, object_name="Sub settings")
         self.settings.plot_opt.redp_sensor_labels = redp_labels
-        self.dataset = DataSet(dataset_path, self.settings, object_name="Dataset")
+        self.dataset = DataSet(self.settings, object_name="Dataset")
 
-        self.dataset_sub = DataSet(dataset_path_sub, self.settings_sub, object_name="Dataset substrate")
+        self.dataset_sub = DataSet(self.settings_sub, object_name="Dataset substrate")
 
         self.dataset_plotter = DataSetPlotter(self.dataset, object_name="Dataset Plotter")
         self.dataset_eval = DatasetEval(self.dataset, self.dataset_sub, object_name="Dataset Evaluation")

@@ -1,11 +1,9 @@
 from common.components import ComponentBase
-from common.default_appsettings import QuantityFunc, ClimateQuantity, Direction, Dist, ReferenceSelection
+from common.default_appsettings import Dist, ReferenceSelection
 from common.settings import Settings
-from copy import deepcopy
 from pathlib import Path
 import numpy as np
-from common.functions import (unwrap, window, local_minima_1d, butter_filt,
-                       phase_correction, do_fft, do_ifft, f_axis_idx_map, remove_offset, arr_statistics)
+from common.functions import window, butter_filt, do_fft, f_axis_idx_map, remove_offset, arr_statistics
 from common.measurements import Measurement, meas_id_func
 from mpl_settings import mpl_style_params
 import matplotlib as mpl
@@ -15,13 +13,12 @@ import colorlog
 from datetime import datetime
 from common.dataset_cache import DatasetCache
 import pandas as pd
-from common.traits import Q_
+from common.traits import Q_, Path as TPath
 from scipy.stats import pearsonr
 from common.default_appsettings import Domain, QuantityEnum, DatasetOpt
 from common.components import action
 import itertools
-from traitlets import Unicode
-from typing import List, Literal, Union, overload
+from traitlets import Unicode, observe
 
 """
 TODOs: 
@@ -73,7 +70,9 @@ def logger_config(settings):
     logger.setLevel(log_level)
 
 class DataSet(ComponentBase):
-    data_path_info = Unicode("", group="Dataset info", read_only=True).tag(name="Data path")
+    data_path = TPath(Path("."), is_file=False).tag(priority=-100, name="Dataset path", fullwidth=True)
+
+    # data_path_info = Unicode("", group="Dataset info", read_only=True).tag(name="Data path")
     max_amp_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Max amplitude measurement")
     first_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="First measurement")
     last_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Last measurement")
@@ -85,7 +84,7 @@ class DataSet(ComponentBase):
     meas_time_info = Unicode("", group="Measurement time info", read_only=True).tag(name="Total measurement time")
     mean_meas_time_info = Unicode("", group="Measurement time info", read_only=True).tag(name="Mean measurement time")
 
-    def __init__(self, data_path : Path | str, settings : Settings, **kwargs):
+    def __init__(self, settings : Settings, **kwargs):
         super().__init__(**kwargs)
         self.plotted_ref = False
         self.noise_floor = None
@@ -97,16 +96,37 @@ class DataSet(ComponentBase):
         self.sub_dataset = None
         self.is_sub_dataset = False
 
-        self.data_path = self._set_path(data_path)
+        # self.data_path = self._set_path()
 
         self.settings = settings
-
-        self._parse_measurements()
 
         self._set_observers()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.settings.save_configuration(self)
+
+    def __enter__(self):
+        self.settings.load_configuration(self)
+
+    @observe("data_path")
+    def _set_path(self, change=None):
+        if change is None:
+            return
+
+        data_path = change["new"]
+
+        if not data_path.exists():
+            raise ValueError(f"Path {data_path} does not exist")
+        if not data_path.is_dir():
+            raise ValueError(f"Path {data_path} is not a directory")
+        if not list(data_path.glob("*")):
+            raise ValueError(f"Path {data_path} is empty")
+
+        self.set_trait("data_path", data_path)
+
+        self._parse_measurements()
+
+        return
 
     def _set_observers(self):
         reference_filter_trait_names = self.settings.dataset_opt.trait_names(group=DatasetOpt.reference_filter_group)
@@ -132,10 +152,6 @@ class DataSet(ComponentBase):
 
     def update_meas_sorting(self, change):
         self._sort_meas_type()
-
-    @action("print settings")
-    def print_settings(self):
-        print(self.settings.pp_opt.filter_enabled)
 
     def _data_properties(self):
         sample_data_td, sample_data_fd = self.get_data(self.measurements["all"][0], domain=Domain.Both)
@@ -193,20 +209,6 @@ class DataSet(ComponentBase):
         self.properties["shape"] = {"w": w, "h": h, "dx": dx, "dy": dy, "extent": extent,
                                     "x_coords": x_coords, "y_coords": y_coords, "all_points": all_points}
 
-    def _set_path(self, data_path):
-        data_path = Path(data_path)
-
-        if not data_path.exists():
-            raise ValueError(f"Path {data_path} does not exist")
-        if not data_path.is_dir():
-            raise ValueError(f"Path {data_path} is not a directory")
-        if not list(data_path.glob("*")):
-            raise ValueError(f"Path {data_path} is empty")
-
-        self.set_trait("data_path_info", str(data_path))
-
-        return data_path
-
     def find_climate_log_file(self, climate_log_file):
         log_file = Path(climate_log_file)
         if log_file.is_file():
@@ -247,7 +249,7 @@ class DataSet(ComponentBase):
                     logging.info(f"Skipping {file_path}. {err}")
 
         if not measurements:
-            raise Exception("No measurements found. Check path or filenames")
+            logging.warning("No measurements found. Check path or filenames")
 
         measurements = tuple(sorted(measurements, key=lambda meas: meas.meas_time))
 
@@ -259,10 +261,15 @@ class DataSet(ComponentBase):
         return meas_id_func(timestamp_dt)
 
     def _parse_measurements(self):
+        if self.data_path is None:
+            return
+
         if not isinstance(self.data_path, Path):
             self.data_path = Path(self.data_path)
 
         self.measurements["all"] = self._read_data_dir()
+        if not self.measurements["all"]:
+            return
 
         self.cache = DatasetCache(self.measurements["all"], self.data_path)
         self._data_properties()
