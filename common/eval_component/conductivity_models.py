@@ -3,23 +3,12 @@ from common.consts import eps0_thz, pi
 from enum import Enum, member
 import inspect
 
+
 def model_params(model_name):
     model = getattr(RegressionModels, model_name).value
     all_params = inspect.signature(model).parameters.keys()
     return [p for p in all_params if p not in ["freq", "freq_"]]
 
-
-def total_response(freq, sig0, tau, wp, eps_s, eps_inf, c1):
-    # [freq] = THz, [tau] = fs, [sig0] = S/cm, [wp] = THz. Dimensionless: eps_inf, eps_s
-    sig_cc = drude(freq, sig0, tau)
-    # sig_cc = drude_smith(freq, tau, sig0, c1)
-    eps_l = lattice_contrib(freq, tau, wp, eps_s, eps_inf)
-
-    n = sqrt(eps_l)
-
-    sig_tot = n_to_sigma(freq, n) + sig_cc
-
-    return sig_tot
 
 def sigma_to_n(freq, sig):
     # [eps0_thz] = ps * S / µm
@@ -69,7 +58,12 @@ def drude2(freq_, sig0, tau, wp, eps_inf):
 def drude_smith(freq_, sig0, tau, c1):
     tau *= 1e-3
     tau /= 2 * pi
-    return sig0 * c1 / (tau - 1j * tau) # TODO CHECK THIS!!! It's wrong!
+    w = 2 * pi * freq_
+
+    sig_drude = drude(freq_, sig0, tau)
+    smith_term = sig0 * c1 / (1 - 1j * tau * w)**2
+
+    return sig_drude + smith_term
 
 def lattice_contrib(freq_, tau, wp, eps_s, eps_inf):
     tau *= 1e-3  # fs = 1e-3 ps
@@ -83,11 +77,22 @@ def lattice_contrib(freq_, tau, wp, eps_s, eps_inf):
 
     return eps_l
 
+
+def total_response(freq, sig0, tau, wp, eps_s, eps_inf, c1):
+    # [freq] = THz, [tau] = fs, [sig0] = S/cm, [wp] = THz. Dimensionless: eps_inf, eps_s
+    sig_cc = drude(freq, sig0, tau)
+    # sig_cc = drude_smith(freq, tau, sig0, c1)
+    eps_l = lattice_contrib(freq, tau, wp, eps_s, eps_inf)
+
+    n = sqrt(eps_l)
+
+    sig_tot = n_to_sigma(freq, n) + sig_cc
+
+    return sig_tot
+
+
 class RegressionModels(Enum):
     drude = member(drude)
     drude2 = member(drude2)
     lattice_drude = member(total_response)
     drude_smith = member(drude_smith)
-
-if __name__ == '__main__':
-    print(getattr(RegressionModels, "drude"))

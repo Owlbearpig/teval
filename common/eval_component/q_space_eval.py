@@ -268,7 +268,7 @@ class QSpaceEval:
         self.model_kwargs["shift"] = best_res["shift"]
         self.model_kwargs["d"] = best_res["d"]
 
-        t_mod_ = self.transmission_model(n_opt_res_, self.freq_axis[f_idx_fit_range], **self.model_kwargs)
+        t_mod_ = self.transmission_model.value(n_opt_res_, self.freq_axis[f_idx_fit_range], **self.model_kwargs)
 
         best_res["t_mod"] = t_mod_
         best_res["sam_mod"] = self.model_kwargs["meas_quants"]["ref_fd"][f_idx_fit_range, 1] * t_mod_
@@ -312,5 +312,6 @@ class QSpaceEval:
         }
 
         parsed_dict["result_type"] = "Transmission fit"
+        parsed_dict["model_name"] = self.transmission_model.name
 
         return parsed_dict

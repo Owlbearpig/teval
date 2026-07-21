@@ -12,8 +12,11 @@ import matplotlib.pyplot as plt
 import logging
 import inspect
 from scipy.signal import iirnotch, filtfilt
+from common.consts import eps0_thz
 from common.eval_component.q_space_eval import QSpaceEval
 from common.eval_component.quantity_set import DataSet as SingleQuantityDataSet
+from numpy import polyfit
+from enum import Enum, member
 from common.eval_component.conductivity_models import RegressionModels, model_params
 from common.traits import Quantity, Q_, ValueRange, Path as TPath
 from pathlib import Path
@@ -21,13 +24,11 @@ from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance
 from common.default_appsettings import QuantityEnum
 from common.eval_component.transfer_functions import (t_tmm_model_1layer, model_1layer, t_tmm_model_2layer,
                                                       model_2layer, _t_model_2layer)
-from common.consts import eps0_thz
 from common.eval_component.shgo_settings import SHGOOptions, MinimizerOptions
 from common.save import ResultSaver
 from common.eval_component.eval_result import EvalResult
 from concurrent.futures import ThreadPoolExecutor
 from PySide6.QtCore import QObject, Signal
-from enum import Enum, member
 
 class ProgressSignalCarrier(QObject):
     progress_changed = Signal(float)
@@ -76,25 +77,26 @@ class DatasetEval(ComponentBase):
     optimization_progress = Float(0, min=0, max=1,
                                   group="General", read_only=True).tag(name="Progress")
 
-    regression_grp_name = "Regression"
+    reg_grp_name = "Regression"
     meas_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.TransmissionAmp,
-                          group=regression_grp_name).tag(name="Measurement quantity")
-    regression_model = TEnum(RegressionModels, default_value=RegressionModels.drude, group=regression_grp_name)
-    convert_sigma_to_t = Bool(default_value=False, group=regression_grp_name)
+                          group=reg_grp_name).tag(name="Measurement quantity")
+    regression_model = TEnum(RegressionModels, default_value=RegressionModels.drude, group=reg_grp_name)
+    convert_sigma_to_t = Bool(default_value=False, group=reg_grp_name)
 
-    sig0_bounds = ValueRange([Q_(10, "S/cm"), Q_(20, "S/cm")], group=regression_grp_name).tag(name="σ₀ Bounds")
-    tau_bounds = ValueRange([Q_(10, "fs"), Q_(1000, "fs")], group=regression_grp_name).tag(name="τ Bounds")
-    wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group=regression_grp_name).tag(name="ωₚ Bounds")
-    eps_inf_bounds = ValueRange([1.0, 100.0], group=regression_grp_name).tag(name="ε_inf Bounds")
-    eps_s_bounds = ValueRange([1.0, 100.0], group=regression_grp_name).tag(name="ε_s Bounds")
-    c1_bounds = ValueRange([-1.0, 1.0], group=regression_grp_name).tag(name="c₁ Bounds")
+    sig0_bounds = ValueRange([Q_(10, "S/cm"), Q_(20, "S/cm")], group=reg_grp_name).tag(name="σ₀ Bounds")
+    tau_bounds = ValueRange([Q_(10, "fs"), Q_(1000, "fs")], group=reg_grp_name).tag(name="τ Bounds")
+    wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group=reg_grp_name).tag(name="ωₚ Bounds")
+    eps_inf_bounds = ValueRange([1.0, 100.0], group=reg_grp_name).tag(name="ε_inf Bounds")
+    eps_s_bounds = ValueRange([1.0, 100.0], group=reg_grp_name).tag(name="ε_s Bounds")
+    c1_bounds = ValueRange([-1.0, 1.0], group=reg_grp_name).tag(name="c₁ Bounds")
 
+    t_fit_grp_name = "Transmission fit"
     transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.tmm_1layer,
-                               group="Transmission fit")
-    d_opt_axis_bounds = ValueRange([Q_(500, "µm"), Q_(580, "µm", )], group="Transmission fit")
-    d_opt_axis_step = Quantity(Q_(10, "µm"), group="Transmission fit")
-    use_custom_d_opt_axis = Bool(True, group="Transmission fit")
-    number_of_workers = Integer(8, group="Transmission fit").tag(name="Number of workers")
+                               group=t_fit_grp_name)
+    d_opt_axis_bounds = ValueRange([Q_(500, "µm"), Q_(580, "µm", )], group=t_fit_grp_name)
+    d_opt_axis_step = Quantity(Q_(10, "µm"), group=t_fit_grp_name)
+    use_custom_d_opt_axis = Bool(True, group=t_fit_grp_name)
+    number_of_workers = Integer(8, group=t_fit_grp_name).tag(name="Number of workers")
 
     current_result = Instance(EvalResult)
     selected_substrate_result = Instance(EvalResult)
@@ -110,14 +112,14 @@ class DatasetEval(ComponentBase):
 
         self.shgo_options = SHGOOptions()
 
-        self.result_saver = self.setup_saver()
-
         self.freq_axis = self.dataset.freq_axis
 
         self._opt_conf = {}
 
         self.current_result = EvalResult(object_name="Current result")
         self.selected_substrate_result = EvalResult(object_name="Substrate result")
+
+        self.result_saver = self.setup_saver()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.settings.save_configuration(self)
@@ -128,6 +130,7 @@ class DatasetEval(ComponentBase):
     def setup_saver(self):
         res_saver = ResultSaver()
         res_saver.registerObjectAttribute(self, "sel_point")
+        res_saver.registerObjectAttribute(self.current_result, "result_type")
 
         return res_saver
 
@@ -179,14 +182,17 @@ class DatasetEval(ComponentBase):
 
     @observe("regression_model")
     def select_regression_model(self, change=None):
+        if self.freq_axis is None:
+            return None
         self.update_freq_axis()
         model = self.regression_model.value if change is None else change["new"].value
         self._opt_conf["model"] = partial(model, self._opt_conf["freq_axis"])
+        self._opt_conf["model_name"] = self.regression_model.name
 
-        param_keys = model_params(self.regression_model.name)
-        active_bounds = [f"{p}_bounds" for p in param_keys]
+        param_keys = model_params(self._opt_conf["model_name"])
+        active_bounds = [f"{p}_bounds" for p in param_keys if p not in ['freq', 'freq_']]
 
-        self.toggle_traits(active_bounds, self, group_filter=self.regression_grp_name, endswith_filter="_bounds")
+        self.toggle_traits(active_bounds, group_filter=self.reg_grp_name, endswith_filter="_bounds")
 
         return self._opt_conf["model"]
 
@@ -195,10 +201,10 @@ class DatasetEval(ComponentBase):
         self._opt_conf["freq_axis"] = self.freq_axis[f_idx]
 
     def setup_bounds(self):
-        signature = inspect.signature(self._opt_conf["model"])
+        params = model_params(self._opt_conf["model_name"])
         bounds = []
-        for arg in signature.parameters.values():
-            bound = getattr(self, arg.name + "_bounds", None)
+        for p in params:
+            bound = getattr(self, p + "_bounds", None)
             if bound is None:
                 min_value, max_value = -np.inf, np.inf
             else:
@@ -208,6 +214,7 @@ class DatasetEval(ComponentBase):
             bounds.append([min_value, max_value])
 
         self._opt_conf["bounds"] = bounds
+        return self._opt_conf["bounds"]
 
     @observe("selected_result_path")
     def set_selected_result(self, change):
@@ -222,7 +229,7 @@ class DatasetEval(ComponentBase):
     @observe("cost_fun")
     def setup_cost(self, change=None):
         cost_func = self.cost_fun.value if change is None else change["new"]
-        mod_func = self._opt_conf.get("model", self.select_regression_model())
+        mod_func = self.select_regression_model()
         y_meas = self._opt_conf.get("y_meas", self.set_y_meas())
 
         if self.convert_sigma_to_t:
@@ -238,6 +245,7 @@ class DatasetEval(ComponentBase):
             mod_func = t_mod_func
 
         self._opt_conf["func"] = lambda p: cost_func(y_meas, mod_func(*p))
+        return self._opt_conf["func"]
 
     def update_opt_config(self):
         self.update_freq_axis()
@@ -249,13 +257,12 @@ class DatasetEval(ComponentBase):
 
         return self._opt_conf
 
-    def prepare_regression_result(self, opt_res):
-        model_name = self.regression_model.name
-        param_keys = model_params(model_name)
+    def prepare_regression_result(self, opt_res, opt_conf):
+        model_name = opt_conf["model_name"]
         x = opt_res.x
 
         opt_res_dict = {"model_name": model_name}
-        for param_idx, p in enumerate(param_keys):
+        for param_idx, p in enumerate(model_params(model_name)):
             bound = getattr(self, p + "_bounds", None)
             if bound is None or not isinstance(bound[0], Q_):
                 opt_res_dict[p] = x[param_idx]
@@ -267,59 +274,53 @@ class DatasetEval(ComponentBase):
         opt_res_dict["converged"] = opt_res.success
         opt_res_dict["timestamp"] = str(datetime.now().isoformat())
 
-        freq_axis = Q_(self._opt_conf["freq_axis"], "THz")
+        freq_axis = Q_(opt_conf["freq_axis"], "THz")
         unit = self.meas_quantity.value.unit
-        opt_res_dict["y_meas"] = SingleQuantityDataSet(axes=[freq_axis], data=Q_(self._opt_conf["y_meas"], unit),
+        opt_res_dict["y_meas"] = SingleQuantityDataSet(axes=[freq_axis], data=Q_(opt_conf["y_meas"], unit),
                                                        axes_labels=["Frequency"], data_label=self.meas_quantity.name)
-        opt_res_dict["y_mod"] = SingleQuantityDataSet(axes=[freq_axis], data=Q_(self._opt_conf["model"](*x), unit),
+        opt_res_dict["y_mod"] = SingleQuantityDataSet(axes=[freq_axis], data=Q_(opt_conf["model"](*x), unit),
                                                       axes_labels=["Frequency"], data_label=self.meas_quantity.name)
 
         opt_res_dict["result_type"] = "Regression"
+
         return opt_res_dict
 
-    @action("Fit regression model", group=regression_grp_name)
+    @action("Fit regression model", group=reg_grp_name)
     def perform_regression(self):
         def bg_worker():
-            try:
-                opt_config = self.update_opt_config()
+            opt_conf = self.update_opt_config()
 
-                min_kwargs = self.shgo_options.minimizer_kwargs.traits(group=MinimizerOptions.minimizer_opt_grp)
-                min_kwargs["method"] = str(self.shgo_options.minimizer_kwargs.method.value)
+            min_kwargs = self.shgo_options.minimizer_kwargs.traits(group=MinimizerOptions.minimizer_opt_grp)
+            min_kwargs["method"] = str(self.shgo_options.minimizer_kwargs.method.value)
 
-                opt_res_ = shgo(func=opt_config["func"],
-                                bounds=opt_config["bounds"],
-                                n=self.shgo_options.n,
-                                iters=self.shgo_options.iters,
-                                minimizer_kwargs=min_kwargs,
-                                options=self.shgo_options.get_shgo_options(),
-                                )
-                logging.info("Fit result: {}".format(opt_res_))
+            opt_res_ = shgo(func=opt_conf["func"],
+                            bounds=opt_conf["bounds"],
+                            n=self.shgo_options.n,
+                            iters=self.shgo_options.iters,
+                            minimizer_kwargs=min_kwargs,
+                            options=self.shgo_options.get_shgo_options(),
+                            )
+            logging.info("Fit result: {}".format(opt_res_))
 
-                reg_res = self.prepare_regression_result(opt_res_)
-                reg_res["measurement_quantity"] = self.meas_quantity.name
+            reg_res = self.prepare_regression_result(opt_res_, opt_conf)
 
-                self.current_result.set_traits_from_dict(reg_res)
-                self.result_saver.process(self.current_result)
-            except Exception:
-                traceback.print_exc()
+            self.current_result.result_carrier.result_ready.emit(reg_res)
+            self.result_saver.process(self.current_result)
 
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(bg_worker)
 
-    @action("Fit transmission model", group="Transmission fit")
+    @action("Fit transmission model", group=t_fit_grp_name)
     def fit_unknown_layer(self):
         progress_carrier = ProgressSignalCarrier()
         progress_carrier.progress_changed.connect(self.update_progress)
 
         def bg_worker():
-            try:
-                qs_eval = QSpaceEval(self)
-                qs_res = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
+            qs_eval = QSpaceEval(self)
+            qs_res = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
 
-                self.current_result.set_traits_from_dict(qs_res)
-                self.result_saver.process(self.current_result)
-            except Exception:
-                traceback.print_exc()
+            self.current_result.result_carrier.result_ready.emit(qs_res)
+            self.result_saver.process(self.current_result)
 
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(bg_worker)
@@ -331,20 +332,6 @@ class DatasetEval(ComponentBase):
         n_ = (1 + 1j) * np.sqrt(sigma/(2*w*eps0_thz))
 
         return n_
-
-
-    def conductivity_model(self, sigma_exp):
-        self._opt_conf["sigma_exp"] = sigma_exp
-        opt_res = self._fit_freq_model()
-        p = opt_res.x # x = [tau, sig0, wp, eps_inf, eps_s]
-        # p = [1, 100, 4*np.pi, 10, 20]
-        # p = [1, 100, 2, 16.8, 20] # ulatowski plot
-        # p = [-1.588e-02,  5.044e+01,  920.8,  40.55, -43.13] # fit result
-        # p = [-0.01588,  50.44,  920.8,  40.55, -43.13]
-        # p = [40, 3, 50, 9]
-        sigma_model_ = self._total_response(self.freq_axis, *p) # TODO _total_response returns n
-
-        return sigma_model_
 
     def t_sim_1layer(self):
         if not self.options["sim_opt"]["enabled"]:

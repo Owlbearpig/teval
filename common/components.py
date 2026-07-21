@@ -90,3 +90,18 @@ class ComponentBase(HasTraits):
     @property
     def attributes(self):
         return self.traits()
+
+    def toggle_traits(self, active_traits, group_filter="", endswith_filter=""):
+        ui_widget = getattr(self, "_ui_control_widget", None)
+        if ui_widget and hasattr(ui_widget, "param_widgets"):
+            for trait_name, widgets in ui_widget.param_widgets.items():
+                if trait_name.endswith(endswith_filter) and trait_name in self.traits(group=group_filter):
+                    is_visible = (trait_name in active_traits)
+                    widgets[0].setVisible(is_visible)
+
+                    if isinstance(widgets[1], QtWidgets.QLayout):
+                        for i in range(widgets[1].count()):
+                            w = widgets[1].itemAt(i).widget()
+                            if w: w.setVisible(is_visible)
+                    else:
+                        widgets[1].setVisible(is_visible)
