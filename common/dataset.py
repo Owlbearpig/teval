@@ -19,6 +19,8 @@ from common.default_appsettings import Domain, QuantityEnum, DatasetOpt
 from common.components import action
 import itertools
 from traitlets import Unicode, observe
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 
 """
 TODOs: 
@@ -72,7 +74,6 @@ def logger_config(settings):
 class DataSet(ComponentBase):
     data_path = TPath(Path("."), is_file=False).tag(priority=-100, name="Dataset path", fullwidth=True)
 
-    # data_path_info = Unicode("", group="Dataset info", read_only=True).tag(name="Data path")
     max_amp_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Max amplitude measurement")
     first_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="First measurement")
     last_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Last measurement")
@@ -86,6 +87,9 @@ class DataSet(ComponentBase):
 
     def __init__(self, settings : Settings, **kwargs):
         super().__init__(**kwargs)
+        self._parse_lock = Lock()
+        self._is_parsing = False
+
         self.plotted_ref = False
         self.noise_floor = None
         self.time_axis = None
@@ -93,10 +97,9 @@ class DataSet(ComponentBase):
         self.properties = {"data": {}, "shape": {}, }
         self.measurements = {"refs": [], "sams": [], "all": ()}
 
+        self.cache = None
         self.sub_dataset = None
         self.is_sub_dataset = False
-
-        # self.data_path = self._set_path()
 
         self.settings = settings
 
@@ -108,29 +111,72 @@ class DataSet(ComponentBase):
     def __enter__(self):
         self.settings.load_configuration(self)
 
+        return self
+
     @observe("data_path")
     def _set_path(self, change=None):
         if change is None:
             return
-
-        data_path = change["new"]
-
-        if not data_path.exists():
-            raise ValueError(f"Path {data_path} does not exist")
-        if not data_path.is_dir():
-            raise ValueError(f"Path {data_path} is not a directory")
-        if not list(data_path.glob("*")):
-            raise ValueError(f"Path {data_path} is empty")
-
-        self.set_trait("data_path", data_path)
-
-        self._parse_measurements()
-
-        return
+        self.data_path = change["new"]
+        self._parse_measurements(self.data_path)
 
     def _set_observers(self):
         reference_filter_trait_names = self.settings.dataset_opt.trait_names(group=DatasetOpt.reference_filter_group)
         self.settings.dataset_opt.observe(self.update_meas_sorting, names=reference_filter_trait_names)
+
+    @action("Clear cache")
+    def clear_cache(self):
+        self.cache.clear_cache()
+
+    @action("Reparse measurements")
+    def rebuild_cache(self):
+        self._parse_measurements()
+
+    def _parse_measurements(self, data_path=None):
+        if data_path is None:
+            data_path = self.data_path
+        if data_path is None:
+            return
+
+        def bg_worker(target_path):
+            if not self._parse_lock.acquire(blocking=False):
+                logging.debug("Parse already in progress")
+                return
+            try:
+                if not target_path or not target_path.exists():
+                    raise ValueError(f"Path {target_path} does not exist")
+                if not target_path.is_dir():
+                    raise ValueError(f"Path {target_path} is not a directory")
+                if not list(target_path.glob("*")):
+                    raise ValueError(f"Path {target_path} is empty")
+
+                self.measurements["all"] = self._read_data_dir()
+                if not self.measurements["all"]:
+                    return
+
+                self.cache = DatasetCache(self.measurements["all"], target_path)
+                self._data_properties()
+
+                all_meas = self.measurements["all"]
+                max_amp_meas = (all_meas[0], -np.inf)
+                for meas in all_meas:
+                    data_td = self.get_data(meas)
+                    max_amp = np.max(np.abs(data_td[:, 1]))
+                    if max_amp > max_amp_meas[1]:
+                        max_amp_meas = (meas, max_amp)
+                self.measurements["max_amp_meas"] = max_amp_meas[0]
+
+                self._sort_meas_type()
+
+                self._shape_properties()
+
+            except Exception as e:
+                logging.error(f"Error parsing path {target_path}: {e}")
+            finally:
+                self._parse_lock.release()
+
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(bg_worker, data_path)
 
     @property
     def func_map(self):
@@ -261,33 +307,6 @@ class DataSet(ComponentBase):
 
         return meas_id_func(timestamp_dt)
 
-    def _parse_measurements(self):
-        if self.data_path is None:
-            return
-
-        if not isinstance(self.data_path, Path):
-            self.data_path = Path(self.data_path)
-
-        self.measurements["all"] = self._read_data_dir()
-        if not self.measurements["all"]:
-            return
-
-        self.cache = DatasetCache(self.measurements["all"], self.data_path)
-        self._data_properties()
-
-        all_meas = self.measurements["all"]
-        max_amp_meas = (all_meas[0], -np.inf)
-        for meas in all_meas:
-            data_td = self.get_data(meas)
-            max_amp = np.max(np.abs(data_td[:, 1]))
-            if max_amp > max_amp_meas[1]:
-                max_amp_meas = (meas, max_amp)
-        self.measurements["max_amp_meas"] = max_amp_meas[0]
-
-        self._sort_meas_type()
-
-        self._shape_properties()
-
     def _set_dataset_info(self):
         max_amp_meas = self.measurements["max_amp_meas"]
         logging.debug(f"Maximum amplitude measurement: {max_amp_meas.filepath.name}\n")
@@ -333,7 +352,7 @@ class DataSet(ComponentBase):
         self.set_trait("last_meas_info", last_measurement.filepath.stem)
 
         self.set_trait("meas_time_info", f"{tot_hours:02}:{min_part:02}:{sec_part:02}")
-        self.set_trait("mean_meas_time_info", str(np.round(mean_time_diff, 2)))
+        self.set_trait("mean_meas_time_info", f"{np.round(mean_time_diff, 2)} seconds")
 
     def _sort_meas_type(self):
         all_measurements = self.measurements["all"]
