@@ -1,5 +1,6 @@
-import logging
+from PySide6.QtCore import QObject, Signal
 from common.components import ComponentBase
+from common.eval_component.conductivity_models import model_params
 from common.traits import QuantityDict
 from common.eval_component.quantity_set import DataSetDict as QuantityDictClass, DataSet
 from traitlets import Bool, Float, Int, Unicode, Integer
@@ -8,31 +9,40 @@ import numpy as np
 from common.eval_component.quantity_set import DataSet as SingleQuantityDataSet
 import h5py
 
+class ResultSignal(QObject):
+    result_ready = Signal(dict)
 
 class EvalResult(ComponentBase):
 
     quantity_dict = QuantityDict()
 
-    d = Quantity(Q_(0, "µm"), read_only=True, group="Transmission fit result values")
-    q_val = Quantity(Q_(0.0, ""), read_only=True, group="Transmission fit result values")
-    gof = Quantity(Q_(0.0, ""), read_only=True, group="Transmission fit result values")
-    shift = Quantity(Q_(0.0, "fs"), read_only=True, group="Transmission fit result values")
+    t_fit_res_grp_name = "Transmission fit result values"
+    d = Quantity(Q_(0, "µm"), read_only=True, group=t_fit_res_grp_name)
+    q_val = Quantity(Q_(0.0, ""), read_only=True, group=t_fit_res_grp_name)
+    gof = Quantity(Q_(0.0, ""), read_only=True, group=t_fit_res_grp_name)
+    shift = Quantity(Q_(0.0, "fs"), read_only=True, group=t_fit_res_grp_name)
 
-    fun = Float(0.0, read_only=True, group="Regression result values")
-    nit = Integer(0, read_only=True, group="Regression result values")
-    sig0 = Quantity(Q_(10, "S/cm"), read_only=True, group="Regression result values").tag(name="σ₀")
-    tau = Quantity(Q_(10, "fs"), read_only=True, group="Regression result values").tag(name="τ")
-    wp = Quantity(Q_(-10, "THz"), read_only=True, group="Regression result values").tag(name="ωₚ")
-    eps_inf = Float(-10, read_only=True, group="Regression result values").tag(name="ε_inf")
-    eps_s = Float(-10, read_only=True, group="Regression result values").tag(name="ε_s")
-    c1 = Float(-10, read_only=True, group="Regression result values").tag(name="c₁")
+    reg_result_grp_name = "Regression result values"
+    fun = Float(0.0, read_only=True, group=reg_result_grp_name)
+    nit = Integer(0, read_only=True, group=reg_result_grp_name)
+    sig0 = Quantity(Q_(0, "S/cm"), read_only=True, group=reg_result_grp_name).tag(name="σ₀")
+    tau = Quantity(Q_(0, "fs"), read_only=True, group=reg_result_grp_name).tag(name="τ")
+    wp = Quantity(Q_(0, "THz"), read_only=True, group=reg_result_grp_name).tag(name="ωₚ")
+    eps_inf = Float(0, read_only=True, group=reg_result_grp_name).tag(name="ε_inf")
+    eps_s = Float(0, read_only=True, group=reg_result_grp_name).tag(name="ε_s")
+    c1 = Float(0, read_only=True, group=reg_result_grp_name).tag(name="c₁")
 
     result_type = Unicode("None", read_only=True).tag(priority=1)
+    model_name = Unicode("", read_only=True).tag(priority=2, name="Model")
     timestamp = Unicode("", read_only=True)
     converged = Bool(False, read_only=True)
 
+    result_carrier = ResultSignal()
+
     def __init__(self, opt_res_dict=None, **kwargs):
         super().__init__(**kwargs)
+        self.result_carrier.result_ready.connect(self.set_traits_from_dict)
+
         if opt_res_dict is None:
             return
 
@@ -44,6 +54,7 @@ class EvalResult(ComponentBase):
             res_dict = self.parse_npz(res_path)
         elif res_path.suffix == ".hdf5":
             res_dict = self.parse_hdf5(res_path)
+
         self.set_traits_from_dict(res_dict)
 
     def parse_hdf5(self, res_path):
@@ -137,10 +148,18 @@ class EvalResult(ComponentBase):
 
         return parsed_result_dict
 
-    def set_traits_from_dict(self, opt_res_dict):
-        for k, v in opt_res_dict.items():
+    def set_traits_from_dict(self, trait_value_dict):
+        for k, v in trait_value_dict.items():
             if isinstance(v, (int, str, float, Q_)):
                 self.set_trait(k, v)
 
-        dataset_dict = {k: v for k, v in opt_res_dict.items() if isinstance(v, DataSet)}
+        dataset_dict = {k: v for k, v in trait_value_dict.items() if isinstance(v, DataSet)}
         self.quantity_dict = QuantityDictClass(dataset_dict)
+
+        if trait_value_dict["result_type"] == "Regression":
+            active_parameters = model_params(trait_value_dict["model_name"])
+            self.toggle_traits(active_parameters, group_filter=self.reg_result_grp_name)
+            self.toggle_traits([], group_filter=self.t_fit_res_grp_name)
+        elif trait_value_dict["result_type"] == "Transmission fit":
+            self.toggle_traits([], group_filter=self.reg_result_grp_name)
+            self.toggle_traits(self.traits(group=self.t_fit_res_grp_name), group_filter=self.t_fit_res_grp_name)

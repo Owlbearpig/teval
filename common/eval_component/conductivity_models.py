@@ -1,5 +1,14 @@
 from numpy import sqrt
 from common.consts import eps0_thz, pi
+from enum import Enum, member
+import inspect
+
+
+def model_params(model_name):
+    model = getattr(RegressionModels, model_name).value
+    all_params = inspect.signature(model).parameters.keys()
+    return [p for p in all_params if p not in ["freq", "freq_"]]
+
 
 def sigma_to_n(freq, sig):
     # [eps0_thz] = ps * S / µm
@@ -75,3 +84,10 @@ def total_response(freq, sig0, tau, wp, eps_s, eps_inf, c1):
     sig_tot = n_to_sigma(freq, n) + sig_cc
 
     return sig_tot
+
+
+class RegressionModels(Enum):
+    drude = member(drude)
+    drude2 = member(drude2)
+    lattice_drude = member(total_response)
+    drude_smith = member(drude_smith)
