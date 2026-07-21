@@ -526,8 +526,22 @@ def generate_component_ui(name, component):
     scrollArea.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
     scrollArea.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
     scrollArea.setWidgetResizable(True)
-
     scrollArea.setWidget(controlWidget)
+
+    class ViewportResizeFilter(QtCore.QObject):
+        def eventFilter(self, obj, event):
+            if event.type() == QtCore.QEvent.Resize:
+                margins = controlWidget.layout().contentsMargins()
+                viewport_width = obj.width() - margins.left() - margins.right()
+
+                for box in groups.values():
+                    if getattr(box, "fullwidth", False):
+                        box.setFixedWidth(max(viewport_width, 0))
+
+            return super().eventFilter(obj, event)
+
+    controlWidget._resize_filter = ViewportResizeFilter()
+    scrollArea.viewport().installEventFilter(controlWidget._resize_filter)
 
     scrollArea.setMinimumWidth(scrollArea.sizeHint().width())
 
