@@ -1,5 +1,4 @@
 from PySide6 import QtWidgets, QtCore, QtGui
-from dataclasses import fields, is_dataclass
 from traitlets import Integer, Float, Unicode, Bool, Tuple, Enum
 from qtui.changeindicatorspinbox import ChangeIndicatorSpinBox
 from qtui.changeindicatorlineedit import ChangeIndicatorLineEdit
@@ -288,10 +287,19 @@ def create_combobox(component, name, trait):
 
 def create_label(component, name, trait):
     label = QtWidgets.QLabel()
+    label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
     label.setText(trait.get(component))
     label.setToolTip(trait.help)
 
-    component.observe(lambda change: label.setText(change['new']), name)
+    def on_change(change):
+        QtCore.QMetaObject.invokeMethod(
+            label,
+            "setText",
+            QtCore.Qt.ConnectionType.QueuedConnection,
+            QtCore.Q_ARG(str, str(change['new']))
+        )
+
+    component.observe(on_change, name)
 
     return label
 

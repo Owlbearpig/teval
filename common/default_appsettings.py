@@ -337,7 +337,6 @@ class SaveSettings(ComponentBase):
     pad_inches = Int(0)
     set_size_inches = TList([12.0, 9.0])
     save_plots = Bool(False)
-    en_csv_export = Bool(False)
 
 class PlotOpt(ComponentBase):
     plot_range = ValueRange([Q_(0.05, "THz"), Q_(3.5, "THz")], metadata={"priority": 1, "readonly": False})
@@ -420,8 +419,6 @@ class AppSettings(ComponentBase):
     eval_opt = Instance(EvalOpt, args=())
     plot_opt = Instance(PlotOpt, args=())
     dataset_opt = Instance(DatasetOpt, args=())
-
-    enable_q_eval = Bool(False)
 
 if __name__ == '__main__':
     settings = AppSettings()

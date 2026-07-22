@@ -4,19 +4,6 @@ from tqdm import tqdm
 import logging
 
 
-class TqdmToLogger:
-  def __init__(self, logger, level=logging.INFO):
-    self.logger = logger
-    self.level = level
-
-  def write(self, buf):
-    for line in buf.rstrip().splitlines():
-      if line.strip():
-        self.logger.log(self.level, line.strip())
-
-  def flush(self):
-    pass
-
 def _generate_id_map(measurements):
     # measurement index sorted by identifier (Higher identifier = later measurement time)
     # {63912383001176544: 0, 63912383010246552: 1, 63912383019536552: 2, ...}
@@ -29,9 +16,8 @@ def _generate_id_map(measurements):
 
 class DatasetCache:
 
-    def __init__(self, measurements, data_dir):
-        self.logger = logging.getLogger()
-
+    def __init__(self, measurements, data_dir, progress_carrier=None):
+        self.progress_carrier = progress_carrier
         self.coord_map_key_func = lambda position_tuple: "_".join([f"{val:.3f}" for val in position_tuple])
         self.coord_map = self._generate_coord_map(measurements)
 
@@ -81,7 +67,9 @@ class DatasetCache:
             self.raw_data_td = None
             self.raw_data_fd = None
 
-            logging.info(f"Cache at {self.path} cleared")
+            logging.info(f"Cleared {self.path}")
+            if self.progress_carrier is not None:
+                self.progress_carrier.progress_signal.emit(0)
 
     def _make_cache(self, measurements):
         # make cache (npy) if it does not already exist
@@ -102,18 +90,13 @@ class DatasetCache:
             data_td = np.zeros(td_cache_shape, dtype=y_td.dtype)
             data_fd = np.zeros(fd_cache_shape, dtype=y_fd.dtype)
 
-            iter_ = tqdm(
-                enumerate(measurements),
-                total=len(measurements),
-                desc="Saving as npy",
-                file=TqdmToLogger(self.logger),
-                colour=None,
-                bar_format="{desc}: {percentage:3.0f}%|{bar:20}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
-                mininterval=0.1,
-            )
-            for i, meas in iter_:
+            logging.info(f"Saving {len(measurements)} measurements as npy")
+            for meas_idx, meas in enumerate(measurements):
                 idx = self.id_map[meas.identifier]
                 data_td[idx], data_fd[idx] = meas.get_data_td(), meas.get_data_fd()
+                if self.progress_carrier is not None:
+                    progress = (1 + meas_idx) / len(measurements)
+                    self.progress_carrier.progress_signal.emit(progress)
 
             np.save(str(path / "_td_cache.npy"), data_td)
             np.save(str(path / "_fd_cache.npy"), data_fd)

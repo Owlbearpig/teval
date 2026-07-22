@@ -10,7 +10,8 @@ from common.eval_component.quantity_set import DataSet as SingleQuantityDataSet
 import h5py
 
 class ResultSignal(QObject):
-    result_ready = Signal(dict)
+    received_result = Signal(dict)
+    result_ready = Signal(object)
 
 class EvalResult(ComponentBase):
 
@@ -37,11 +38,10 @@ class EvalResult(ComponentBase):
     timestamp = Unicode("", read_only=True)
     converged = Bool(False, read_only=True)
 
-    result_carrier = ResultSignal()
-
     def __init__(self, opt_res_dict=None, **kwargs):
         super().__init__(**kwargs)
-        self.result_carrier.result_ready.connect(self.set_traits_from_dict)
+        self.result_carrier = ResultSignal()
+        self.result_carrier.received_result.connect(self.set_traits_from_dict)
 
         if opt_res_dict is None:
             return
@@ -55,7 +55,7 @@ class EvalResult(ComponentBase):
         elif res_path.suffix == ".hdf5":
             res_dict = self.parse_hdf5(res_path)
 
-        self.set_traits_from_dict(res_dict)
+        self.set_traits_from_dict(res_dict, is_loading=True)
 
     def parse_hdf5(self, res_path):
         with h5py.File(res_path, "r") as f:
@@ -148,7 +148,7 @@ class EvalResult(ComponentBase):
 
         return parsed_result_dict
 
-    def set_traits_from_dict(self, trait_value_dict):
+    def set_traits_from_dict(self, trait_value_dict, is_loading=False):
         for k, v in trait_value_dict.items():
             if isinstance(v, (int, str, float, Q_)):
                 self.set_trait(k, v)
@@ -163,3 +163,6 @@ class EvalResult(ComponentBase):
         elif trait_value_dict["result_type"] == "Transmission fit":
             self.toggle_traits([], group_filter=self.reg_result_grp_name)
             self.toggle_traits(self.traits(group=self.t_fit_res_grp_name), group_filter=self.t_fit_res_grp_name)
+
+        if not is_loading:
+            self.result_carrier.result_ready.emit(self)

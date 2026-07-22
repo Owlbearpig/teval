@@ -12,12 +12,6 @@ from common.eval_component.dataset_eval import DatasetEval
 from common.consts import c_thz, eps0_thz
 from common.components import action
 
-if "nt" in os.name:
-    dataset_path = r"C:\Users\alexj\Data/Stability/18052026_systemcover"
-    dataset_path_sub = r"C:\Users\alexj\Data\Stability\01062026_systemcover_subset"
-else:
-    dataset_path_sub = r"/home/ftpuser/ftp/Data/Stability/01062026_systemcover_subset"
-    dataset_path = r"/home/ftpuser/ftp/Data/Stability/18052026_systemcover"
 
 
 redp_labels = {
@@ -53,7 +47,7 @@ class AppRoot(ComponentBase):
         
     @action("Take new measurement")
     def takeMeasurement(self):
-        res = self.dataset_plotter.plot_system_stability()
+        self.dataset_plotter.plot_system_stability()
         self.dataset_plotter.plt_show()
         # self.set_trait('someDataSet', dataSet)
 

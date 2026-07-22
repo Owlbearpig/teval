@@ -18,9 +18,10 @@ from scipy.stats import pearsonr
 from common.default_appsettings import Domain, QuantityEnum, DatasetOpt
 from common.components import action
 import itertools
-from traitlets import Unicode, observe
+from traitlets import Unicode, observe, Float
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
+from PySide6.QtCore import QObject, Signal
 
 """
 TODOs: 
@@ -51,6 +52,9 @@ New ideas: add teralyzer evaluation (time consuming)
 """
 
 
+class ProgressSignalCarrier(QObject):
+    progress_signal = Signal(float)
+
 def logger_config(settings):
     handler = colorlog.StreamHandler()
     formatter = colorlog.ColoredFormatter(
@@ -73,6 +77,7 @@ def logger_config(settings):
 
 class DataSet(ComponentBase):
     data_path = TPath(Path("."), is_file=False).tag(priority=-100, name="Dataset path", fullwidth=True)
+    caching_progress = Float(0, min=0, max=1, read_only=True).tag(name="Progress")
 
     max_amp_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Max amplitude measurement")
     first_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="First measurement")
@@ -120,13 +125,22 @@ class DataSet(ComponentBase):
         self.data_path = change["new"]
         self._parse_measurements(self.data_path)
 
+        self.set_trait("caching_progress", 1)
+
     def _set_observers(self):
         reference_filter_trait_names = self.settings.dataset_opt.trait_names(group=DatasetOpt.reference_filter_group)
         self.settings.dataset_opt.observe(self.update_meas_sorting, names=reference_filter_trait_names)
 
+    def update_cache_progress(self, progress):
+        self.set_trait("caching_progress", progress)
+
     @action("Clear cache")
     def clear_cache(self):
-        self.cache.clear_cache()
+        if self.cache is None:
+            logging.info("Cache is None. Reset dataset path")
+        else:
+            self.cache.clear_cache()
+
 
     @action("Reparse measurements")
     def rebuild_cache(self):
@@ -137,6 +151,9 @@ class DataSet(ComponentBase):
             data_path = self.data_path
         if data_path is None:
             return
+
+        progress_carrier = ProgressSignalCarrier()
+        progress_carrier.progress_signal.connect(self.update_cache_progress)
 
         def bg_worker(target_path):
             if not self._parse_lock.acquire(blocking=False):
@@ -154,7 +171,7 @@ class DataSet(ComponentBase):
                 if not self.measurements["all"]:
                     return
 
-                self.cache = DatasetCache(self.measurements["all"], target_path)
+                self.cache = DatasetCache(self.measurements["all"], target_path, progress_carrier)
                 self._data_properties()
 
                 all_meas = self.measurements["all"]
@@ -203,7 +220,6 @@ class DataSet(ComponentBase):
     def _data_properties(self):
         sample_data_td, sample_data_fd = self.get_data(self.measurements["all"][0], domain=Domain.Both)
         samples = int(sample_data_td.shape[0])
-
         self.time_axis = sample_data_td[:, 0].real
         self.freq_axis = sample_data_fd[:, 0].real
 
@@ -421,8 +437,7 @@ class DataSet(ComponentBase):
         self.measurements["refs"] = refs_
         self.measurements["sams"] = sams_
 
-        logging.info(f"Classified {len(self.measurements['refs'])} measurements as reference")
-        logging.info("######################################################\n")
+        logging.info(f"Classified {len(self.measurements['refs'])} measurement(s) as reference\n")
 
         self._set_dataset_info()
 

@@ -20,9 +20,15 @@ from scipy.stats import pearsonr
 from tqdm import tqdm
 import pandas as pd
 from copy import deepcopy
+from enum import Enum
+
+class SelectionEnum(Enum):
+    selected_timestamp = "Timestamp"
+    selected_point = "Point"
 
 class DataSetPlotter(ComponentBase):
 
+    selection_criterion = TEnum(SelectionEnum, SelectionEnum.selected_point).tag(name="Select by", priority=-2)
     sel_freq_range = ValueRange(default_value=[Q_(1.000, "THz"), Q_(1.200, "THz")]).tag(
         name="Selected frequency range"
     )
@@ -92,10 +98,8 @@ class DataSetPlotter(ComponentBase):
 
         return selected_freq_idx
 
-    @observe("selected_quantity")
-    def select_quantity(self, change, label=""):
-        quantity = change["new"]
-
+    def get_quantity_func(self, change=None, label=""):
+        quantity = self.selected_quantity if change is None else change["new"]
         func_map = self.dataset.func_map
 
         func_map[QuantityEnum.Power] = partial(self.dataset.power, freq_range=self.selected_freq_idx)
@@ -114,8 +118,17 @@ class DataSetPlotter(ComponentBase):
             selected_quantity = quantity.value
         else:
             logging.warning(f"Unknown quantity type: {quantity}")
+            return None
 
-        def grid_func(meas, func=func):
+        return selected_quantity, func
+
+    @observe("selected_quantity")
+    def select_quantity(self, change, label=""):
+        quant, quant_func = self.get_quantity_func(change, label)
+        if quant_func is None:
+            return
+
+        def grid_func(meas, func=quant_func):
             sel_freq_idx = self.freq_idx()
 
             res = np.real(func(meas))
@@ -128,7 +141,7 @@ class DataSetPlotter(ComponentBase):
                 return res[sel_freq_idx, 1]
 
         self.grid_func = grid_func
-        self.selected_quantity = selected_quantity
+        self.selected_quantity = quant
 
         self._update_fig_num()
 
@@ -375,146 +388,54 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel("Time (ps)")
         plt.ylabel("Amplitude (Arb. u.)")
 
-    @action("Measurement", group="Plots")
-    def plot_meas(self, timestamp=None, en_td_plot=True):
-        if timestamp is None:
-            timestamp = self.sel_timestamp
-
-        plot_opt = self.plot_settings
-        label = plot_opt.label
-        sub_noise_floor = plot_opt.sub_noise_floor
-        td_scale = plot_opt.td_scale
-        remove_t_offset = plot_opt.remove_t_offset
-        std_limits = plot_opt.err_bar_limits # limits of spatial coordinates to average over, for the err_bars
-        en_csv_export = self.settings.save_settings.en_csv_export
-        fig_num_ext = plot_opt.fig_num_ext
-        plot_range = plot_opt.plot_range
-        ref_err_bars = plot_opt.ref_err_bars
-
-        f_idx_range = f_axis_idx_map(self.dataset.freq_axis, plot_range)
-        if timestamp:
-            logging.info(f"Plotting measurement with timestamp: {timestamp}")
-            selected_meas = self.dataset.get_measurement_from_timestamp(timestamp)
-            point = selected_meas.position
-        else:
-            point = self.sel_point
-            selected_meas = self.dataset.get_measurement(*point)
-
-        ref_meas = self.dataset.get_nearest_ref(selected_meas)
-
-        q_eval_res = None
-        meas_quants = self.dataset.calc_meas_quantities(ref_meas, selected_meas)
-
-        if self.settings.enable_q_eval:
-            ana_eval_res = self.dataset.windowing_eval(selected_meas)
-
-            #q_eval = QSpaceEval(self.settings, meas_quants, ana_eval_res)
-            #q_eval_res = q_eval.q_space_eval()
-
-        logging.info(f"Plotting point {point}")
-        logging.info(f"Reference measurement: {ref_meas}")
-        logging.info(f"Sample measurement: {selected_meas}\n")
-
-        # TODO redo window plotting
-        show_win_plot = deepcopy(self.settings.pp_opt.en_plot)
-        if self.plot_settings.window:
-            self.settings.pp_opt.en_plot = True
-
-        self.settings.pp_opt.fig_label = "ref"
-        ref_td, ref_fd = self.dataset.get_data(ref_meas, domain=Domain.Both)
-
-        #ref_fd[:, 1] = np.abs(ref_fd[:, 1]) * np.exp(-1j*np.angle(ref_fd[:, 1]))
-        #ref_td = do_ifft(ref_fd, conj=False)
-        self.settings.pp_opt.fig_label = "sam"
-
-        sam_td, sam_fd = meas_quants["sam_td"], meas_quants["sam_fd"]
-        ref_td, ref_fd = meas_quants["ref_td"], meas_quants["ref_fd"]
-
-        if self.plot_settings.shift_sam2ref:
-            shift_t = np.abs(np.argmax(ref_td[:, 1]) - np.argmax(sam_td[:, 1]))
-            sam_td[:, 1] = np.roll(sam_td[:, 1], -shift_t)
-
-        self.settings.pp_opt.en_plot = show_win_plot
-
-        if remove_t_offset:
-            sam_td[:, 0] -= sam_td[0, 0]
-
-        # TODO is this needed? Get error bars from arr_stat function ?
-        err_bar_range = None
-        if std_limits:
-            meas_line, coords = self.dataset.get_line(y=0, limits=std_limits)
-            if meas_line:
-                absorbance_arrs = []
-                for meas in meas_line:
-                    sam_fd_line = self.dataset.get_data(meas, domain=Domain.Frequency)
-                    t = sam_fd_line[:, 1] / ref_fd[:, 1]
-                    absorbance_arrs.append(20*np.log10(np.abs(1/t)))
-                err_bar_range = np.std(absorbance_arrs, axis=0)
-            else:
-                err_bar_range = np.zeros(len(self.dataset.freq_axis))
-        if ref_err_bars:
-            all_ref_meas = self.measurements["refs"]
-            ref_meas_first, ref_meas_last = all_ref_meas[0], all_ref_meas[-1]
-            ref_fd_first = self.dataset.get_data(ref_meas_first, domain=Domain.Frequency)
-            ref_fd_last = self.dataset.get_data(ref_meas_last, domain=Domain.Frequency)
-
-            if std_limits:
-                meas_line, coords = self.dataset.get_line(y=0, limits=std_limits)
-            else:
-                meas_line = [selected_meas]
-            if meas_line:
-                absorbance_arrs = []
-                for meas in meas_line:
-                    sam_fd_line = self.dataset.get_data(meas, domain=Domain.Frequency)
-                    t_first = sam_fd_line[:, 1] / ref_fd_first[:, 1]
-                    t_last = sam_fd_line[:, 1] / ref_fd_last[:, 1]
-                    absorbance_arrs.append(20 * np.log10(np.abs(1 / t_first)))
-                    absorbance_arrs.append(20 * np.log10(np.abs(1 / t_last)))
-
-                err_bar_range = np.std(absorbance_arrs, axis=0)
-                err_bar_range = np.max(absorbance_arrs, axis=0) - np.min(absorbance_arrs, axis=0)
-            else:
-                err_bar_range = np.zeros(len(self.dataset.freq_axis))
-
-        freq_axis = ref_fd[:, 0].real
-
-        t = sam_fd[:, 1] / ref_fd[:, 1]
-        absorb = np.abs(1/t)
-
-        simple_eval_res = self.dataset.windowing_eval(selected_meas)
-        phi = simple_eval_res["phi"]
-        phi_corrected = simple_eval_res["phi_corrected"]
-        refr_idx = simple_eval_res["refr_idx"]
-
-        # TODO FIX correct return of measurement quantities and calculated quantities
-        if q_eval_res is None:
-            ret = {"freq_axis": freq_axis, "absorb": absorb, "t": t, "ref_fd": ref_fd, "sam_fd": sam_fd, "phi": phi,
-                   "phi_corrected": phi_corrected, "t_amplitude": np.abs(t)}
-        else:
-            ret = q_eval_res
-            self.dataset.print_ret(ret, label)
-        if en_csv_export:
-            self.dataset.export_as_csv(ret, file_app=label)
-
-        phi = phi[f_idx_range]
-        phi_corrected = phi_corrected[f_idx_range]
-        refr_idx = refr_idx[f_idx_range]
-        alph = self.dataset.absorption_coef(selected_meas)
+    @action("Waveform", group="Plots")
+    def plot_waveform(self):
+        ref_meas, selected_meas, meas_quants = self.get_meas_quantities()
+        point = selected_meas.position
 
         if not self.dataset.plotted_ref:
             self.plot_ref(ref_meas)
             self.dataset.plotted_ref = True
 
+        sam_td, sam_fd = meas_quants["sam_td"], meas_quants["sam_fd"]
+
+        sub_noise_floor = self.plot_settings.sub_noise_floor
+        noise_floor = np.mean(20 * np.log10(np.abs(sam_fd[sam_fd[:, 0] > 6.0, 1]))) * sub_noise_floor
+
+        label = self.plot_settings.label
         if not label:
             label = f"(x,y)=({point[0]}, {point[1]})"
 
-        freq_axis = sam_fd[:, 0].real
-        noise_floor = np.mean(20 * np.log10(np.abs(sam_fd[sam_fd[:, 0] > 6.0, 1]))) * sub_noise_floor
+        freq_axis = self.dataset.freq_axis
+        f_idx_range = f_axis_idx_map(freq_axis, self.plot_settings.plot_range)
 
+        td_scale = self.plot_settings.td_scale
+        fig_num_ext = self.plot_settings.fig_num_ext
+
+        plt.figure("Time domain" + fig_num_ext)
+        td_label = label
+        if not np.isclose(td_scale, 1):
+            td_label += f"\n(Amplitude x {td_scale})"
+        plt.plot(sam_td[:, 0], td_scale * sam_td[:, 1], label=td_label)
+
+        fig_num_ext = self.plot_settings.fig_num_ext
         plt.figure("Spectrum" + fig_num_ext)
         y_db = (20 * np.log10(np.abs(sam_fd[f_idx_range, 1])) - noise_floor).real
         plt.plot(freq_axis[f_idx_range], y_db, label=label)
 
+    @action("Phase plots", group="Plots")
+    def plot_phase_plot(self):
+        ref_meas, selected_meas, meas_quants = self.get_meas_quantities()
+
+        simple_eval_res = self.dataset.windowing_eval(selected_meas)
+        phi = simple_eval_res["phi"]
+        phi_corrected = simple_eval_res["phi_corrected"]
+
+        freq_axis = self.dataset.freq_axis
+        f_idx_range = f_axis_idx_map(freq_axis, self.plot_settings.plot_range)
+
+        fig_num_ext = self.plot_settings.fig_num_ext
+        label = self.plot_settings.label
         plt.figure("Phase correction comparison" + fig_num_ext)
         plt.plot(freq_axis[f_idx_range], phi, label=label + " (Original)", ls="dashed")
         plt.plot(freq_axis[f_idx_range], phi_corrected, label=label + " (Corrected)")
@@ -531,12 +452,101 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad/THz)")
 
-        plt.figure("Time domain" + fig_num_ext)
-        td_label = label
-        if not np.isclose(td_scale, 1):
-            td_label += f"\n(Amplitude x {td_scale})"
-        if en_td_plot:
-            plt.plot(sam_td[:, 0], td_scale * sam_td[:, 1], label=td_label)
+    @action("Selected quantity", group="Plots")
+    def plot_selected_quantity(self):
+        fig_num_ext = self.plot_settings.fig_num_ext
+        quant, quant_func = self.get_quantity_func()
+        ref_meas, selected_meas = self.get_meas()
+        values = quant_func(selected_meas)
+        label = self.plot_settings.label
+
+        is_single_plot = True if not isinstance(values, complex) else False
+
+        f_idx_range = f_axis_idx_map(self.dataset.freq_axis, self.plot_settings.plot_range)
+        freq_axis = self.dataset.freq_axis[f_idx_range]
+        values = values[f_idx_range]
+
+        fignum = str(quant) + fig_num_ext
+        if is_single_plot:
+            plt.figure(fignum)
+            plt.plot(freq_axis, values, label=label)
+            plt.xlabel("Frequency (THz)")
+            plt.ylabel(quant)
+        else:
+            if not plt.fignum_exists(fignum):
+                fig, (ax0, ax1) = plt.subplots(2, 1, num=fignum, sharex=True, gridspec_kw={'hspace': 0})
+                ax1.set_xlabel("Frequency (THz)")
+                ax0.set_ylabel(f"{quant} (Real)")
+                ax1.set_ylabel(f"{quant} (Imag)")
+            else:
+                fig = plt.figure(fignum)
+                ax0, ax1 = fig.get_axes()
+            ax0.plot(freq_axis, values.real, label=label)
+            ax1.plot(freq_axis, values.imag, label=label)
+
+    def get_meas(self):
+        if self.selection_criterion == SelectionEnum.selected_timestamp:
+            timestamp = self.sel_timestamp
+            logging.info(f"Selecting by timestamp: {timestamp}")
+            selected_meas = self.dataset.get_measurement_from_timestamp(timestamp)
+            point = selected_meas.point
+        elif self.selection_criterion == SelectionEnum.selected_point:
+            point = self.sel_point
+            logging.info(f"Selecting by point: {point}")
+            selected_meas = self.dataset.get_measurement(*point)
+        else:
+            return None
+
+        ref_meas = self.dataset.get_nearest_ref(selected_meas)
+
+        return ref_meas, selected_meas
+
+    def get_meas_quantities(self):
+        ref_meas, selected_meas = self.get_meas()
+        meas_quants = self.dataset.calc_meas_quantities(ref_meas, selected_meas)
+
+        logging.info(f"Reference measurement: {ref_meas}")
+        logging.info(f"Sample measurement: {selected_meas}\n")
+
+        if self.plot_settings.shift_sam2ref:
+            t0_sam = np.argmax(meas_quants["sam_td"][:, 1])
+            t0_ref = np.argmax(meas_quants["ref_td"][:, 1])
+            shift_t = np.abs(t0_ref - t0_sam)
+            meas_quants["sam_td"][:, 1] = np.roll(meas_quants["sam_td"][:, 1], -shift_t)
+
+        if self.plot_settings.remove_t_offset:
+            meas_quants["sam_td"][:, 0] -= meas_quants["sam_td"][0, 0]
+
+        return ref_meas, selected_meas, meas_quants
+
+    @action("Export measurement quantities")
+    def export_meas_quants(self):
+        label = self.plot_settings.label
+        _, _, meas_quants = self.get_meas_quantities()
+        self.dataset.export_as_csv(meas_quants, file_app=label)
+
+    """
+    @action("Measurement", group="Plots")
+    def plot_meas(self):
+        plot_opt = self.plot_settings
+        label = plot_opt.label
+
+        
+        std_limits = plot_opt.err_bar_limits # limits of spatial coordinates to average over, for the err_bars
+        en_csv_export = self.settings.save_settings.en_csv_export
+        fig_num_ext = plot_opt.fig_num_ext
+        plot_range = plot_opt.plot_range
+        
+        t = sam_fd[:, 1] / ref_fd[:, 1]
+        absorb = np.abs(1/t)
+        refr_idx = simple_eval_res["refr_idx"]
+
+        f_idx_range = f_axis_idx_map(self.dataset.freq_axis, plot_range)
+        
+        refr_idx = refr_idx[f_idx_range]
+        alph = self.dataset.absorption_coef(selected_meas)
+
+        freq_axis = sam_fd[:, 0].real
 
         if not plt.fignum_exists("Amplitude transmission" + fig_num_ext):
             plt.figure("Amplitude transmission")
@@ -585,8 +595,7 @@ class DataSetPlotter(ComponentBase):
             # plt.ylim((-1e3, 1.5e5))
             plt.xlabel("Frequency (THz)")
             plt.ylabel("Conductivity (S/cm)")
-
-        return ret, meas_quants
+    """
 
     def plot_meas_phi_diff(self, pnt0, pnt1, label=""):
         plot_range = self.plot_settings.plot_range
@@ -1253,9 +1262,6 @@ class DataSetPlotter(ComponentBase):
                 plt.plot(coords, vals, **plot_kwargs)
 
         self._plot_meas_on_image(measurements)
-
-    def plot_q_space_eval_result(self, res):
-        pass
     
     def plot_jitter(self):
         x = [25, 50, 100, 200]
@@ -1411,11 +1417,6 @@ class DataSetPlotter(ComponentBase):
             # plt.ylim((-10, 200))
             plt.xlabel("Frequency (THz)")
             plt.ylabel("Conductivity (S/cm)")
-
-    def plot_freq_fit(self, res):
-        for quantity in res:
-            pass
-        return
 
     def save_fig(self, fig_num_, filename=None, **kwargs):
         save_dir = Path(self.settings.export_csv_dir)

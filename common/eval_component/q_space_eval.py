@@ -1,6 +1,4 @@
 import logging
-from cmath import inf
-
 import numpy as np
 import scipy
 from common.default_appsettings import AppSettings
@@ -8,14 +6,14 @@ from common.functions import f_axis_idx_map, moving_average
 from common.eval_component.transfer_functions import model_1layer, transferfunction_error, dtdn, dtdd
 from common.eval_component.quantity_set import DataSet
 from common.units import Q_
-from common.consts import c_thz, GREEN, RESET
-from tqdm import tqdm
+from common.consts import c_thz
 from scipy.optimize import shgo
 from scipy.signal import iirnotch, filtfilt
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from common.eval_component.single_opt import optimize_transmission
 from datetime import datetime
+
 
 class QSpaceEval:
 
@@ -211,9 +209,8 @@ class QSpaceEval:
                     info_str += f"with a shift of {res['shift']} fs"
                     logging.info(info_str)
 
-                    progress = (fut_idx + 1) / len(futures)
                     if progress_carrier is not None:
-                        progress_carrier.progress_changed.emit(progress)
+                        progress_carrier.progress_changed.emit(percentage/100)
 
                     q_val_calc_res = self.calc_q_val(res)
                     res.update(q_val_calc_res)

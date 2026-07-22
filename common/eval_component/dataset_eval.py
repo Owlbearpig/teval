@@ -106,13 +106,10 @@ class DatasetEval(ComponentBase):
                  plotter: DataSetPlotter=None, object_name: str = None):
         super().__init__(object_name=object_name)
         self.dataset = dataset
-        self.settings = dataset.settings
         self.sub_dataset = self._link_sub_dataset(dataset_sub)
         self.plotter = plotter
 
         self.shgo_options = SHGOOptions()
-
-        self.freq_axis = self.dataset.freq_axis
 
         self._opt_conf = {}
 
@@ -121,11 +118,24 @@ class DatasetEval(ComponentBase):
 
         self.result_saver = self.setup_saver()
 
+        self.current_result.result_carrier.result_ready.connect(self.result_saver.process)
+
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.settings.save_configuration(self)
+        if self.settings is not None:
+            self.settings.save_configuration(self)
 
     def __enter__(self):
-        self.settings.load_configuration(self)
+        if self.settings is not None:
+            self.settings.load_configuration(self)
+        return self
+    
+    @property
+    def settings(self):
+        return self.dataset.settings if self.dataset else None
+    
+    @property
+    def freq_axis(self):
+        return self.dataset.freq_axis
 
     def setup_saver(self):
         res_saver = ResultSaver()
@@ -134,11 +144,8 @@ class DatasetEval(ComponentBase):
 
         return res_saver
 
-    def update_progress(self, progress_value: float):
-        try:
-            self.set_trait("optimization_progress", progress_value)
-        except Exception as exc:
-            logging.error(f"Failed to update progress traitlet: {exc}")
+    def update_progress(self, progress_value):
+        self.set_trait("optimization_progress", progress_value)
 
     def _link_sub_dataset(self, dataset: DataSet = None):
         if dataset is None:
@@ -287,43 +294,46 @@ class DatasetEval(ComponentBase):
 
     @action("Fit regression model", group=reg_grp_name)
     def perform_regression(self):
+        opt_conf = self.update_opt_config()
         def bg_worker():
-            opt_conf = self.update_opt_config()
+            try:
 
-            min_kwargs = self.shgo_options.minimizer_kwargs.traits(group=MinimizerOptions.minimizer_opt_grp)
-            min_kwargs["method"] = str(self.shgo_options.minimizer_kwargs.method.value)
+                min_kwargs = self.shgo_options.minimizer_kwargs.traits(group=MinimizerOptions.minimizer_opt_grp)
+                min_kwargs["method"] = str(self.shgo_options.minimizer_kwargs.method.value)
 
-            opt_res_ = shgo(func=opt_conf["func"],
-                            bounds=opt_conf["bounds"],
-                            n=self.shgo_options.n,
-                            iters=self.shgo_options.iters,
-                            minimizer_kwargs=min_kwargs,
-                            options=self.shgo_options.get_shgo_options(),
-                            )
-            logging.info("Fit result: {}".format(opt_res_))
+                opt_res_ = shgo(func=opt_conf["func"],
+                                bounds=opt_conf["bounds"],
+                                n=self.shgo_options.n,
+                                iters=self.shgo_options.iters,
+                                minimizer_kwargs=min_kwargs,
+                                options=self.shgo_options.get_shgo_options(),
+                                )
+                logging.info("Fit result: {}".format(opt_res_))
 
-            reg_res = self.prepare_regression_result(opt_res_, opt_conf)
+                reg_res = self.prepare_regression_result(opt_res_, opt_conf)
 
-            self.current_result.result_carrier.result_ready.emit(reg_res)
-            self.result_saver.process(self.current_result)
+                self.current_result.result_carrier.received_result.emit(reg_res)
+            except Exception:
+                traceback.print_exc()
 
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(bg_worker)
 
     @action("Fit transmission model", group=t_fit_grp_name)
     def fit_unknown_layer(self):
-        progress_carrier = ProgressSignalCarrier()
-        progress_carrier.progress_changed.connect(self.update_progress)
+        try:
+            progress_carrier = ProgressSignalCarrier()
+            progress_carrier.progress_changed.connect(self.update_progress)
 
-        def bg_worker():
-            qs_eval = QSpaceEval(self)
-            qs_res = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
+            def bg_worker():
+                qs_eval = QSpaceEval(self)
+                qs_res = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
+                self.current_result.result_carrier.received_result.emit(qs_res)
 
-            self.current_result.result_carrier.result_ready.emit(qs_res)
-            self.result_saver.process(self.current_result)
-
-        executor = ThreadPoolExecutor(max_workers=1)
-        executor.submit(bg_worker)
+            executor = ThreadPoolExecutor(max_workers=1)
+            executor.submit(bg_worker)
+        except Exception as e:
+            traceback.print_exc()
 
     def sigma_to_n(self, freq, sigma):
         w = 2 * np.pi * freq
@@ -486,9 +496,6 @@ class DatasetEval(ComponentBase):
         # res["t_mod_film"] = self._t_cond_model(self.freq_axis, p_opt)
 
         # n_film = self._sigma_to_n(self.freq_axis, sig_tot)
-
-        if self.plotter is not None:
-            self.plotter.plot_freq_fit(res)
 
         plt.figure("_drude_cc_part")
         plt.title("Charge carrier part")

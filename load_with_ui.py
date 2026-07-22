@@ -1,8 +1,5 @@
 import logging
 import sys
-from pathlib import Path
-import json
-import common.settings as settings
 from common.components import ComponentBase
 from qtui.autoui import generate_ui
 from PySide6 import QtCore, QtWidgets
@@ -16,6 +13,7 @@ class QTextBrowserLoggingHandler(QtCore.QObject, logging.Handler):
         QtCore.QObject.__init__(self)
         logging.Handler.__init__(self)
         self.textBrowser = textBrowser
+
         self.log_signal.connect(self.append_log_to_ui)
 
     def emit(self, record):
@@ -24,19 +22,10 @@ class QTextBrowserLoggingHandler(QtCore.QObject, logging.Handler):
 
     def append_log_to_ui(self, msg):
         text = self.textBrowser.toPlainText()
-        lines = text.split("\n")[-100:]
+        lines = text.split('\n')[-100:]
+        lines.append(msg)
 
-        is_progress_update = "Saving as npy:" in msg or "| " in msg
-        if (
-                is_progress_update
-                and lines
-                and ("Saving as npy:" in lines[-1] or "| " in lines[-1])
-        ):
-            lines[-1] = msg
-        else:
-            lines.append(msg)
-
-        self.textBrowser.setPlainText("\n".join(lines))
+        self.textBrowser.setPlainText('\n'.join(lines))
         self.textBrowser.verticalScrollBar().setValue(
             self.textBrowser.verticalScrollBar().maximum()
         )
