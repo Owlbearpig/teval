@@ -200,6 +200,7 @@ class DataSet(ComponentBase):
         func_map = {QuantityEnum.P2P: self.p2p,
                     QuantityEnum.Phase: self.phase,
                     QuantityEnum.MeasTimeDeltaRef2Sam: self.meas_time_delta,
+                    QuantityEnum.Power: self.power,
                     QuantityEnum.RefAmp: self.ref_max,
                     QuantityEnum.RefArgmax: self.get_ref_argmax,
                     QuantityEnum.RefPhase: self.ref_phase,
@@ -517,7 +518,11 @@ class DataSet(ComponentBase):
         else:
             return found_meas_list
 
-    def get_measurement_from_timestamp(self, timestamp_str):
+    def get_measurement_from_timestamp(self, timestamp_str=""):
+        if not timestamp_str:
+            logging.warning("No timestamp set. Returning first measurement")
+            return self.measurements["all"][0]
+        logging.info("Selecting measurement by timestamp", timestamp_str)
         meas_id_ = self._timestamp2id(timestamp_str)
 
         found_meas = None
@@ -919,7 +924,16 @@ class DataSet(ComponentBase):
         y_fd = self.get_data(meas_, domain=Domain.Frequency)
         return np.angle(y_fd[:, 1])
 
-    def power(self, meas_: Measurement, freq_range: tuple):
+    def power(self, meas_: Measurement):
+        ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Frequency)
+        sam_fd = self.get_data(meas_, domain=Domain.Frequency)
+
+        power_val_ref = np.abs(ref_fd[:, 1])
+        power_val_sam = np.abs(sam_fd[:, 1])
+
+        return (power_val_sam / power_val_ref) ** 2
+
+    def power_int(self, meas_: Measurement, freq_range: tuple):
         freq_slice = (freq_range[0] < self.freq_axis) * (self.freq_axis < freq_range[1])
 
         ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Frequency)
@@ -936,14 +950,14 @@ class DataSet(ComponentBase):
         return (meas_.meas_time - ref_meas.meas_time).total_seconds()
 
     def ref_max(self, meas_: Measurement):
-        amp_, _ = self._ref_interpolation(meas_)
+        y_fd = self._ref_interpolation(meas_)
 
-        return amp_
+        return np.abs(y_fd[:, 1])
 
     def ref_phase(self, meas_: Measurement):
-        _, phi_ = self._ref_interpolation(meas_)
+        y_fd = self._ref_interpolation(meas_)
 
-        return phi_
+        return np.angle(y_fd[:, 1])
 
     def simple_peak_cnt(self, meas_: Measurement, threshold: float):
         data_td = self.get_data(meas_)
@@ -1049,10 +1063,13 @@ class DataSet(ComponentBase):
 
     def _ref_interpolation(self, sam_meas):
         sam_meas_time = sam_meas.meas_time
-        nearest_ref = self.get_nearest_ref(sam_meas, dist_func=Dist.Time)
+        nearest_ref = self.get_nearest_ref(sam_meas, dist_func=Dist.Time.value)
 
         sam_idx = self.measurements["all"].index(sam_meas)
         ref_idx = self.measurements["all"].index(nearest_ref)
+
+        if len(self.measurements["refs"]) < 2:
+            return self.get_data(self.measurements["refs"][0], domain=Domain.Frequency)
 
         ref_list_idx = self.measurements["refs"].index(nearest_ref)
         if sam_idx < ref_idx:

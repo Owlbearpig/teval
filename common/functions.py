@@ -334,6 +334,8 @@ def filtering(data_td, wn=(0.001, 9.999), filt_type="bandpass", order=5):
 
 
 def f_axis_idx_map(freqs, freq_range=None):
+    if freqs is None:
+        return None
     if isinstance(freq_range, (float, int, Q_)):
         single_freq = freq_range.magnitude if isinstance(freq_range, Q_) else freq_range
         f_idx = np.array([int(np.argmin(np.abs(freqs - single_freq)))])

@@ -272,6 +272,7 @@ class QuantityFunc:
 
 class QuantityEnum(Enum):
     P2P = QuantityFunc("Peak to peak", domain=Domain.Time)
+    PowerInt = QuantityFunc("Integrated power", domain=Domain.Frequency)
     Power = QuantityFunc("Power", domain=Domain.Frequency)
     Phase = QuantityFunc("Phase", domain=Domain.Frequency, unit="rad")
     MeasTimeDeltaRef2Sam = QuantityFunc("Time delta Ref. to Sam.", domain=Domain.Time)
@@ -383,6 +384,7 @@ class PlotOpt(ComponentBase):
     img_title = Unicode("", group=image_group)
     en_cbar_label = Bool(True, group=image_group)
     plotted_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.P2P, group=image_group)
+    en_cbar_lim = Bool(default_value=False, group=image_group)
 
     shown_plots_group = "Shown plots"
     window = Bool(True, group=shown_plots_group)

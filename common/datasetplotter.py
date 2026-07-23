@@ -19,7 +19,6 @@ import matplotlib as mpl
 from scipy.stats import pearsonr
 from tqdm import tqdm
 import pandas as pd
-from copy import deepcopy
 from enum import Enum
 
 class SelectionEnum(Enum):
@@ -34,7 +33,9 @@ class DataSetPlotter(ComponentBase):
     )
     sel_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point (x, y)")
     sel_timestamp = Unicode("").tag(name="Selected timestamp")
-    selected_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(name="Selected quantity")
+    selected_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(name="Selected quantity",
+                                                                                group="Specific quantity")
+    quantity_value = Quantity(Q_(0, ""), read_only=True).tag(name="Quantity value", group="Specific quantity")
 
     def __init__(self, dataset : DataSet, **kwargs):
         super().__init__(**kwargs)
@@ -43,11 +44,18 @@ class DataSetPlotter(ComponentBase):
 
         self.selected_freq_idx = None
 
-        self.grid_func = None
         self.grid_vals = None
         self.img_ax = None
 
-        self._apply_settings()
+        self._apply_mpl_settings()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.settings.save_configuration(self)
+
+    def __enter__(self):
+        self.settings.load_configuration(self)
+
+        return self
 
     @observe("sel_freq_range")
     def select_freq(self, change):
@@ -67,15 +75,39 @@ class DataSetPlotter(ComponentBase):
     def measurements(self):
         return self.dataset.measurements
 
+    @property
+    def img_shape(self):
+        return self.dataset.properties["shape"]
+
+    @property
+    def quant_func(self):
+        self.select_quantity()
+        return self.selected_quantity.value.func
+
+    @property
+    def scalar_func(self):
+        def grid_func(meas, func=self.quant_func):
+            sel_freq_idx = self.freq_idx()
+
+            res = np.real(func(meas))
+            ndim = np.ndim(res)
+            if ndim == 0:
+                val = res
+            elif ndim == 1:
+                val = res[sel_freq_idx[0]]
+            else:
+                val = res[sel_freq_idx[0], 1]
+
+            return val
+
+        return grid_func
+
     def _plot_action(self, *args, **kwargs):
         action(*args, **kwargs)
         self.plt_show()
 
     def _calc_grid_vals(self):
-        if self.grid_vals is not None:
-            return self.grid_vals
-
-        w, h = self.dataset.properties["shape"]["w"], self.dataset.properties["shape"]["h"]
+        w, h = self.img_shape["w"], self.img_shape["h"]
         grid_vals = np.zeros((w, h), dtype=complex)
         sam_meas = self.measurements["sams"]
 
@@ -84,11 +116,11 @@ class DataSetPlotter(ComponentBase):
         for i, measurement in iter_:
             x_idx, y_idx = self._coords_to_idx(*measurement.position)
 
-            grid_vals[x_idx, y_idx] = self.grid_func(measurement)
+            grid_vals[x_idx, y_idx] = self.scalar_func(measurement)
 
         return grid_vals
 
-    def _apply_settings(self):
+    def _apply_mpl_settings(self):
         mpl.rcParams.update(mpl_style_params())
 
     def freq_idx(self, freq=None):
@@ -98,50 +130,20 @@ class DataSetPlotter(ComponentBase):
 
         return selected_freq_idx
 
-    def get_quantity_func(self, change=None, label=""):
+
+    @observe("selected_quantity")
+    def select_quantity(self, change=None):
         quantity = self.selected_quantity if change is None else change["new"]
         func_map = self.dataset.func_map
 
-        func_map[QuantityEnum.Power] = partial(self.dataset.power, freq_range=self.selected_freq_idx)
+        freq_range = (self.sel_freq_range[0].magnitude, self.sel_freq_range[1].magnitude)
+        func_map[QuantityEnum.PowerInt] = partial(self.dataset.power_int, freq_range=freq_range)
         func_map[QuantityEnum.PeakCnt] = partial(self.dataset.simple_peak_cnt, threshold=2.5)
 
-        if isinstance(quantity, QuantityFunc):
-            if not callable(quantity.func):
-                logging.warning("Func of Quantity must be callable")
-            func = quantity.func
-            selected_quantity = quantity
-        elif callable(quantity):
-            func = quantity
-            selected_quantity = QuantityFunc(label=label, func=quantity)
-        elif quantity in func_map:
-            func = func_map[quantity]
-            selected_quantity = quantity.value
-        else:
-            logging.warning(f"Unknown quantity type: {quantity}")
-            return None
 
-        return selected_quantity, func
 
-    @observe("selected_quantity")
-    def select_quantity(self, change, label=""):
-        quant, quant_func = self.get_quantity_func(change, label)
-        if quant_func is None:
-            return
-
-        def grid_func(meas, func=quant_func):
-            sel_freq_idx = self.freq_idx()
-
-            res = np.real(func(meas))
-            ndim = np.ndim(res)
-            if ndim == 0:
-                return res
-            elif ndim == 1:
-                return res[sel_freq_idx]
-            else:
-                return res[sel_freq_idx, 1]
-
-        self.grid_func = grid_func
-        self.selected_quantity = quant
+        quantity.value.func = func_map[quantity]
+        self.selected_quantity = quantity
 
         self._update_fig_num()
 
@@ -162,11 +164,12 @@ class DataSetPlotter(ComponentBase):
         return x, y
 
     def _update_fig_num(self):
-        en_freq_label = Domain.Frequency == self.selected_quantity.domain
+        sel_quant = self.selected_quantity.value
+        en_freq_label = Domain.Frequency == sel_quant.domain
         fig_num = ""
         if self.plot_settings.fig_label:
             fig_num += self.plot_settings.fig_label + " "
-        fig_num += str(self.selected_quantity)
+        fig_num += str(sel_quant)
 
         f1, f2 = int(self.sel_freq_range[0].magnitude * 1e3), int(self.sel_freq_range[1].magnitude * 1e3)
         if np.isclose(self.sel_freq_range[0].magnitude, self.sel_freq_range[1].magnitude):
@@ -180,14 +183,14 @@ class DataSetPlotter(ComponentBase):
         self._update_quantity_label()
 
     def _update_quantity_label(self):
-        en_freq_label = Domain.Frequency == self.selected_quantity.domain
+        sel_quant = self.selected_quantity.value
+        en_freq_label = Domain.Frequency == sel_quant.domain
         if np.isclose(self.sel_freq_range[0].magnitude, self.sel_freq_range[1].magnitude):
             freq_label = f"({self.sel_freq_range[0]})"
         else:
             freq_label = f"({self.sel_freq_range[0]}-{self.sel_freq_range[1]})"
 
-        self.img_properties["quantity_label"] = " ".join([str(self.selected_quantity),
-                                                          freq_label * en_freq_label])
+        self.img_properties["quantity_label"] = " ".join([str(sel_quant), freq_label * en_freq_label])
 
     def _is_excluded(self, idx_tuple):
         excl_areas = self.plot_settings.excluded_areas
@@ -218,6 +221,7 @@ class DataSetPlotter(ComponentBase):
     def average_area(self, pnt_bot_left, pnt_top_right, label="A1"):
         assert (pnt_bot_left[0] <= pnt_top_right[0]) and (pnt_bot_left[1] <= pnt_top_right[1])
 
+        properties = self.dataset.properties["shape"]
         x_coords, y_coords = self.img_properties["x_coords"], self.img_properties["y_coords"]
         pnt_bot_left = (x_coords[np.argmin(np.abs(pnt_bot_left[0] - x_coords))],
                         y_coords[np.argmin(np.abs(pnt_bot_left[1] - y_coords))])
@@ -452,18 +456,23 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad/THz)")
 
-    @action("Selected quantity", group="Plots")
+    @action("Plot selected quantity", group="Specific quantity")
     def plot_selected_quantity(self):
         fig_num_ext = self.plot_settings.fig_num_ext
-        quant, quant_func = self.get_quantity_func()
+        quant = self.selected_quantity.value
         ref_meas, selected_meas = self.get_meas()
-        values = quant_func(selected_meas)
+        values = quant.func(selected_meas)
         label = self.plot_settings.label
 
         is_single_plot = True if not isinstance(values, complex) else False
 
         f_idx_range = f_axis_idx_map(self.dataset.freq_axis, self.plot_settings.plot_range)
         freq_axis = self.dataset.freq_axis[f_idx_range]
+
+        if not isinstance(values, np.ndarray):
+            self.set_trait("quantity_value", Q_(values, ""))
+            return
+
         values = values[f_idx_range]
 
         fignum = str(quant) + fig_num_ext
@@ -471,7 +480,7 @@ class DataSetPlotter(ComponentBase):
             plt.figure(fignum)
             plt.plot(freq_axis, values, label=label)
             plt.xlabel("Frequency (THz)")
-            plt.ylabel(quant)
+            plt.ylabel(f"{quant} ({quant.unit})")
         else:
             if not plt.fignum_exists(fignum):
                 fig, (ax0, ax1) = plt.subplots(2, 1, num=fignum, sharex=True, gridspec_kw={'hspace': 0})
@@ -487,9 +496,7 @@ class DataSetPlotter(ComponentBase):
     def get_meas(self):
         if self.selection_criterion == SelectionEnum.selected_timestamp:
             timestamp = self.sel_timestamp
-            logging.info(f"Selecting by timestamp: {timestamp}")
             selected_meas = self.dataset.get_measurement_from_timestamp(timestamp)
-            point = selected_meas.point
         elif self.selection_criterion == SelectionEnum.selected_point:
             point = self.sel_point
             logging.info(f"Selecting by point: {point}")
@@ -634,11 +641,10 @@ class DataSetPlotter(ComponentBase):
         plt.figure("Amplitude noise")
         #plt.title(f"Amplitude of reference measurement at {selected_freq_} THz")
         plt.plot(freq_axis, np.std(ampl_arr_db, axis=0))
-
         plt.xlabel(f"Frequency (THz)")
         plt.ylabel("Amplitude (dB)")
 
-    @action("System stability", group="Plots")
+    @action("System stability", group="Stability plots")
     def plot_system_stability(self, climate_log_file=None, meas_set_kw=None):
         if meas_set_kw is not None:
             meas_set = []
@@ -858,6 +864,7 @@ class DataSetPlotter(ComponentBase):
 
         return ret
 
+    @action("Climate", group="Stability plots")
     def plot_climate(self, log_file=None, unit=None, quantity=ClimateQuantity.Temperature):
         log_file = log_file if log_file else self.plot_settings.climate_file
         if log_file is None:
@@ -1058,7 +1065,7 @@ class DataSetPlotter(ComponentBase):
 
         return meas_time, quant_values
 
-    @action("Stability difference", group="Plots")
+    @action("Stability difference", group="Stability plots")
     def system_stability_diff_plot(self):
         system_stab_res_refs = self.plot_system_stability()
         x = system_stab_res_refs["meas_times"]
@@ -1112,13 +1119,15 @@ class DataSetPlotter(ComponentBase):
     @action("Image", group="Image plots")
     def plot_image(self, img_extent=None):
         self._update_fig_num()
-        info = self.img_properties
+        shape_properties = self.dataset.properties["shape"]
         if img_extent is None:
-            w0, w1, h0, h1 = [0, info["w"], 0, info["h"]]
+            w0, w1, h0, h1 = [0, shape_properties["w"], 0, shape_properties["h"]]
         else:
-            dx, dy = info["dx"], info["dy"]
-            w0, w1 = int((img_extent[0] - info["extent"][0]) / dx), int((img_extent[1] - info["extent"][0]) / dx)
-            h0, h1 = int((img_extent[2] - info["extent"][2]) / dy), int((img_extent[3] - info["extent"][2]) / dy)
+            dx, dy = shape_properties["dx"], shape_properties["dy"]
+            w0, w1 = (int((img_extent[0] - shape_properties["extent"][0]) / dx),
+                      int((img_extent[1] - shape_properties["extent"][0]) / dx))
+            h0, h1 = (int((img_extent[2] - shape_properties["extent"][2]) / dy),
+                      int((img_extent[3] - shape_properties["extent"][2]) / dy))
 
         self.grid_vals = self._calc_grid_vals()
 
@@ -1134,26 +1143,26 @@ class DataSetPlotter(ComponentBase):
         fig.subplots_adjust(left=0.2)
 
         if img_extent is None:
-            img_extent = self.img_properties["extent"]
+            img_extent = shape_properties["extent"]
 
-        cbar_min, cbar_max = self.plot_settings.cbar_lim
-        if cbar_min is None:
+        if self.plot_settings.en_cbar_lim:
+            cbar_min, cbar_max = self.plot_settings.cbar_lim
+        else:
             cbar_min = np.min(shown_grid_vals)
-        if cbar_max is None:
             cbar_max = np.max(shown_grid_vals)
 
         if self.plot_settings.log_scale:
             self.settings.cbar_min = np.log10(cbar_min)
             self.settings.cbar_max = np.log10(cbar_max)
 
-        axes_extent = (float(img_extent[0] - self.img_properties["dx"] / 2),
-                       float(img_extent[1] + self.img_properties["dx"] / 2),
-                       float(img_extent[2] - self.img_properties["dy"] / 2),
-                       float(img_extent[3] + self.img_properties["dy"] / 2))
+        axes_extent = (float(img_extent[0] - shape_properties["dx"] / 2),
+                       float(img_extent[1] + shape_properties["dx"] / 2),
+                       float(img_extent[2] - shape_properties["dy"] / 2),
+                       float(img_extent[3] + shape_properties["dy"] / 2))
         img_ = ax.imshow(shown_grid_vals.transpose((1, 0)),
                          vmin=cbar_min, vmax=cbar_max,
                          origin="lower",
-                         cmap=plt.get_cmap(self.plot_settings.color_map),
+                         cmap=plt.get_cmap(self.plot_settings.color_map.value),
                          extent=axes_extent,
                          interpolation=self.plot_settings.pixel_interpolation.value
                          )
@@ -1178,7 +1187,8 @@ class DataSetPlotter(ComponentBase):
         cbar.set_ticks(np.round(np.linspace(cbar_min, cbar_max, 4), 3))
 
         if self.plot_settings.en_cbar_label:
-            cbar_label = self.selected_quantity.label + self.selected_quantity.unit
+            quant = self.selected_quantity.value
+            cbar_label = quant.label +" "+  quant.unit
             cbar.set_label(cbar_label, rotation=270, labelpad=30)
 
         self.img_ax = ax
@@ -1250,7 +1260,7 @@ class DataSetPlotter(ComponentBase):
                     msg += "\n"
                 logging.info(msg)
 
-                vals.append(self.grid_func(measurement))
+                vals.append(self.scalar_func(measurement))
 
             if horizontal:
                 if not "label" in plot_kwargs:
@@ -1275,7 +1285,7 @@ class DataSetPlotter(ComponentBase):
     @action("Knife edge", group="Plots")
     def knife_edge(self, x=None, y=None, coord_slice=None):
         measurements, coords = self.dataset.get_line(x, y)
-        vals = np.array([self.dataset.power(meas_, self.sel_freq_range) for meas_ in measurements])
+        vals = np.array([self.dataset.power_int(meas_, self.sel_freq_range) for meas_ in measurements])
 
         pos_axis = coords[np.nonzero(vals)]
         vals = vals[np.nonzero(vals)]
