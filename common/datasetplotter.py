@@ -461,7 +461,8 @@ class DataSetPlotter(ComponentBase):
     def plot_selected_quantity(self):
         fig_num_ext = self.plot_settings.fig_num_ext
         ref_meas, selected_meas = self.get_meas()
-        values = self.get_selected_quantity().func(selected_meas)
+        sel_quant = self.get_selected_quantity()
+        values = sel_quant.func(selected_meas)
         label = self.plot_settings.label
 
         f_idx_range = f_axis_idx_map(self.dataset.freq_axis, self.plot_settings.plot_range)
@@ -474,18 +475,18 @@ class DataSetPlotter(ComponentBase):
         values = values[f_idx_range]
 
         is_single_plot = True if not isinstance(values, complex) else False
-        fignum = str(quant) + fig_num_ext
+        fignum = str(sel_quant) + fig_num_ext
         if is_single_plot:
             plt.figure(fignum)
             plt.plot(freq_axis, values, label=label)
             plt.xlabel("Frequency (THz)")
-            plt.ylabel(f"{quant} ({quant.unit})")
+            plt.ylabel(f"{sel_quant} ({sel_quant.unit})")
         else:
             if not plt.fignum_exists(fignum):
                 fig, (ax0, ax1) = plt.subplots(2, 1, num=fignum, sharex=True, gridspec_kw={'hspace': 0})
                 ax1.set_xlabel("Frequency (THz)")
-                ax0.set_ylabel(f"{quant} (Real)")
-                ax1.set_ylabel(f"{quant} (Imag)")
+                ax0.set_ylabel(f"{sel_quant} (Real)")
+                ax1.set_ylabel(f"{sel_quant} (Imag)")
             else:
                 fig = plt.figure(fignum)
                 ax0, ax1 = fig.get_axes()

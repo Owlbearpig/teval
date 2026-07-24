@@ -4,8 +4,14 @@ from common.eval_component.tmm_impl import coh_tmm_wrapper
 
 # n is the free parameter of the unknown layer
 
+def shift_t(freq, t, shift=0.0):
+    return t * np.exp(1j * 2 * np.pi * (shift * 1e-3) * freq)
+
+
 def t_tmm_model_1layer(n, freq, **opt_kwargs):
     d = opt_kwargs["d"]
+    shift = opt_kwargs["shift"]
+
     pol = "s"
     n_list = [1, n, 1]
     d_list = [np.inf, d, np.inf]
@@ -18,6 +24,8 @@ def t_tmm_model_1layer(n, freq, **opt_kwargs):
 
     t = e_sam / e_ref
 
+    t = shift_t(freq, t, shift)
+
     return np.nan_to_num(t)
 
 def t_tmm_model_2layer(n, freq, **opt_kwargs):
@@ -26,6 +34,7 @@ def t_tmm_model_2layer(n, freq, **opt_kwargs):
     h = opt_kwargs["h"]
     n1 = opt_kwargs["n1"]
     n4 = opt_kwargs["n4"]
+    shift = opt_kwargs["shift"]
 
     pol = "s"
     n_list = [n1, n, n_sub, n4]
@@ -39,12 +48,15 @@ def t_tmm_model_2layer(n, freq, **opt_kwargs):
 
     t = e_sam / e_ref
 
+    t = shift_t(freq, t, shift)
+
     return np.nan_to_num(t)
 
 def model_1layer(n, freq, **opt_kwargs):
     d = opt_kwargs["d"]
     nfp = opt_kwargs["nfp"]
     n1 = opt_kwargs["n1"]
+    shift = opt_kwargs["shift"]
 
     w_ = 2 * np.pi * freq
     t_as = 2 * n1 / (n1 + n)
@@ -69,6 +81,9 @@ def model_1layer(n, freq, **opt_kwargs):
 
     t = (1 - r_as ** 2) * exp1 * s
     #"""
+
+    t = shift_t(freq, t, shift)
+
     return np.nan_to_num(t)
 
 
@@ -78,6 +93,7 @@ def model_2layer(n, freq, **opt_kwargs):
     h = opt_kwargs["h"]
     n1 = opt_kwargs["n1"]
     n4 = opt_kwargs["n4"]
+    shift = opt_kwargs["shift"]
 
     w_ = 2 * np.pi * freq
     t12 = 2 * n1 / (n1 + n)
@@ -96,6 +112,8 @@ def model_2layer(n, freq, **opt_kwargs):
 
     t = e_sam / e_ref
 
+    t = shift_t(freq, t, shift)
+
     return np.nan_to_num(t)
 
 def _t_model_2layer(n, freq, **opt_kwargs):
@@ -105,6 +123,7 @@ def _t_model_2layer(n, freq, **opt_kwargs):
     n1 = opt_kwargs["n1"]
     n4 = opt_kwargs["n4"]
     nfp = opt_kwargs["nfp"]
+    shift = opt_kwargs["shift"]
 
     w_ = 2 * np.pi * freq
     t12 = 2 * n1 / (n1 + n)
@@ -131,6 +150,8 @@ def _t_model_2layer(n, freq, **opt_kwargs):
     e_ref = np.exp(1j * ((d + h) * w_ / c_thz))
 
     t = e_sam / e_ref
+
+    t = shift_t(freq, t, shift)
 
     return np.nan_to_num(t)
 

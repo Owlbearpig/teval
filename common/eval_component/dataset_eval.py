@@ -87,13 +87,15 @@ class DatasetEval(ComponentBase):
     eps_s_bounds = ValueRange([1.0, 100.0], group=reg_grp_name).tag(name="ε_s Bounds")
     c1_bounds = ValueRange([-1.0, 1.0], group=reg_grp_name).tag(name="c₁ Bounds")
 
-    t_fit_grp_name = "Transmission fit"
+    t_fit_grp_name = "Transmission q-space fit"
     transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.tmm_1layer,
                                group=t_fit_grp_name)
     d_opt_axis_bounds = ValueRange([Q_(500, "µm"), Q_(580, "µm", )], group=t_fit_grp_name)
     d_opt_axis_step = Quantity(Q_(10, "µm"), group=t_fit_grp_name)
     use_custom_d_opt_axis = Bool(True, group=t_fit_grp_name)
     number_of_workers = Integer(8, group=t_fit_grp_name).tag(name="Number of workers")
+    add_t_sim_to_res = Bool(False, group=t_fit_grp_name).tag(name="Add simulated t to result")
+
 
     current_result = Instance(EvalResult)
     selected_substrate_result = Instance(EvalResult)
@@ -128,11 +130,21 @@ class DatasetEval(ComponentBase):
     
     @property
     def settings(self):
-        return self.dataset.settings if self.dataset else None
+        return self.dataset.settings
     
     @property
     def freq_axis(self):
         return self.dataset.freq_axis
+
+    @property
+    def _ui_control_widget(self):
+        return getattr(self, '_ui_widget_internal', None)
+
+    @_ui_control_widget.setter
+    def _ui_control_widget(self, value):
+        self._ui_widget_internal = value
+        if value:
+            self.select_regression_model()
 
     def setup_saver(self):
         res_saver = ResultSaver()
@@ -162,6 +174,45 @@ class DatasetEval(ComponentBase):
         else:
             return self, self.sub_dataset
 
+    def is_two_layer_t_model(self, model_kwargs):
+        try:
+            # check if transmission model expects n_sub
+            test_kwargs = model_kwargs.copy()
+            test_kwargs["d"] = 1
+            test_kwargs["shift"] = 0
+            self.transmission_model.value(n=1, freq=1, **test_kwargs)
+            return False
+        except KeyError as e:
+            logging.info(e)
+            return True
+
+    def get_t_model_kwargs(self):
+        single_layer_properties = self.dataset.get_single_layer_properties()
+        meas = single_layer_properties["meas"]
+        ref_meas = self.dataset.get_nearest_ref(meas)
+
+        meas_quants = self.dataset.calc_meas_quantities(ref_meas, meas)
+        model_kwargs = {}
+        model_kwargs["meas_quants"] = meas_quants
+        model_kwargs["single_layer_approx"] = single_layer_properties["single_layer_approx"]
+        model_kwargs["nfp"] = self.settings.eval_opt.fp_count
+        model_kwargs["n1"] = 1
+        model_kwargs["n4"] = 1
+        model_kwargs["shift"] = 0
+
+        if self.is_two_layer_t_model(model_kwargs):
+            model_kwargs["h"] = self.settings.sample_properties.d_film.magnitude
+            substrate_result = self.selected_substrate_result.quantity_dict
+            try:
+                n_sub_real_dataset = substrate_result["n"]
+                n_sug_imag_dataset = substrate_result["k"]
+                n_sub = n_sub_real_dataset.data.magnitude + 1j * n_sug_imag_dataset.data.magnitude
+            except KeyError:
+                raise Exception("Substrate result required for two layer model optimization")
+            model_kwargs["n_sub"] = n_sub
+
+        return model_kwargs
+
     def set_y_meas(self):
         meas_quantity = self.meas_quantity
         func = self.dataset.func_map[meas_quantity]
@@ -173,16 +224,6 @@ class DatasetEval(ComponentBase):
         self._opt_conf["y_meas"] = y_meas[f_idx]
 
         return self._opt_conf["y_meas"]
-
-    @property
-    def _ui_control_widget(self):
-        return getattr(self, '_ui_widget_internal', None)
-
-    @_ui_control_widget.setter
-    def _ui_control_widget(self, value):
-        self._ui_widget_internal = value
-        if value:
-            self.select_regression_model()
 
     @observe("regression_model")
     def select_regression_model(self, change=None):
@@ -233,25 +274,26 @@ class DatasetEval(ComponentBase):
     @observe("cost_fun")
     def setup_cost(self, change=None):
         cost_func = self.cost_fun.value if change is None else change["new"]
-        mod_func = self.select_regression_model()
+        reg_mod = self.select_regression_model()
         y_meas = self._opt_conf.get("y_meas", self.set_y_meas())
 
-        if self.convert_sigma_to_t:
-            def t_mod_func(*args, **kwargs):
-                freq_axis = self._opt_conf["freq_axis"]
-                sigma = mod_func(*args, **kwargs)
-                n = self.sigma_to_n(freq_axis, sigma)
+        t_mod_kwargs = self.get_t_model_kwargs()
+        t_mod_kwargs["d"] = self.settings.sample_properties.d.magnitude
+        def t_mod_func(*args, **kwargs):
+            freq_axis = self._opt_conf["freq_axis"]
+            sigma = reg_mod(*args, **kwargs)
+            n = self.sigma_to_n(freq_axis, sigma)
 
-                t = self.transmission_model(n, freq_axis, **self._opt_conf)
+            t = self.transmission_model.value(n, freq_axis, **t_mod_kwargs)
 
-                return t
+            return t
 
-            mod_func = t_mod_func
+        mod_func = t_mod_func if self.convert_sigma_to_t else reg_mod
 
         self._opt_conf["func"] = lambda p: cost_func(y_meas, mod_func(*p))
         return self._opt_conf["func"]
 
-    def update_opt_config(self):
+    def get_opt_config(self):
         self.update_freq_axis()
         self._opt_conf["h"] = self.settings.sample_properties.d_film.magnitude
 
@@ -291,10 +333,9 @@ class DatasetEval(ComponentBase):
 
     @action("Fit regression model", group=reg_grp_name)
     def perform_regression(self):
-        opt_conf = self.update_opt_config()
+        opt_conf = self.get_opt_config()
         def bg_worker():
             try:
-
                 min_kwargs = self.shgo_options.minimizer_kwargs.traits(group=MinimizerOptions.minimizer_opt_grp)
                 min_kwargs["method"] = str(self.shgo_options.minimizer_kwargs.method.value)
 
@@ -325,6 +366,7 @@ class DatasetEval(ComponentBase):
             def bg_worker():
                 qs_eval = QSpaceEval(self)
                 qs_res = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
+
                 self.current_result.result_carrier.received_result.emit(qs_res)
 
             executor = ThreadPoolExecutor(max_workers=1)
@@ -340,24 +382,6 @@ class DatasetEval(ComponentBase):
 
         return n_
 
-    def t_sim_1layer(self):
-        if not self.options["sim_opt"]["enabled"]:
-            exit("BB")
-
-        self.options["eval_opt"]["shift_sub"] = self.options["sim_opt"]["shift_sim"]
-        n_sub = self.options["sim_opt"]["n_sub"]
-        nfp_og = self.options["eval_opt"]["nfp"]
-
-        self.options["eval_opt"]["nfp"] = self.options["sim_opt"]["nfp_sim"]
-        t_sim = np.zeros_like(self.freq_axis, dtype=complex)
-        for f_idx, freq in enumerate(self.freq_axis):
-            n_sub_ = n_sub#0.03*freq + n_sub.real + 1j * freq * 0.001
-            t_sim[f_idx] = self._t_model_1layer(freq, n_sub_)
-        t_sim = np.abs(t_sim) * np.exp(-1j * np.angle(t_sim))
-
-        self.options["eval_opt"]["nfp"] = nfp_og
-
-        return t_sim
 
     # should be included in the transmission fit result (also calculates t spectrum)
     def sub_meas_sim(self):

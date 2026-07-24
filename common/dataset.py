@@ -476,6 +476,8 @@ class DataSet(ComponentBase):
         self._set_dataset_info()
 
     def link_sub_dataset(self, dataset_):
+        if dataset_ is None:
+            return
         dataset_.is_sub_dataset = True
         self.sub_dataset = dataset_
         self.settings.eval_opt.set_trait("substrate_dataset_linked", True)

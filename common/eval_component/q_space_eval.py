@@ -1,7 +1,9 @@
 import logging
+import traceback
+
 import numpy as np
 import scipy
-from common.default_appsettings import AppSettings
+from common.default_appsettings import SimRISelection, AppSettings
 from common.functions import f_axis_idx_map, moving_average
 from common.eval_component.transfer_functions import model_1layer, transferfunction_error, dtdn, dtdd
 from common.eval_component.quantity_set import DataSet
@@ -23,7 +25,6 @@ class QSpaceEval:
         self.settings = dataset_eval.dataset.settings
         self.freq_axis = self.dataset.freq_axis
 
-        self.model_kwargs = {}
         self.cost_fun = self.dataset_eval.cost_fun.value
         self.transmission_model = self.dataset_eval.transmission_model
 
@@ -33,49 +34,8 @@ class QSpaceEval:
             "q_min": np.inf
         }
 
-    def _is_two_layer_model(self):
-        try:
-            # check if transmission model expects n_sub
-            test_kwargs = self.model_kwargs.copy()
-            test_kwargs["d"] = 1
-            self.transmission_model.value(n=1, freq=1, **test_kwargs)
-            return False
-        except KeyError as e:
-            logging.info(e)
-            return True
-
-    def set_two_layer_kwargs(self):
-        self.model_kwargs["h"] = self.settings.sample_properties.d_film.magnitude
-
-        substrate_result = self.dataset_eval.selected_substrate_result.quantity_dict
-        try:
-            n_sub_real_dataset = substrate_result["n"]
-            n_sug_imag_dataset = substrate_result["k"]
-            n_sub = n_sub_real_dataset.data.magnitude + 1j * n_sug_imag_dataset.data.magnitude
-        except KeyError:
-            raise Exception("Substrate result required for two layer model optimization")
-        self.model_kwargs["n_sub"] = n_sub
-
-    def set_model_kwargs(self):
-        single_layer_properties = self.dataset.get_single_layer_properties()
-        meas = single_layer_properties["meas"]
-        ref_meas = self.dataset.get_nearest_ref(meas)
-
-        meas_quants = self.dataset.calc_meas_quantities(ref_meas, meas)
-
-        self.model_kwargs["meas_quants"] = meas_quants
-        self.model_kwargs["single_layer_approx"] = single_layer_properties["single_layer_approx"]
-        self.model_kwargs["nfp"] = self.settings.eval_opt.fp_count
-        self.model_kwargs["n1"] = 1
-        self.model_kwargs["n4"] = 1
-
-        if self._is_two_layer_model():
-            self.set_two_layer_kwargs()
-
-    def calc_uncertainties(self, result):
+    def calc_uncertainties(self, result, meas_quants):
         uncertainties = {**result}
-
-        meas_quants = self.model_kwargs["meas_quants"]
 
         f_idx_plot_range = f_axis_idx_map(self.freq_axis, self.settings.eval_opt.fit_range)
 
@@ -96,7 +56,7 @@ class QSpaceEval:
         dtdn_ = dtdn(n, d, f_axis)
         dtdd_ = dtdd(n, d, f_axis)
 
-        delta_d = self.settings.eval_opt.delta_d
+        delta_d = self.settings.eval_opt.delta_d.magnitude
 
         uncertainties["delta_n"] = np.sqrt(((1 / dtdn_) * delta_t) ** 2 + ((1 / dtdn_) * dtdd_ * delta_d) ** 2)
         uncertainties["delta_alpha"] = (4 * np.pi * f_axis / (1e-4 * c_thz)) * uncertainties["delta_n"].imag
@@ -165,19 +125,17 @@ class QSpaceEval:
 
         return {"q_val": q_val, "q_sum": q_sum, "q_y": y_filtered}
 
-    def q_space_eval_mp(self, fit_range=None, progress_carrier=None):
-        if fit_range is None:
-            fit_range = self.settings.eval_opt.fit_range
+    def q_space_eval_mp(self, progress_carrier=None):
+        fit_range = self.settings.eval_opt.fit_range
 
         f_idx_fit_range = f_axis_idx_map(self.freq_axis, fit_range)
-
-        self.set_model_kwargs()
+        model_kwargs = self.dataset_eval.get_t_model_kwargs()
 
         opt_config = {
             "f_idx_range_": f_idx_fit_range,
             "freq_axis": self.freq_axis,
-            "single_layer_approx": self.model_kwargs["single_layer_approx"],
-            "t_exp": self.model_kwargs["meas_quants"]["t_exp"],
+            "single_layer_approx": model_kwargs["single_layer_approx"],
+            "t_exp": model_kwargs["meas_quants"]["t_exp"],
             "transmission_model": self.transmission_model.value,
             "cost_fun": self.cost_fun,
             "minimizer_kwargs": self.dataset_eval.shgo_options.get_minimizer_kwargs(),
@@ -259,16 +217,19 @@ class QSpaceEval:
         best_res = opt_results[np.argmin(q_vals)]
         best_res["d_vals"] = np.array([res["d"] for res in opt_results])
 
-        best_res = self.calc_uncertainties(best_res)
+        best_res = self.calc_uncertainties(best_res, model_kwargs["meas_quants"])
 
         n_opt_res_ = best_res["n"] + 1j * best_res["k"]
-        self.model_kwargs["shift"] = best_res["shift"]
-        self.model_kwargs["d"] = best_res["d"]
+        model_kwargs["shift"] = best_res["shift"]
+        model_kwargs["d"] = best_res["d"]
 
-        t_mod_ = self.transmission_model.value(n_opt_res_, self.freq_axis[f_idx_fit_range], **self.model_kwargs)
+        t_mod_ = self.transmission_model.value(self.freq_axis[f_idx_fit_range], n_opt_res_, **model_kwargs)
 
         best_res["t_mod"] = t_mod_
-        best_res["sam_mod"] = self.model_kwargs["meas_quants"]["ref_fd"][f_idx_fit_range, 1] * t_mod_
+        best_res["sam_mod"] = model_kwargs["meas_quants"]["ref_fd"][f_idx_fit_range, 1] * t_mod_
+
+        if self.dataset_eval.add_t_sim_to_res:
+            best_res["t_sim"] = self.calc_t_sim(model_kwargs)
 
         sas = (5, 20)
         smoothed_quantities = ["n", "k", "alpha"]
@@ -279,6 +240,40 @@ class QSpaceEval:
         best_res["model_name"] = self.transmission_model.name
 
         return self.prepare_result(best_res)
+
+    def calc_t_sim(self, model_kwargs):
+        model = self.transmission_model.value
+        fit_range = self.settings.eval_opt.fit_range
+        f_idx_fit_range = f_axis_idx_map(self.freq_axis, fit_range)
+
+        freq_axis = self.freq_axis[f_idx_fit_range]
+        one = np.ones_like(freq_axis, dtype=float)
+
+        if self.settings.eval_opt.sim_n_selection == SimRISelection.const:
+            sim_n_sub = self.settings.eval_opt.sim_n_sub
+            n_sub = (sim_n_sub[0] + 1j * sim_n_sub[1]) * one
+
+            sim_n_film = self.settings.eval_opt.sim_n_film
+            n_film = (sim_n_film[0] + 1j * sim_n_film[1]) * one
+        else:
+            n_sub = 1 * one
+            n_film = 1 * one
+
+        model_kwargs = {k: v for k, v in model_kwargs.items()}
+        model_kwargs["d"] = self.settings.eval_opt.sim_d.magnitude
+        model_kwargs["nfp"] = self.settings.eval_opt.sim_nfp
+        model_kwargs["shift"] = self.settings.eval_opt.sim_shift.magnitude
+
+        if self.dataset_eval.is_two_layer_t_model():
+            model_kwargs["n_sub"] = n_sub
+            model_kwargs["h"] = self.settings.eval_opt.sim_h.magnitude
+            n = n_film
+        else:
+            n = n_sub
+
+        t_sim = model(freq_axis, n, **model_kwargs)
+
+        return t_sim
 
     def prepare_result(self, res_dict):
         rd = res_dict
@@ -307,6 +302,8 @@ class QSpaceEval:
             "t_mod": DataSet(axes=[freq_axis], data=Q_(rd["t_mod"], "V"), axes_labels=["ABE"]),
             "sam_mod": DataSet(axes=[freq_axis], data=Q_(rd["sam_mod"], "J")),
         }
+        if "t_sim" in rd:
+            parsed_dict["t_sim"] = DataSet(axes=[freq_axis], data=Q_(rd["t_sim"], ""))
 
         parsed_dict["result_type"] = "Transmission fit"
         parsed_dict["model_name"] = self.transmission_model.name

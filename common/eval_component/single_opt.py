@@ -15,12 +15,13 @@ def optimize_transmission(d, shift, config_dict):
 
     freq_axis_slice = freq_axis[f_idx_range_]
     n0_ = single_layer_approx["refr_idx"][f_idx_range_]
-    t_exp_ = t_exp[f_idx_range_, 1] * np.exp(1j * 2 * np.pi * (shift * 1e-3) * freq_axis_slice)
+    t_exp_ = t_exp[f_idx_range_, 1]
 
     time.sleep(1000/(min(500, d)))
 
     model_kwargs_keys = ["single_layer_approx", "d", "n_sub", "n1", "n4", "h", "nfp"]
     model_kwargs = {k: config_dict[k] for k in model_kwargs_keys if k in config_dict}
+    model_kwargs["shift"] = shift
 
     gof = 0
     n_opt_res_ = np.zeros_like(freq_axis_slice, dtype=complex)

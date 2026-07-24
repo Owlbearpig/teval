@@ -11,6 +11,8 @@ from common import traits
 from common.components import ComponentBase
 from common.traits import ValueRange, Path as TPath, Q_, Quantity as TQuantity
 
+class SimRISelection(Enum):
+    const = 0
 
 class LogLevel(Enum):
     info = logging.INFO
@@ -296,11 +298,21 @@ class EvalOpt(ComponentBase):
     q_space_range = ValueRange([Q_(0.75, "THz"), Q_(2.00, "THz")])
     phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")])
     average = Bool(False)
-    delta_d = Float(2.0)
+    delta_d = TQuantity(Q_(2.0, "µm"))
     fp_count = Int(0).tag(name="Number of Fabry-Perots")
     phi_offset_correction = Bool(True)
     printed_freqs = TList(trait=Float(), default_value=[1.000, 2.000])
     d_opt_axis = TAny(None, allow_none=True)
+
+    sim_d = TQuantity(Q_(100, "µm"), group="Transmission simulation")
+    sim_h = TQuantity(Q_(1, "µm"), group="Transmission simulation")
+    sim_nfp = Int(8, group="Transmission simulation").tag(name="Fabry perot count")
+    sim_shift = TQuantity(Q_(0, "fs"), group="Transmission simulation")
+    sim_n_sub = ValueRange([1, 0],
+                           group="Transmission simulation").tag(name="Refractive index sub. (real, imag)")
+    sim_n_film = ValueRange([1, 0],
+                           group="Transmission simulation").tag(name="Refractive index film (real, imag)")
+    sim_n_selection = TEnum(SimRISelection, SimRISelection.const, group="Transmission simulation")
 
     use_sub_dataset = Bool(False, group="Conductivity").tag(name="Use separate substrate dataset")
     sub_pnt = ValueRange([0, 0], group="Conductivity").tag(name="Substrate point")
