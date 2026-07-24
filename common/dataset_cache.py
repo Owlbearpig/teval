@@ -16,8 +16,8 @@ def _generate_id_map(measurements):
 
 class DatasetCache:
 
-    def __init__(self, measurements, data_dir, progress_carrier=None):
-        self.progress_carrier = progress_carrier
+    def __init__(self, measurements, data_dir, signal_carrier=None):
+        self.signal_carrier = signal_carrier
         self.coord_map_key_func = lambda position_tuple: "_".join([f"{val:.3f}" for val in position_tuple])
         self.coord_map = self._generate_coord_map(measurements)
 
@@ -68,8 +68,9 @@ class DatasetCache:
             self.raw_data_fd = None
 
             logging.info(f"Cleared {self.path}")
-            if self.progress_carrier is not None:
-                self.progress_carrier.progress_signal.emit(0)
+            if self.signal_carrier is not None:
+                self.signal_carrier.progress_signal.emit(0)
+                self.signal_carrier.initialization_complete_signal.emit("is_initialized", False)
 
     def _make_cache(self, measurements):
         # make cache (npy) if it does not already exist
@@ -94,9 +95,9 @@ class DatasetCache:
             for meas_idx, meas in enumerate(measurements):
                 idx = self.id_map[meas.identifier]
                 data_td[idx], data_fd[idx] = meas.get_data_td(), meas.get_data_fd()
-                if self.progress_carrier is not None:
+                if self.signal_carrier is not None:
                     progress = (1 + meas_idx) / len(measurements)
-                    self.progress_carrier.progress_signal.emit(progress)
+                    self.signal_carrier.progress_signal.emit(progress)
 
             np.save(str(path / "_td_cache.npy"), data_td)
             np.save(str(path / "_fd_cache.npy"), data_fd)

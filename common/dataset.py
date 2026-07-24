@@ -3,6 +3,7 @@ from common.default_appsettings import Dist, ReferenceSelection
 from common.settings import Settings
 from pathlib import Path
 import numpy as np
+from functools import partial
 from common.functions import window, butter_filt, do_fft, f_axis_idx_map, remove_offset, arr_statistics
 from common.measurements import Measurement, meas_id_func
 from mpl_settings import mpl_style_params
@@ -18,7 +19,7 @@ from scipy.stats import pearsonr
 from common.default_appsettings import Domain, QuantityEnum, DatasetOpt
 from common.components import action
 import itertools
-from traitlets import Unicode, observe, Float
+from traitlets import Unicode, observe, Float, Bool
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from PySide6.QtCore import QObject, Signal
@@ -52,8 +53,9 @@ New ideas: add teralyzer evaluation (time consuming)
 """
 
 
-class ProgressSignalCarrier(QObject):
+class ParsingSignalCarrier(QObject):
     progress_signal = Signal(float)
+    initialization_complete_signal = Signal(str, bool)
 
 def logger_config(settings):
     handler = colorlog.StreamHandler()
@@ -76,8 +78,10 @@ def logger_config(settings):
     logger.setLevel(log_level)
 
 class DataSet(ComponentBase):
-    data_path = TPath(Path("."), is_file=False).tag(priority=-100, name="Dataset path", fullwidth=True)
-    caching_progress = Float(0, min=0, max=1, read_only=True).tag(name="Progress")
+    data_path = TPath(Path("."), is_file=False).tag(priority=-100, name="Dataset path",
+                                                    fullwidth=True).tag(priority=-2)
+    caching_progress = Float(0, min=0, max=1, read_only=True).tag(name="Caching progress", priority=-1)
+    is_initialized = Bool(False, read_only=True).tag(name="Dataset Initialized")
 
     max_amp_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Max amplitude measurement")
     first_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="First measurement")
@@ -89,6 +93,17 @@ class DataSet(ComponentBase):
 
     meas_time_info = Unicode("", group="Measurement time info", read_only=True).tag(name="Total measurement time")
     mean_meas_time_info = Unicode("", group="Measurement time info", read_only=True).tag(name="Mean measurement time")
+
+    shape_w_info = Unicode("", group="Shape info", read_only=True).tag(name="Width (mm)")
+    shape_h_info = Unicode("", group="Shape info", read_only=True).tag(name="Height (mm)")
+    shape_dx_info = Unicode("", group="Shape info", read_only=True).tag(name="x-step (mm)")
+    shape_dy_info = Unicode("", group="Shape info", read_only=True).tag(name="y-step (mm)")
+    pixel_cnt = Unicode("", group="Shape info", read_only=True).tag(name="Pixel count", priority=99)
+
+    min_x_coord = Unicode("", group="Coordinate info", read_only=True).tag(name="Minimum x-coordinate (mm)")
+    max_x_coord = Unicode("", group="Coordinate info", read_only=True).tag(name="Maximum x-coordinate (mm)")
+    min_y_coord = Unicode("", group="Coordinate info", read_only=True).tag(name="Minimum y-coordinate (mm)")
+    max_y_coord = Unicode("", group="Coordinate info", read_only=True).tag(name="Maximum y-coordinate (mm)")
 
     def __init__(self, settings : Settings, **kwargs):
         super().__init__(**kwargs)
@@ -152,8 +167,9 @@ class DataSet(ComponentBase):
         if data_path is None:
             return
 
-        progress_carrier = ProgressSignalCarrier()
-        progress_carrier.progress_signal.connect(self.update_cache_progress)
+        signal_carrier = ParsingSignalCarrier()
+        signal_carrier.progress_signal.connect(self.update_cache_progress)
+        signal_carrier.initialization_complete_signal.connect(self.set_trait)
 
         def bg_worker(target_path):
             if not self._parse_lock.acquire(blocking=False):
@@ -171,7 +187,7 @@ class DataSet(ComponentBase):
                 if not self.measurements["all"]:
                     return
 
-                self.cache = DatasetCache(self.measurements["all"], target_path, progress_carrier)
+                self.cache = DatasetCache(self.measurements["all"], target_path, signal_carrier)
                 self._data_properties()
 
                 all_meas = self.measurements["all"]
@@ -186,6 +202,8 @@ class DataSet(ComponentBase):
                 self._sort_meas_type()
 
                 self._shape_properties()
+
+                signal_carrier.initialization_complete_signal.emit("is_initialized", True)
 
             except Exception as e:
                 logging.error(f"Error parsing path {target_path}: {e}")
@@ -272,6 +290,21 @@ class DataSet(ComponentBase):
 
         self.properties["shape"] = {"w": w, "h": h, "dx": dx, "dy": dy, "extent": extent,
                                     "x_coords": x_coords, "y_coords": y_coords, "all_points": all_points}
+        self.set_shape_info_traits()
+
+    def set_shape_info_traits(self):
+        sd = self.properties["shape"]
+
+        self.set_trait("shape_w_info", str(sd["w"]))
+        self.set_trait("shape_h_info", str(sd["h"]))
+        self.set_trait("shape_dx_info", str(sd["dx"]))
+        self.set_trait("shape_dy_info", str(sd["dy"]))
+        self.set_trait("pixel_cnt", str(int((sd["h"]/sd["dy"])*(sd["w"]/sd["dx"]))))
+
+        self.set_trait("min_x_coord", str(np.min(sd["x_coords"])))
+        self.set_trait("max_x_coord", str(np.max(sd["x_coords"])))
+        self.set_trait("min_y_coord", str(np.min(sd["y_coords"])))
+        self.set_trait("max_y_coord", str(np.max(sd["y_coords"])))
 
     def find_climate_log_file(self, climate_log_file):
         log_file = Path(climate_log_file)
@@ -496,6 +529,9 @@ class DataSet(ComponentBase):
             return data_td, data_fd
 
     def get_measurement(self, x, y, return_single=True):
+        if self.cache is None:
+            logging.info("Cache not loaded, check dataset path")
+            return None
         meas_list = self.measurements["all"]
         if isinstance(x, Q_):
             x = x.magnitude

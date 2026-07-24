@@ -1,6 +1,8 @@
+import logging
 from traitlets import HasTraits, Unicode, Bool, Int, Instance
 import traitlets
 from PySide6 import QtWidgets
+from functools import wraps
 
 def is_component_trait(x):
     return isinstance(x, Instance) and issubclass(x.klass, ComponentBase)
@@ -18,7 +20,9 @@ def _dumb_list_of_actions(inst):
         except traitlets.TraitError:
             pass
 
-def action(name=None, help=None, **kwargs):
+
+
+def action(name=None, help=None, check_init=False, **kwargs):
     if name is None:
         name = ''
     if help is None:
@@ -26,12 +30,22 @@ def action(name=None, help=None, **kwargs):
 
     kwargs['name'] = name
     kwargs['help'] = help
+    kwargs['check_init'] = check_init
 
     def action_impl(method):
-        method._isAction = True
-        method.metadata = kwargs
-        method.help = help
-        return method
+        @wraps(method)
+        def wrapper(self, *args, **kwargs_fn):
+            if check_init:
+                dataset = getattr(self, "dataset", None)
+                if dataset is not None and not getattr(dataset, "is_initialized", False):
+                    logging.warning(f"Action '{name or method.__name__}' blocked: Dataset is not initialized.")
+                    return None
+            return method(self, *args, **kwargs_fn)
+
+        wrapper._isAction = True
+        wrapper.metadata = kwargs
+        wrapper.help = help
+        return wrapper
 
     return action_impl
 
@@ -41,7 +55,6 @@ class ComponentBase(HasTraits):
     script_name = None
 
     def __init__(self, object_name : str = None):
-        self.is_initialized = False
 
         self.object_name = object_name
         if self.object_name is None:
@@ -52,7 +65,6 @@ class ComponentBase(HasTraits):
             self.__actions.append((name, memb))
 
     def __enter__(self, *args):
-        self.is_initialized = True
         for name, trait in self.traits().items():
             if is_component_trait(trait):
                 trait.get(self).__enter__(*args)
@@ -60,8 +72,6 @@ class ComponentBase(HasTraits):
         return self
 
     def __exit__(self, *args):
-        self.is_initialized = False
-
         for name, trait in self.traits().items():
             if is_component_trait(trait):
                 trait.get(self).__exit__(*args)

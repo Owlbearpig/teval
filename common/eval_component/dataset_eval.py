@@ -10,12 +10,9 @@ from functools import partial
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
-import inspect
-from scipy.signal import iirnotch, filtfilt
 from common.consts import eps0_thz
 from common.eval_component.q_space_eval import QSpaceEval
 from common.eval_component.quantity_set import DataSet as SingleQuantityDataSet
-from numpy import polyfit
 from enum import Enum, member
 from common.eval_component.conductivity_models import RegressionModels, model_params
 from common.traits import Quantity, Q_, ValueRange, Path as TPath

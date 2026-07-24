@@ -21,6 +21,8 @@ from tqdm import tqdm
 import pandas as pd
 from enum import Enum
 
+action = partial(action, check_init=True)
+
 class SelectionEnum(Enum):
     selected_timestamp = "Timestamp"
     selected_point = "Point"
@@ -60,8 +62,16 @@ class DataSetPlotter(ComponentBase):
     @observe("sel_freq_range")
     def select_freq(self, change):
         self.set_trait("sel_freq_range", change["new"])
-        self.selected_freq_idx = self.freq_idx()
+        self.selected_freq_idx = self.freq_idx
         self._update_fig_num()
+
+    @property
+    def freq_idx(self, freq=None):
+        if freq is None:
+            freq = self.sel_freq_range[0]
+        selected_freq_idx = f_axis_idx_map(self.dataset.freq_axis, freq)
+
+        return selected_freq_idx
 
     @property
     def settings(self):
@@ -80,14 +90,10 @@ class DataSetPlotter(ComponentBase):
         return self.dataset.properties["shape"]
 
     @property
-    def quant_func(self):
-        self.select_quantity()
-        return self.selected_quantity.value.func
-
-    @property
     def scalar_func(self):
-        def grid_func(meas, func=self.quant_func):
-            sel_freq_idx = self.freq_idx()
+        sel_quant = self.get_selected_quantity()
+        def grid_func(meas, func=sel_quant.func):
+            sel_freq_idx = self.freq_idx
 
             res = np.real(func(meas))
             ndim = np.ndim(res)
@@ -102,9 +108,9 @@ class DataSetPlotter(ComponentBase):
 
         return grid_func
 
-    def _plot_action(self, *args, **kwargs):
-        action(*args, **kwargs)
-        self.plt_show()
+    def get_selected_quantity(self):
+        self._update_quant_func()
+        return self.selected_quantity.value
 
     def _calc_grid_vals(self):
         w, h = self.img_shape["w"], self.img_shape["h"]
@@ -123,39 +129,31 @@ class DataSetPlotter(ComponentBase):
     def _apply_mpl_settings(self):
         mpl.rcParams.update(mpl_style_params())
 
-    def freq_idx(self, freq=None):
-        if freq is None:
-            freq = self.sel_freq_range[0]
-        selected_freq_idx = f_axis_idx_map(self.dataset.freq_axis, freq)
-
-        return selected_freq_idx
-
-
-    @observe("selected_quantity")
-    def select_quantity(self, change=None):
-        quantity = self.selected_quantity if change is None else change["new"]
+    def _update_quant_func(self):
         func_map = self.dataset.func_map
 
         freq_range = (self.sel_freq_range[0].magnitude, self.sel_freq_range[1].magnitude)
         func_map[QuantityEnum.PowerInt] = partial(self.dataset.power_int, freq_range=freq_range)
         func_map[QuantityEnum.PeakCnt] = partial(self.dataset.simple_peak_cnt, threshold=2.5)
 
+        self.selected_quantity.value.func = func_map[self.selected_quantity]
 
-
-        quantity.value.func = func_map[quantity]
-        self.selected_quantity = quantity
-
+    @observe("selected_quantity")
+    def select_quantity(self, change=None):
+        if change is None:
+            return
+        self._update_quant_func()
         self._update_fig_num()
 
     def _coords_to_idx(self, x_, y_):
-        shape_properties = self.dataset.properties["shape"]
+        shape_properties = self.img_shape
         x, y = shape_properties["x_coords"], shape_properties["y_coords"]
         x_idx, y_idx = np.argmin(np.abs(x_ - x)), np.argmin(np.abs(y_ - y))
 
         return x_idx, y_idx
 
     def _idx_to_coords(self, x_idx, y_idx):
-        shape_properties = self.dataset.properties["shape"]
+        shape_properties = self.img_shape
         dx, dy = shape_properties["dx"], shape_properties["dy"]
 
         y = shape_properties["y_coords"][0] + y_idx * dy
@@ -164,7 +162,7 @@ class DataSetPlotter(ComponentBase):
         return x, y
 
     def _update_fig_num(self):
-        sel_quant = self.selected_quantity.value
+        sel_quant = self.get_selected_quantity()
         en_freq_label = Domain.Frequency == sel_quant.domain
         fig_num = ""
         if self.plot_settings.fig_label:
@@ -183,7 +181,7 @@ class DataSetPlotter(ComponentBase):
         self._update_quantity_label()
 
     def _update_quantity_label(self):
-        sel_quant = self.selected_quantity.value
+        sel_quant = self.get_selected_quantity()
         en_freq_label = Domain.Frequency == sel_quant.domain
         if np.isclose(self.sel_freq_range[0].magnitude, self.sel_freq_range[1].magnitude):
             freq_label = f"({self.sel_freq_range[0]})"
@@ -221,7 +219,7 @@ class DataSetPlotter(ComponentBase):
     def average_area(self, pnt_bot_left, pnt_top_right, label="A1"):
         assert (pnt_bot_left[0] <= pnt_top_right[0]) and (pnt_bot_left[1] <= pnt_top_right[1])
 
-        properties = self.dataset.properties["shape"]
+        properties = self.img_shape
         x_coords, y_coords = self.img_properties["x_coords"], self.img_properties["y_coords"]
         pnt_bot_left = (x_coords[np.argmin(np.abs(pnt_bot_left[0] - x_coords))],
                         y_coords[np.argmin(np.abs(pnt_bot_left[1] - y_coords))])
@@ -298,6 +296,9 @@ class DataSetPlotter(ComponentBase):
 
     @action("Reference difference", group="Plots")
     def ref_difference_plot(self):
+        if len(self.measurements["refs"]) < 2:
+            logging.warning("Cannot plot reference difference with less than 2 reference measurements")
+            return
         ref1, ref2 = self.measurements["refs"][11], self.measurements["refs"][16]
 
         # print(ref1)
@@ -332,7 +333,7 @@ class DataSetPlotter(ComponentBase):
         dt1 = self.dataset.meas_time_diff(ref0, ref1)
         dt2 = self.dataset.meas_time_diff(ref0, ref2)
 
-        sel_freq_idx = self.freq_idx()
+        sel_freq_idx = self.freq_idx
         mark_x = [dt1, dt2]
         mark_y = [phi1[sel_freq_idx], phi2[sel_freq_idx]]
 
@@ -459,12 +460,9 @@ class DataSetPlotter(ComponentBase):
     @action("Plot selected quantity", group="Specific quantity")
     def plot_selected_quantity(self):
         fig_num_ext = self.plot_settings.fig_num_ext
-        quant = self.selected_quantity.value
         ref_meas, selected_meas = self.get_meas()
-        values = quant.func(selected_meas)
+        values = self.get_selected_quantity().func(selected_meas)
         label = self.plot_settings.label
-
-        is_single_plot = True if not isinstance(values, complex) else False
 
         f_idx_range = f_axis_idx_map(self.dataset.freq_axis, self.plot_settings.plot_range)
         freq_axis = self.dataset.freq_axis[f_idx_range]
@@ -475,6 +473,7 @@ class DataSetPlotter(ComponentBase):
 
         values = values[f_idx_range]
 
+        is_single_plot = True if not isinstance(values, complex) else False
         fignum = str(quant) + fig_num_ext
         if is_single_plot:
             plt.figure(fignum)
@@ -1119,7 +1118,7 @@ class DataSetPlotter(ComponentBase):
     @action("Image", group="Image plots")
     def plot_image(self, img_extent=None):
         self._update_fig_num()
-        shape_properties = self.dataset.properties["shape"]
+        shape_properties = self.img_shape
         if img_extent is None:
             w0, w1, h0, h1 = [0, shape_properties["w"], 0, shape_properties["h"]]
         else:
