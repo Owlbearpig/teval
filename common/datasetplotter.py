@@ -474,7 +474,7 @@ class DataSetPlotter(ComponentBase):
 
         values = values[f_idx_range]
 
-        is_single_plot = True if not isinstance(values, complex) else False
+        is_single_plot = True if not np.issubdtype(values.dtype, np.complexfloating) else False
         fignum = str(sel_quant) + fig_num_ext
         if is_single_plot:
             plt.figure(fignum)
