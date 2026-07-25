@@ -258,8 +258,6 @@ class ColorMaps(Enum):
     Grays_r = "Grays_r"
 
 class QuantityFunc:
-    func = None
-
     def __init__(self, label="label", func=None, domain=None, unit=""):
         self.label = label
         self.domain = Domain.Time if domain is None else domain

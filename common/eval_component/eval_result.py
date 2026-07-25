@@ -1,13 +1,14 @@
 from PySide6.QtCore import QObject, Signal
 from common.components import ComponentBase
 from common.eval_component.conductivity_models import model_params
-from common.traits import QuantityDict
+from common.traits import QuantityDict, Path as TPath
 from common.eval_component.quantity_set import DataSetDict as QuantityDictClass, DataSet
 from traitlets import Bool, Float, Int, Unicode, Integer
 from common.traits import Quantity, Q_
 import numpy as np
 from common.eval_component.quantity_set import DataSet as SingleQuantityDataSet
 import h5py
+from pathlib import Path
 
 class ResultSignal(QObject):
     received_result = Signal(dict)
@@ -33,10 +34,12 @@ class EvalResult(ComponentBase):
     eps_s = Float(0, read_only=True, group=reg_result_grp_name).tag(name="ε_s")
     c1 = Float(0, read_only=True, group=reg_result_grp_name).tag(name="c₁")
 
-    result_type = Unicode("None", read_only=True).tag(priority=1)
+    result_type = Unicode("None", read_only=True).tag(priority=1, name="Result type")
     model_name = Unicode("", read_only=True).tag(priority=2, name="Model")
-    timestamp = Unicode("", read_only=True)
-    converged = Bool(False, read_only=True)
+    timestamp = Unicode("", read_only=True).tag(priority=3, name="Timestamp")
+    dataset_path = TPath(Path("."), read_only=True).tag(priority=4, name="Dataset path")
+    sub_dataset_path = TPath(Path("."), read_only=True).tag(priority=5, name="Sub. dataset path")
+    converged = Bool(False, read_only=True).tag(priority=6, name="Converged")
 
     def __init__(self, opt_res_dict=None, **kwargs):
         super().__init__(**kwargs)
@@ -75,6 +78,8 @@ class EvalResult(ComponentBase):
                             unit_str = unit_str.decode("utf-8")
 
                         val = Q_(val, unit_str)
+                    if "path_type" in dset.attrs:
+                        val = Path(val)
 
                     parsed_result_dict[k] = val
 
@@ -149,8 +154,11 @@ class EvalResult(ComponentBase):
         return parsed_result_dict
 
     def set_traits_from_dict(self, trait_value_dict, is_loading=False):
+        if not trait_value_dict:
+            return
+
         for k, v in trait_value_dict.items():
-            if isinstance(v, (int, str, float, Q_)):
+            if isinstance(v, (int, str, float, Q_, Path)):
                 self.set_trait(k, v)
 
         dataset_dict = {k: v for k, v in trait_value_dict.items() if isinstance(v, DataSet)}

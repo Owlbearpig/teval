@@ -197,6 +197,9 @@ class ResultSaver(ComponentBase):
                 elif isinstance(v, Q_):
                     dset = scalar_group.create_dataset(k, data=v.magnitude)
                     dset.attrs["unit"] = "{:C}".format(v.units)
+                elif isinstance(v, Path):
+                    dset = scalar_group.create_dataset(k, data=str(v))
+                    dset.attrs["path_type"] = type(v).__name__
                 else:
                     scalar_group[k] = v
 

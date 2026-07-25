@@ -33,7 +33,8 @@ class DataSetPlotter(ComponentBase):
     sel_freq_range = ValueRange(default_value=[Q_(1.000, "THz"), Q_(1.200, "THz")]).tag(
         name="Selected frequency range"
     )
-    sel_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point (x, y)")
+    sel_point_1 = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point 1 (x, y)")
+    sel_point_2 = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point 2 (x, y)")
     sel_timestamp = Unicode("").tag(name="Selected timestamp")
     selected_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(name="Selected quantity",
                                                                                 group="Specific quantity")
@@ -428,7 +429,7 @@ class DataSetPlotter(ComponentBase):
         y_db = (20 * np.log10(np.abs(sam_fd[f_idx_range, 1])) - noise_floor).real
         plt.plot(freq_axis[f_idx_range], y_db, label=label)
 
-    @action("Phase plots", group="Plots")
+    @action("Phase plots", group="Phase plots")
     def plot_phase_plot(self):
         ref_meas, selected_meas, meas_quants = self.get_meas_quantities()
 
@@ -493,20 +494,22 @@ class DataSetPlotter(ComponentBase):
             ax0.plot(freq_axis, values.real, label=label)
             ax1.plot(freq_axis, values.imag, label=label)
 
-    def get_meas(self):
+    def get_meas(self, also_return_ref=True):
         if self.selection_criterion == SelectionEnum.selected_timestamp:
             timestamp = self.sel_timestamp
             selected_meas = self.dataset.get_measurement_from_timestamp(timestamp)
         elif self.selection_criterion == SelectionEnum.selected_point:
-            point = self.sel_point
+            point = self.sel_point_1
             logging.info(f"Selecting by point: {point}")
             selected_meas = self.dataset.get_measurement(*point)
         else:
             return None
 
-        ref_meas = self.dataset.get_nearest_ref(selected_meas)
-
-        return ref_meas, selected_meas
+        if also_return_ref:
+            ref_meas = self.dataset.get_nearest_ref(selected_meas)
+            return ref_meas, selected_meas
+        else:
+            return selected_meas
 
     def get_meas_quantities(self):
         ref_meas, selected_meas = self.get_meas()
@@ -532,88 +535,13 @@ class DataSetPlotter(ComponentBase):
         _, _, meas_quants = self.get_meas_quantities()
         self.dataset.export_as_csv(meas_quants, file_app=label)
 
-    """
-    @action("Measurement", group="Plots")
-    def plot_meas(self):
-        plot_opt = self.plot_settings
-        label = plot_opt.label
-
-        
-        std_limits = plot_opt.err_bar_limits # limits of spatial coordinates to average over, for the err_bars
-        en_csv_export = self.settings.save_settings.en_csv_export
-        fig_num_ext = plot_opt.fig_num_ext
-        plot_range = plot_opt.plot_range
-        
-        t = sam_fd[:, 1] / ref_fd[:, 1]
-        absorb = np.abs(1/t)
-        refr_idx = simple_eval_res["refr_idx"]
-
-        f_idx_range = f_axis_idx_map(self.dataset.freq_axis, plot_range)
-        
-        refr_idx = refr_idx[f_idx_range]
-        alph = self.dataset.absorption_coef(selected_meas)
-
-        freq_axis = sam_fd[:, 0].real
-
-        if not plt.fignum_exists("Amplitude transmission" + fig_num_ext):
-            plt.figure("Amplitude transmission")
-            plt.xlabel("Frequency (THz)")
-            plt.ylabel(r"Amplitude transmission")
-            plt.ylim((-0.05, 1.10))
-        else:
-            plt.figure("Amplitude transmission" + fig_num_ext)
-
-        plt.plot(freq_axis[f_idx_range], (1/absorb[f_idx_range]), label=label)
-
-        plt.figure("Absorbance" + fig_num_ext)
-        y = 20*np.log10(absorb[f_idx_range])
-        plt.plot(freq_axis[f_idx_range], y, label=label)
-        if std_limits:
-            lower = y - err_bar_range[f_idx_range]
-            upper = y + err_bar_range[f_idx_range]
-            plt.fill_between(freq_axis[f_idx_range], lower, upper, alpha=0.3)
-
-        plt.xlabel("Frequency (THz)")
-        plt.ylabel("Absorbance (dB)")
-
-        ri_fignum = "Refractive index" + fig_num_ext
-        if not plt.fignum_exists(ri_fignum):
-            fig, (ax0, ax1) = plt.subplots(2, 1, num=ri_fignum, sharex=True, gridspec_kw={'hspace': 0})
-            ax1.set_xlabel("Frequency (THz)")
-            ax0.set_ylabel("Refractive index (Real)")
-            ax1.set_ylabel("Refractive index (Imag)")
-        else:
-            fig = plt.figure(ri_fignum)
-            ax0, ax1 = fig.get_axes()
-        ax0.plot(freq_axis[f_idx_range], refr_idx.real, label=label)
-        ax1.plot(freq_axis[f_idx_range], refr_idx.imag, label=label)
-
-        plt.figure("Absorption coefficient" + fig_num_ext)
-        plt.plot(freq_axis[f_idx_range], alph[f_idx_range], label=label)
-        plt.xlabel("Frequency (THz)")
-        plt.ylabel("Absorption coefficient (1/cm)")
-
-        if self.dataset.sub_dataset is not None:
-            sigma = self.dataset.conductivity(selected_meas)
-            plt.figure("Conductivity" + fig_num_ext)
-            plt.title(label)
-            plt.plot(freq_axis[f_idx_range], sigma[f_idx_range].real, label="Real part")
-            plt.plot(freq_axis[f_idx_range], sigma[f_idx_range].imag, label="Imaginary part")
-            # plt.ylim((-1e3, 1.5e5))
-            plt.xlabel("Frequency (THz)")
-            plt.ylabel("Conductivity (S/cm)")
-    """
-
-    def plot_meas_phi_diff(self, pnt0, pnt1, label=""):
+    @action("Phase difference", group="Phase plots")
+    def plot_meas_phi_diff(self):
+        label = self.plot_settings.label
         plot_range = self.plot_settings.plot_range
 
-        sam_meas0 = self.dataset.get_measurement(*pnt0)
-        ref_meas0 = self.dataset.get_nearest_ref(sam_meas0)
-
-        sam_meas1 = self.dataset.get_measurement(*pnt1)
-
-        ref_fd = self.dataset.get_data(ref_meas0, domain=Domain.Frequency)
-        freq_axis = ref_fd[:, 0].real
+        sam_meas0 = self.get_meas(also_return_ref=False)
+        sam_meas1 = self.dataset.get_measurement(x=self.sel_point_2[0], y=self.sel_point_2[1])
 
         simple_eval_res0 = self.dataset.windowing_eval(sam_meas0)
         simple_eval_res1 = self.dataset.windowing_eval(sam_meas1)
@@ -623,7 +551,7 @@ class DataSetPlotter(ComponentBase):
 
         f_idx_range = f_axis_idx_map(self.dataset.freq_axis, plot_range)
         plt.figure("Phi difference")
-        plt.plot(freq_axis[f_idx_range], phi_diff[f_idx_range], label=label)
+        plt.plot(self.dataset.freq_axis[f_idx_range], phi_diff[f_idx_range], label=label)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase difference (rad)")
 
@@ -638,14 +566,13 @@ class DataSetPlotter(ComponentBase):
             ampl_arr_db[i] = 20*np.log10(np.abs(ref_fd[:, 1]))
 
 
-        plt.figure("Amplitude noise")
-        #plt.title(f"Amplitude of reference measurement at {selected_freq_} THz")
+        plt.figure("Amplitude noise (standard deviation of all refs)")
         plt.plot(freq_axis, np.std(ampl_arr_db, axis=0))
         plt.xlabel(f"Frequency (THz)")
         plt.ylabel("Amplitude (dB)")
 
     @action("System stability", group="Stability plots")
-    def plot_system_stability(self, climate_log_file=None, meas_set_kw=None):
+    def plot_system_stability(self, meas_set_kw=None):
         if meas_set_kw is not None:
             meas_set = []
             for meas in self.measurements["all"]:
@@ -658,6 +585,11 @@ class DataSetPlotter(ComponentBase):
         else:
             meas_set = self.measurements["refs"]
             logging.info("Using reference measurement set")
+            if len(meas_set) < 2:
+                msg = "Not enough measurements assigned as reference in dataset. "
+                msg += "Using all measurements instead"
+                logging.info(msg)
+                meas_set = self.measurements["all"]
 
         selected_freq_ = self.sel_freq_range[0].magnitude
         f_idx = np.argmin(np.abs(self.dataset.freq_axis - selected_freq_))
@@ -805,7 +737,8 @@ class DataSetPlotter(ComponentBase):
 
         ret = {"meas_times": meas_times, "relative_delay": relative_delay}
 
-        if climate_log_file is not None or self.plot_settings.climate_file is not None:
+        climate_log_file = self.plot_settings.climate_file
+        if climate_log_file.is_file:
             climate_plot_ret = self.plot_climate(climate_log_file, unit=(mt_unit, conv_factor))
             if climate_plot_ret is not None:
                 climate_meas_times, climate_value_dict = climate_plot_ret
@@ -850,15 +783,15 @@ class DataSetPlotter(ComponentBase):
             label_map = self.plot_settings.redp_sensor_labels
             plt.figure("Climate correlation plot")
             for k in plotted_climate_vals:
+                label = label_map.get(k, k)
                 x = np.gradient(plotted_climate_vals[k], 0.012186554258538694)
                 x = plotted_climate_vals[k]
                 if "0" in k:
                     y = relative_delay
                     p = np.polyfit(x, y, 1)
                     y = x * p[0] + p[1]
-                    plt.plot(x, y, label=f"linear fit {label_map[k]}")
-                    print(p)
-                plt.scatter(x, relative_delay, label=label_map[k])
+                    plt.plot(x, y, label=f"linear fit {label}")
+                plt.scatter(x, relative_delay, label=label)
             plt.ylabel("Pulse shift (fs)")
             plt.xlabel("Temperature (°C)")
 
@@ -1272,15 +1205,6 @@ class DataSetPlotter(ComponentBase):
                 plt.plot(coords, vals, **plot_kwargs)
 
         self._plot_meas_on_image(measurements)
-    
-    def plot_jitter(self):
-        x = [25, 50, 100, 200]
-        y = [113.8, 39.8, 12.47, 6.17]
-
-        plt.figure("Jitter")
-        plt.plot(x, y)
-        plt.xlabel("Measurement window (ps)")
-        plt.ylabel("Largest jump (fs)")
 
     @action("Knife edge", group="Plots")
     def knife_edge(self, x=None, y=None, coord_slice=None):

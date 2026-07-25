@@ -25,7 +25,7 @@ class QSpaceEval:
         self.settings = dataset_eval.dataset.settings
         self.freq_axis = self.dataset.freq_axis
 
-        self.cost_fun = self.dataset_eval.cost_fun.value
+        self.cost_fun = self.dataset_eval.selected_cost_fun.value
         self.transmission_model = self.dataset_eval.transmission_model
 
         self.opt_state = {
@@ -229,7 +229,10 @@ class QSpaceEval:
         best_res["sam_mod"] = model_kwargs["meas_quants"]["ref_fd"][f_idx_fit_range, 1] * t_mod_
 
         if self.dataset_eval.add_t_sim_to_res:
-            best_res["t_sim"] = self.calc_t_sim(model_kwargs)
+            try:
+                best_res["t_sim"] = self.calc_t_sim(model_kwargs)
+            except Exception as e:
+                traceback.print_exc()
 
         sas = (5, 20)
         smoothed_quantities = ["n", "k", "alpha"]
@@ -264,7 +267,7 @@ class QSpaceEval:
         model_kwargs["nfp"] = self.settings.eval_opt.sim_nfp
         model_kwargs["shift"] = self.settings.eval_opt.sim_shift.magnitude
 
-        if self.dataset_eval.is_two_layer_t_model():
+        if self.dataset_eval.is_two_layer_t_model(model_kwargs):
             model_kwargs["n_sub"] = n_sub
             model_kwargs["h"] = self.settings.eval_opt.sim_h.magnitude
             n = n_film
