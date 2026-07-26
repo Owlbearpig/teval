@@ -1,10 +1,9 @@
 import logging
 import traceback
-
 import numpy as np
 import scipy
 from common.default_appsettings import SimRISelection, AppSettings
-from common.functions import f_axis_idx_map, moving_average
+from common.functions import f_axis_idx_map, moving_average, do_ifft, to_db
 from common.eval_component.transfer_functions import model_1layer, transferfunction_error, dtdn, dtdd
 from common.eval_component.quantity_set import DataSet
 from common.units import Q_
@@ -228,9 +227,9 @@ class QSpaceEval:
         best_res["t_mod"] = t_mod_
         best_res["sam_mod"] = model_kwargs["meas_quants"]["ref_fd"][f_idx_fit_range, 1] * t_mod_
 
-        if self.dataset_eval.add_t_sim_to_res:
+        if self.dataset_eval.add_sim_to_res:
             try:
-                best_res["t_sim"] = self.calc_t_sim(model_kwargs)
+                best_res["sim_res"] = self.calc_sim(model_kwargs)
             except Exception as e:
                 traceback.print_exc()
 
@@ -244,7 +243,7 @@ class QSpaceEval:
 
         return self.prepare_result(best_res)
 
-    def calc_t_sim(self, model_kwargs):
+    def calc_sim(self, model_kwargs):
         model = self.transmission_model.value
         fit_range = self.settings.eval_opt.fit_range
         f_idx_fit_range = f_axis_idx_map(self.freq_axis, fit_range)
@@ -276,7 +275,19 @@ class QSpaceEval:
 
         t_sim = model(freq_axis, n, **model_kwargs)
 
-        return t_sim
+        ref_fd = model_kwargs["meas_quants"]["ref_fd"]
+        sam_sim_fd = np.array([freq_axis, t_sim * ref_fd[:, 1]], dtype=complex).T
+
+        sam_sim_td = do_ifft(sam_sim_fd, conj=False)
+
+        freq_axis_quant = Q_(freq_axis, "THz")
+        time_axis_quant = Q_(sam_sim_td[:, 0], "ps")
+        sim_res = {"t_sim": DataSet(axes=[freq_axis_quant], data=Q_(t_sim, "")),
+                   "sam_sim_fd": DataSet(axes=[freq_axis_quant], data=Q_(to_db(sam_sim_fd[:, 1]), "dB")),
+                   "sam_sim_td": DataSet(axes=[time_axis_quant], data=Q_(sam_sim_td[:, 1], ""))
+                   }
+
+        return sim_res
 
     def prepare_result(self, res_dict):
         rd = res_dict
@@ -303,10 +314,10 @@ class QSpaceEval:
             "k": DataSet(axes=[freq_axis], data=Q_(rd["k"], "W"), axes_labels=["Frequency"]),
             "alpha": DataSet(axes=[freq_axis], data=Q_(rd["alpha"], "1/cm"), axes_labels=["Frequency"]),
             "t_mod": DataSet(axes=[freq_axis], data=Q_(rd["t_mod"], "V"), axes_labels=["ABE"]),
-            "sam_mod": DataSet(axes=[freq_axis], data=Q_(rd["sam_mod"], "J")),
+            "sam_mod": DataSet(axes=[freq_axis], data=Q_(to_db(rd["sam_mod"]), "dB")),
         }
-        if "t_sim" in rd:
-            parsed_dict["t_sim"] = DataSet(axes=[freq_axis], data=Q_(rd["t_sim"], ""))
+        if "sim_res" in rd:
+            parsed_dict.update({k: v for k, v in rd["sim_res"].items()})
 
         parsed_dict["result_type"] = "Transmission fit"
         parsed_dict["model_name"] = self.transmission_model.name

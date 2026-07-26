@@ -96,7 +96,7 @@ class DatasetEval(ComponentBase):
     d_opt_axis_step = Quantity(Q_(10, "µm"), group=t_fit_grp_name)
     use_custom_d_opt_axis = Bool(True, group=t_fit_grp_name)
     number_of_workers = Integer(8, group=t_fit_grp_name).tag(name="Number of workers")
-    add_t_sim_to_res = Bool(False, group=t_fit_grp_name).tag(name="Add simulated t to result")
+    add_sim_to_res = Bool(False, group=t_fit_grp_name).tag(name="Add simulated t to result")
 
 
     current_result = Instance(EvalResult)
@@ -406,97 +406,6 @@ class DatasetEval(ComponentBase):
         n_ = (1 + 1j) * np.sqrt(sigma/(2*w*eps0_thz))
 
         return n_
-
-
-    # should be included in the transmission fit result (also calculates t spectrum)
-    def sub_meas_sim(self):
-        t_sim = self.t_sim_1layer()
-
-        sub_pnt = self.options["eval_opt"]["sub_pnt"]
-
-        # ref1_fd, ref1_meas = self.get_ref_data(Domain.Frequency, ref_idx=10, ret_meas=True)
-        ref1_fd, ref1_meas = self.sub_dataset.get_ref_data(Domain.Frequency, point=sub_pnt, ret_meas=True)
-        ref2_fd, ref2_meas = self.sub_dataset.get_ref_data(Domain.Frequency, ref_idx=10, ret_meas=True)
-
-        meas_time_diff = (ref1_meas.meas_time - ref2_meas.meas_time).total_seconds()
-        print("ref1 - ref2 measurement time difference (seconds): ", np.round(meas_time_diff, 2))
-
-        ref_amp = np.abs(ref2_fd[:, 1])
-        ref_phi = np.angle(ref2_fd[:, 1])
-        ref2_fd[:, 1] = ref_amp * np.exp(1j * ref_phi)
-
-        t_sim_meas = t_sim * ref1_fd[:, 1] / ref2_fd[:, 1]
-
-        sam_sim = t_sim * ref1_fd[:, 1]
-        sam_sim_fd = np.array([self.freq_axis, sam_sim], dtype=complex).T
-
-        t_sim_meas = sam_sim_fd[:, 1] / ref2_fd[:, 1]
-
-        sam_sim_td = do_ifft(sam_sim_fd, conj=False)
-
-        plt.figure("Time domain")
-        plt.plot(sam_sim_td[:, 0], sam_sim_td[:, 1], label="Model")
-
-        return t_sim_meas
-
-    # should be covered by fit single layer model to point selected on substrate
-    # -> 2 layer fit to film point /w substrate result selected
-    def eval_point_n_fit(self, film_pnt=None):
-        """
-        Fit refractive index to the substrate measurement (n_sub)
-        then use n_sub in the fit of the refractive index to the film measurement (n_film)
-        calculate sigma from n_film
-        """
-        sub_pnt = self.options["eval_opt"]["sub_pnt"]
-        if film_pnt is None:
-            film_pnt = sub_pnt
-        res = {}
-
-        meas_sub = self.sub_dataset.get_measurement(*sub_pnt)
-        meas_film = self.get_measurement(*film_pnt)
-
-        single_layer_eval_res = self.sub_dataset.windowing_eval(meas_sub, (0, 10))
-        res["alpha"] = single_layer_eval_res["alpha"]
-
-        res["sigma_exp"] = self.conductivity(meas_film)
-        res["sigma_mod"] = self.selected_reg_model(res["sigma_exp"])
-
-        #self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = True
-        self.sub_dataset.options["pp_opt"]["window_opt"]["en_plot"] = False
-        self.sub_dataset.options["pp_opt"]["window_opt"]["fig_label"] = "sub"
-        t_exp_1layer = self.sub_dataset.transmission(meas_sub, 1, phase_sign=-1)
-        # t_exp_1layer = self.transmission_sim()
-        # t_exp_1layer = self.sub_meas_sim()
-
-        #self.sub_dataset.options["pp_opt"]["window_opt"]["enabled"] = False
-
-        # phi = np.unwrap(np.angle(t_exp_1layer))
-        # phi = phase_correction(self.freq_axis, phi, en_plot=True, fit_range=(0.3, 0.6))
-        # phi -= 0.03
-        # t_exp_1layer = np.abs(t_exp_1layer) * np.exp(1j * phi)
-
-        res["t_exp_1layer"] = t_exp_1layer
-
-        n_sub = self._fit_1layer(t_exp_1layer)
-        res["n_sub"] = n_sub
-        self._opt_conf["n_sub"] = n_sub
-
-        if self.options["eval_opt"]["area_fit"]:
-            return res
-
-        self.options["pp_opt"]["window_opt"]["fig_label"] = "film"
-        t_exp_2layer = self.transmission(meas_film, 1, phase_sign=-1)
-
-        res["t_exp_2layer"] = t_exp_2layer
-
-        n_film = self._fit_2layer(t_exp_2layer, n_sub)
-
-        res["t_mod_film"] = self._t_model_2layer(self.freq_axis, n_sub=n_sub, n_film=n_film)
-
-        w = 2 * np.pi * np.array(self.freq_axis)
-        res["sigma_n_film"] = 1e4 * 2 * eps0_thz * n_film ** 2 * w / (1 + 1j)  # S/cm
-
-        return res
 
     # check if regression can handle this. Result saving? plotting?
     def eval_point_model_fit(self, film_pnt=None):
