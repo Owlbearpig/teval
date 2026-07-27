@@ -110,7 +110,6 @@ class DataSet(ComponentBase):
         self._parse_lock = Lock()
         self._is_parsing = False
 
-        self.plotted_ref = False
         self.noise_floor = None
         self.time_axis = None
         self.freq_axis = None
@@ -458,7 +457,7 @@ class DataSet(ComponentBase):
 
         if not refs_:
             refs_ = threshold_filter()
-            logging.info(f"Using max amplitude measurements as ref. (Threshold: {threshold})")
+            logging.info(f"Using measurements near max amplitude as ref. (Threshold: {threshold})")
 
         if not refs_:
             logging.warning(f"No suitable refs found. Check settings.")

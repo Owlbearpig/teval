@@ -117,9 +117,18 @@ class Quantity(TraitTypePatched):
                                             self.min, self.max, value))
         return value
 
+
+class QuantityList(list):
+    @property
+    def magnitude(self):
+        return [
+            v.magnitude if hasattr(v, "magnitude") else v
+            for v in self
+        ]
+
 class ValueRange(TraitTypePatched):
     info_text = 'a value range'
-    default_value = [0.0, 1.0]
+    default_value = QuantityList([Q_(0, ""), Q_(0, "")])
 
     def __init__(self, default_value=Undefined, allow_none=None, **kwargs):
         self.dimensionality = kwargs.pop('dimensionality', None)
@@ -134,13 +143,15 @@ class ValueRange(TraitTypePatched):
             val = self.default_value[item]
             return val
 
-
     def validate(self, obj, value):
-        if not len(value) == 2:
-            self.error(obj, value)
-        if not type(value[0]) == type(value[1]):
-            self.error(obj, value)
-        if isinstance(value[0], Q_) and value[0].units != value[1].units:
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
             self.error(obj, value)
 
-        return value
+        v0, v1 = value[0], value[1]
+
+        if type(v0) != type(v1):
+            self.error(obj, value)
+        if hasattr(v0, "units") and hasattr(v1, "units") and v0.units != v1.units:
+            self.error(obj, value)
+
+        return QuantityList(value)

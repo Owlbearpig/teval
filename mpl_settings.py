@@ -6,7 +6,7 @@ import matplotlib as mpl
 
 
 def mpl_style_params(new_rcparams=None):
-    rcParams = mpl.rcParams
+    rcParams = mpl.rcParamsDefault.copy()
     # rcParams['lines.linestyle'] = '--'
     # rcParams['legend.fontsize'] = 'large' #'x-large'
     rcParams['legend.fontsize'] = 20

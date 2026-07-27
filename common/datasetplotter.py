@@ -15,13 +15,14 @@ from common.eval_component.shgo import shgo
 from traitlets import Float, observe, Integer, Unicode, Enum as TEnum
 from common.traits import Q_, Quantity, ValueRange
 from mpl_settings import mpl_style_params
-import matplotlib as mpl
 from scipy.stats import pearsonr
 from tqdm import tqdm
 import pandas as pd
 from enum import Enum
 
-action = partial(action, check_init=True)
+
+action = partial(action, check_init=True, rc_params=mpl_style_params)
+image_grp = "Image actions"
 
 class SelectionEnum(Enum):
     selected_timestamp = "Timestamp"
@@ -40,6 +41,12 @@ class DataSetPlotter(ComponentBase):
                                                                                 group="Specific quantity")
     quantity_value = Quantity(Q_(0, ""), read_only=True).tag(name="Quantity value", group="Specific quantity")
 
+    rect_sel_label = Unicode("").tag(name="Rectangle label", priority=1000, group=image_grp)
+    rect_sel_top_right = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
+        name="Top right rectangle selection", group=image_grp, priority=1001)
+    rect_sel_bot_left = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
+        name="Bottom left rectangle selection", group=image_grp, priority=1002)
+
     def __init__(self, dataset : DataSet, **kwargs):
         super().__init__(**kwargs)
         self.dataset = dataset
@@ -49,8 +56,6 @@ class DataSetPlotter(ComponentBase):
 
         self.grid_vals = None
         self.img_ax = None
-
-        self._apply_mpl_settings()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.settings.save_configuration(self)
@@ -64,7 +69,6 @@ class DataSetPlotter(ComponentBase):
     def select_freq(self, change):
         self.set_trait("sel_freq_range", change["new"])
         self.selected_freq_idx = self.freq_idx
-        self._update_fig_num()
 
     @property
     def freq_idx(self, freq=None):
@@ -73,6 +77,14 @@ class DataSetPlotter(ComponentBase):
         selected_freq_idx = f_axis_idx_map(self.dataset.freq_axis, freq)
 
         return selected_freq_idx
+
+    @property
+    def plot_freq_axis(self):
+        return self.dataset.freq_axis[self.plot_idx_range]
+
+    @property
+    def plot_idx_range(self):
+        return f_axis_idx_map(self.dataset.freq_axis, self.plot_settings.plot_range)
 
     @property
     def settings(self):
@@ -109,6 +121,45 @@ class DataSetPlotter(ComponentBase):
 
         return grid_func
 
+    @property
+    def td_fig_num(self):
+        fig_num_ext = self.plot_settings.fig_num_ext
+        return "Time domain" + fig_num_ext
+
+    @property
+    def fd_fig_num(self):
+        fig_num_ext = self.plot_settings.fig_num_ext
+        return "Frequency domain" + fig_num_ext
+
+    @property
+    def image_fig_num(self):
+        sel_quant = self.get_selected_quantity()
+        en_freq_label = Domain.Frequency == sel_quant.domain
+        fig_num = ""
+        if self.plot_settings.fig_label:
+            fig_num += self.plot_settings.fig_label + " "
+        fig_num += str(sel_quant)
+
+        f1, f2 = int(self.sel_freq_range[0].magnitude * 1e3), int(self.sel_freq_range[1].magnitude * 1e3)
+        if np.isclose(self.sel_freq_range[0].magnitude, self.sel_freq_range[1].magnitude):
+            fig_num += en_freq_label * f" {f1} GHz"
+        else:
+            fig_num += en_freq_label * f" {f1}-{f2} GHz"
+        fig_num = fig_num.replace(" ", "_")
+
+        return fig_num + self.dataset.is_sub_dataset * "_subset"
+
+    @property
+    def quantity_label(self):
+        sel_quant = self.get_selected_quantity()
+        en_freq_label = Domain.Frequency == sel_quant.domain
+        if np.isclose(self.sel_freq_range[0].magnitude, self.sel_freq_range[1].magnitude):
+            freq_label = f"({self.sel_freq_range[0]})"
+        else:
+            freq_label = f"({self.sel_freq_range[0]}-{self.sel_freq_range[1]})"
+
+        return " ".join([str(sel_quant), freq_label * en_freq_label])
+
     def get_selected_quantity(self):
         self._update_quant_func()
         return self.selected_quantity.value
@@ -127,9 +178,6 @@ class DataSetPlotter(ComponentBase):
 
         return grid_vals
 
-    def _apply_mpl_settings(self):
-        mpl.rcParams.update(mpl_style_params())
-
     def _update_quant_func(self):
         func_map = self.dataset.func_map
 
@@ -144,7 +192,6 @@ class DataSetPlotter(ComponentBase):
         if change is None:
             return
         self._update_quant_func()
-        self._update_fig_num()
 
     def _coords_to_idx(self, x_, y_):
         shape_properties = self.img_shape
@@ -161,35 +208,6 @@ class DataSetPlotter(ComponentBase):
         x = shape_properties["x_coords"][0] + x_idx * dx
 
         return x, y
-
-    def _update_fig_num(self):
-        sel_quant = self.get_selected_quantity()
-        en_freq_label = Domain.Frequency == sel_quant.domain
-        fig_num = ""
-        if self.plot_settings.fig_label:
-            fig_num += self.plot_settings.fig_label + " "
-        fig_num += str(sel_quant)
-
-        f1, f2 = int(self.sel_freq_range[0].magnitude * 1e3), int(self.sel_freq_range[1].magnitude * 1e3)
-        if np.isclose(self.sel_freq_range[0].magnitude, self.sel_freq_range[1].magnitude):
-            fig_num += en_freq_label * f" {f1} GHz"
-        else:
-            fig_num += en_freq_label * f" {f1}-{f2} GHz"
-        fig_num = fig_num.replace(" ", "_")
-
-        self.img_properties["fig_num"] = fig_num + self.dataset.is_sub_dataset * "_subset"
-
-        self._update_quantity_label()
-
-    def _update_quantity_label(self):
-        sel_quant = self.get_selected_quantity()
-        en_freq_label = Domain.Frequency == sel_quant.domain
-        if np.isclose(self.sel_freq_range[0].magnitude, self.sel_freq_range[1].magnitude):
-            freq_label = f"({self.sel_freq_range[0]})"
-        else:
-            freq_label = f"({self.sel_freq_range[0]}-{self.sel_freq_range[1]})"
-
-        self.img_properties["quantity_label"] = " ".join([str(sel_quant), freq_label * en_freq_label])
 
     def _is_excluded(self, idx_tuple):
         excl_areas = self.plot_settings.excluded_areas
@@ -217,11 +235,56 @@ class DataSetPlotter(ComponentBase):
 
         return filtered_grid
 
-    def average_area(self, pnt_bot_left, pnt_top_right, label="A1"):
+
+    def get_meas(self, also_return_ref=True):
+        if self.selection_criterion == SelectionEnum.selected_timestamp:
+            timestamp = self.sel_timestamp
+            selected_meas = self.dataset.get_measurement_from_timestamp(timestamp)
+        elif self.selection_criterion == SelectionEnum.selected_point:
+            point = self.sel_point_1
+            logging.info(f"Selecting by point 1: {point}")
+            selected_meas = self.dataset.get_measurement(*point)
+        else:
+            return None
+
+        if also_return_ref:
+            ref_meas = self.dataset.get_nearest_ref(selected_meas)
+            return ref_meas, selected_meas
+        else:
+            return selected_meas
+
+    def get_meas_quantities(self):
+        ref_meas, selected_meas = self.get_meas()
+        meas_quants = self.dataset.calc_meas_quantities(ref_meas, selected_meas)
+
+        logging.info(f"Reference measurement: {ref_meas}")
+        logging.info(f"Sample measurement: {selected_meas}\n")
+
+        if self.plot_settings.shift_sam2ref:
+            t0_sam = np.argmax(meas_quants["sam_td"][:, 1])
+            t0_ref = np.argmax(meas_quants["ref_td"][:, 1])
+            shift_t = np.abs(t0_ref - t0_sam)
+            meas_quants["sam_td"][:, 1] = np.roll(meas_quants["sam_td"][:, 1], -shift_t)
+
+        if self.plot_settings.remove_t_offset:
+            meas_quants["sam_td"][:, 0] -= meas_quants["sam_td"][0, 0]
+
+        return ref_meas, selected_meas, meas_quants
+
+    @action("Export measurement quantities")
+    def export_meas_quants(self):
+        label = self.plot_settings.label
+        _, _, meas_quants = self.get_meas_quantities()
+        self.dataset.export_as_csv(meas_quants, file_app=label)
+
+
+    @action(name="Average value rectangle", group=image_grp)
+    def average_area(self):
+        pnt_bot_left = self.rect_sel_bot_left.magnitude
+        pnt_top_right = self.rect_sel_top_right.magnitude
         assert (pnt_bot_left[0] <= pnt_top_right[0]) and (pnt_bot_left[1] <= pnt_top_right[1])
 
-        properties = self.img_shape
-        x_coords, y_coords = self.img_properties["x_coords"], self.img_properties["y_coords"]
+        x_coords, y_coords = self.img_shape["x_coords"], self.img_shape["y_coords"]
         pnt_bot_left = (x_coords[np.argmin(np.abs(pnt_bot_left[0] - x_coords))],
                         y_coords[np.argmin(np.abs(pnt_bot_left[1] - y_coords))])
         pnt_top_right = (x_coords[np.argmin(np.abs(pnt_top_right[0] - x_coords))],
@@ -239,18 +302,20 @@ class DataSetPlotter(ComponentBase):
         mean_s, std_s = str(np.round(mean_val, 4)), str(np.round(std_val, 4))
         min_s, max_s = str(np.round(np.min(grid_vals), 4)), str(np.round(np.max(grid_vals), 4))
 
+        label = self.rect_sel_label
         meas_cnt = grid_vals.shape[0] * grid_vals.shape[1]
-        logging.info(f"Average value of area {label} ({meas_cnt} measurements): {mean_s}±{std_s}")
+        quant = self.selected_quantity
+        logging.info(f"Average {quant.name} value of area {label} ({meas_cnt} measurements): {mean_s}±{std_s}")
         logging.info(f"Min: {min_s}, max: {max_s}\n")
 
         ret = {"mean": mean_val, "std": std_val, "min": min_s, "max": max_s}
-        if not plt.fignum_exists(num=self.img_properties["fig_num"]):
+        if not plt.fignum_exists(num=self.image_fig_num):
             return ret
 
-        plt.figure(self.img_properties["fig_num"])
+        plt.figure(self.image_fig_num)
         ax = self.img_ax
 
-        dx, dy = self.img_properties["dx"], self.img_properties["dy"]
+        dx, dy = self.img_shape["dx"], self.img_shape["dy"]
         # pixels are centered around each coordinate, unlike patches.Rectangle
         pnt_bot_left = (pnt_bot_left[0] - dx / 2, pnt_bot_left[1] - dy / 2)
         pnt_top_right = (pnt_top_right[0] + dx / 2, pnt_top_right[1] + dy / 2)
@@ -267,7 +332,7 @@ class DataSetPlotter(ComponentBase):
         ax.add_patch(rect)
 
         # decide where to put rect label
-        img_extent = self.img_properties["extent"]
+        img_extent = self.img_shape["extent"]
         t_x, t_y = pnt_bot_left[0] + rect_width / 2, pnt_bot_left[1] + rect_height / 2
         if t_x < img_extent[0] + 1:
             t_x = pnt_bot_left[0] + rect_width + 1.5
@@ -292,6 +357,7 @@ class DataSetPlotter(ComponentBase):
         # add label
         ax.text(t_x, t_y, label,
                 color="black", fontsize=18, ha="center", va="center", fontweight="bold")
+        plt.draw()
 
         return ret
 
@@ -300,8 +366,11 @@ class DataSetPlotter(ComponentBase):
         if len(self.measurements["refs"]) < 2:
             logging.warning("Cannot plot reference difference with less than 2 reference measurements")
             return
-        ref1, ref2 = self.measurements["refs"][11], self.measurements["refs"][16]
-
+        meas_idx = np.random.randint(len(self.measurements["refs"])-1)
+        ref1, ref2 = self.measurements["refs"][meas_idx], self.measurements["refs"][meas_idx+1]
+        logging.info(f"Reference difference:")
+        logging.info(f"First measurement: {ref1}")
+        logging.info(f"Second measurement: {ref2}")
         # print(ref1)
         # print(ref2)
 
@@ -345,8 +414,6 @@ class DataSetPlotter(ComponentBase):
 
     @action("Reference measurement", group="Plots")
     def plot_ref(self, ref_meas_=None, timestamp=None, ref_idx=None):
-
-        fig_num_ext = self.plot_settings.fig_num_ext
         label = None
 
         if (ref_meas_ is None) and (timestamp is None):
@@ -381,12 +448,12 @@ class DataSetPlotter(ComponentBase):
         noise_floor = np.mean(20 * np.log10(np.abs(ref_fd[ref_fd[:, 0] > 6.0, 1]))) * sub_noise_floor
 
         y_db = (20 * np.log10(np.abs(ref_fd[f_idx_range, 1])) - noise_floor).real
-        plt.figure("Spectrum" + fig_num_ext)
+        plt.figure(self.fd_fig_num)
         plt.plot(freq_axis[f_idx_range], y_db, label=label + " (Reference)")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Amplitude (dB)")
 
-        plt.figure("Time domain" + fig_num_ext)
+        plt.figure(self.td_fig_num)
         plt.plot(ref_td[:, 0], ref_td[:, 1], label=label + " (Reference)")
         if self.plot_settings.plot_zero_crossing:
             plt.scatter(zero_crossing, 0, label="Zero-crossing", color="red")
@@ -399,9 +466,8 @@ class DataSetPlotter(ComponentBase):
         ref_meas, selected_meas, meas_quants = self.get_meas_quantities()
         point = selected_meas.position
 
-        if not self.dataset.plotted_ref:
+        if not plt.fignum_exists(self.td_fig_num) or not plt.fignum_exists(self.fd_fig_num):
             self.plot_ref(ref_meas)
-            self.dataset.plotted_ref = True
 
         sam_td, sam_fd = meas_quants["sam_td"], meas_quants["sam_fd"]
 
@@ -416,45 +482,43 @@ class DataSetPlotter(ComponentBase):
         f_idx_range = f_axis_idx_map(freq_axis, self.plot_settings.plot_range)
 
         td_scale = self.plot_settings.td_scale
-        fig_num_ext = self.plot_settings.fig_num_ext
 
-        plt.figure("Time domain" + fig_num_ext)
+        plt.figure(self.td_fig_num)
         td_label = label
         if not np.isclose(td_scale, 1):
             td_label += f"\n(Amplitude x {td_scale})"
         plt.plot(sam_td[:, 0], td_scale * sam_td[:, 1], label=td_label)
 
-        fig_num_ext = self.plot_settings.fig_num_ext
-        plt.figure("Spectrum" + fig_num_ext)
+        plt.figure(self.fd_fig_num)
         y_db = (20 * np.log10(np.abs(sam_fd[f_idx_range, 1])) - noise_floor).real
         plt.plot(freq_axis[f_idx_range], y_db, label=label)
 
     @action("Phase plots", group="Phase plots")
     def plot_phase_plot(self):
-        ref_meas, selected_meas, meas_quants = self.get_meas_quantities()
+        selected_meas = self.get_meas(also_return_ref=False)
 
         simple_eval_res = self.dataset.windowing_eval(selected_meas)
-        phi = simple_eval_res["phi"]
-        phi_corrected = simple_eval_res["phi_corrected"]
-
-        freq_axis = self.dataset.freq_axis
-        f_idx_range = f_axis_idx_map(freq_axis, self.plot_settings.plot_range)
+        phi = simple_eval_res["phi"][self.plot_idx_range]
+        phi_corrected = simple_eval_res["phi_corrected"][self.plot_idx_range]
 
         fig_num_ext = self.plot_settings.fig_num_ext
         label = self.plot_settings.label
+        if not label:
+            label = str(selected_meas.filepath.name)
+
         plt.figure("Phase correction comparison" + fig_num_ext)
-        plt.plot(freq_axis[f_idx_range], phi, label=label + " (Original)", ls="dashed")
-        plt.plot(freq_axis[f_idx_range], phi_corrected, label=label + " (Corrected)")
+        plt.plot(self.plot_freq_axis, phi, label=label + " (Original)", ls="dashed")
+        plt.plot(self.plot_freq_axis, phi_corrected, label=label + " (Corrected)")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad)")
 
         plt.figure("Phase" + fig_num_ext)
-        plt.plot(freq_axis[f_idx_range], phi_corrected, label=label)
+        plt.plot(self.plot_freq_axis, phi_corrected, label=label)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad)")
 
         plt.figure("Phase slope" + fig_num_ext)
-        plt.plot(freq_axis[f_idx_range][:-1], np.diff(phi_corrected), label=label)
+        plt.plot(self.plot_freq_axis[:-1], np.diff(phi_corrected), label=label)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad/THz)")
 
@@ -466,20 +530,17 @@ class DataSetPlotter(ComponentBase):
         values = sel_quant.func(selected_meas)
         label = self.plot_settings.label
 
-        f_idx_range = f_axis_idx_map(self.dataset.freq_axis, self.plot_settings.plot_range)
-        freq_axis = self.dataset.freq_axis[f_idx_range]
-
         if not isinstance(values, np.ndarray):
             self.set_trait("quantity_value", Q_(values, ""))
             return
 
-        values = values[f_idx_range]
+        values = values[self.plot_idx_range]
 
         is_single_plot = True if not np.issubdtype(values.dtype, np.complexfloating) else False
         fignum = str(sel_quant) + fig_num_ext
         if is_single_plot:
             plt.figure(fignum)
-            plt.plot(freq_axis, values, label=label)
+            plt.plot(self.plot_freq_axis, values, label=label)
             plt.xlabel("Frequency (THz)")
             plt.ylabel(f"{sel_quant} ({sel_quant.unit})")
         else:
@@ -491,49 +552,8 @@ class DataSetPlotter(ComponentBase):
             else:
                 fig = plt.figure(fignum)
                 ax0, ax1 = fig.get_axes()
-            ax0.plot(freq_axis, values.real, label=label)
-            ax1.plot(freq_axis, values.imag, label=label)
-
-    def get_meas(self, also_return_ref=True):
-        if self.selection_criterion == SelectionEnum.selected_timestamp:
-            timestamp = self.sel_timestamp
-            selected_meas = self.dataset.get_measurement_from_timestamp(timestamp)
-        elif self.selection_criterion == SelectionEnum.selected_point:
-            point = self.sel_point_1
-            logging.info(f"Selecting by point: {point}")
-            selected_meas = self.dataset.get_measurement(*point)
-        else:
-            return None
-
-        if also_return_ref:
-            ref_meas = self.dataset.get_nearest_ref(selected_meas)
-            return ref_meas, selected_meas
-        else:
-            return selected_meas
-
-    def get_meas_quantities(self):
-        ref_meas, selected_meas = self.get_meas()
-        meas_quants = self.dataset.calc_meas_quantities(ref_meas, selected_meas)
-
-        logging.info(f"Reference measurement: {ref_meas}")
-        logging.info(f"Sample measurement: {selected_meas}\n")
-
-        if self.plot_settings.shift_sam2ref:
-            t0_sam = np.argmax(meas_quants["sam_td"][:, 1])
-            t0_ref = np.argmax(meas_quants["ref_td"][:, 1])
-            shift_t = np.abs(t0_ref - t0_sam)
-            meas_quants["sam_td"][:, 1] = np.roll(meas_quants["sam_td"][:, 1], -shift_t)
-
-        if self.plot_settings.remove_t_offset:
-            meas_quants["sam_td"][:, 0] -= meas_quants["sam_td"][0, 0]
-
-        return ref_meas, selected_meas, meas_quants
-
-    @action("Export measurement quantities")
-    def export_meas_quants(self):
-        label = self.plot_settings.label
-        _, _, meas_quants = self.get_meas_quantities()
-        self.dataset.export_as_csv(meas_quants, file_app=label)
+            ax0.plot(self.plot_freq_axis, values.real, label=label)
+            ax1.plot(self.plot_freq_axis, values.imag, label=label)
 
     @action("Phase difference", group="Phase plots")
     def plot_meas_phi_diff(self):
@@ -1049,9 +1069,8 @@ class DataSetPlotter(ComponentBase):
         plt.ylabel("Time (fs)")
 
 
-    @action("Image", group="Image plots")
+    @action("Image", group=image_grp)
     def plot_image(self, img_extent=None):
-        self._update_fig_num()
         shape_properties = self.img_shape
         if img_extent is None:
             w0, w1, h0, h1 = [0, shape_properties["w"], 0, shape_properties["h"]]
@@ -1071,7 +1090,7 @@ class DataSetPlotter(ComponentBase):
         if self.plot_settings.log_scale:
             shown_grid_vals = np.log10(shown_grid_vals)
 
-        fig = plt.figure(self.img_properties["fig_num"])
+        fig = plt.figure(self.image_fig_num)
         ax = fig.add_subplot(111)
         fig.subplots_adjust(left=0.2)
 
@@ -1107,8 +1126,7 @@ class DataSetPlotter(ComponentBase):
         ax.set_xlabel("x (mm)")
         ax.set_ylabel("y (mm)")
 
-        self._update_quantity_label()
-        quantity_label = self.img_properties["quantity_label"]
+        quantity_label = self.quantity_label
 
         img_title_option = str(self.plot_settings.img_title)
         ax.set_title(" ".join([quantity_label, img_title_option]))
@@ -1127,12 +1145,12 @@ class DataSetPlotter(ComponentBase):
         self.img_ax = ax
         self.img_properties["plotted_image"] = True
 
-    @action("Plot measurement on image", group="Image plots")
+    @action("Plot measurement on image", group=image_grp)
     def _plot_meas_on_image(self, measurements):
-        if not plt.fignum_exists(self.img_properties["fig_num"]):
+        if not plt.fignum_exists(self.image_fig_num):
             return
 
-        plt.figure(num=self.img_properties["fig_num"])
+        plt.figure(num=self.image_fig_num)
         img_ax = self.img_ax
 
         meas_x_coords, meas_y_coords = [], []
@@ -1144,11 +1162,11 @@ class DataSetPlotter(ComponentBase):
 
         plt_fun(meas_x_coords, meas_y_coords, color="black", linewidth=0.4)
 
-    @action("Plot reference on image", group="Image plots")
+    @action("Plot reference on image", group=image_grp)
     def plot_refs_on_image(self):
         self._plot_meas_on_image(self.measurements["refs"])
 
-    @action("Line plot", group="Image plots")
+    @action("Line plot", group=image_grp)
     def plot_line(self, line_coords=None, direction=Direction.Horizontal, fig_num_=None, y_label=None, **plot_kwargs):
         if line_coords is None:
             line_coords = [0.0]
@@ -1165,14 +1183,14 @@ class DataSetPlotter(ComponentBase):
             x_label = "y (mm)"
 
         if fig_num_ is None:
-            fig_num += "_" + self.img_properties["quantity_label"].replace(" ", "_")
+            fig_num += "_" + self.quantity_label.replace(" ", "_")
             plt.figure(fig_num)
         else:
             plt.figure(fig_num_)
         plt.title(f"Line scan ({direction.name})")
         plt.xlabel(x_label)
         if y_label is None:
-            plt.ylabel(self.img_properties["quantity_label"])
+            plt.ylabel(self.quantity_label)
         else:
             plt.ylabel(y_label)
 
@@ -1255,102 +1273,6 @@ class DataSetPlotter(ComponentBase):
         plt.text(pos_axis[0], 0.04, s)
 
         return opt_res
-
-
-    def plot_eval_res(self, res):
-        freq_axis = self.dataset.freq_axis
-
-        n_sub = res["n_sub"]
-
-        t_exp_1layer, t_exp_2layer = res["t_exp_1layer"], res["t_exp_2layer"]
-
-        f0, f1 = self.settings.eval_opt.fit_range
-        f_mask = (f0 < freq_axis) * (freq_axis < f1)
-
-        plt.figure("TEST2")
-        phi_1l = np.unwrap(np.angle(t_exp_1layer[f_mask]))
-        phi_2l = np.unwrap(np.angle(t_exp_2layer[f_mask]))
-        plt.plot(freq_axis[f_mask], phi_1l, label="Experiment 1l")
-        plt.plot(freq_axis[f_mask], phi_2l, label="Experiment 2l")
-        # self.phase_fit_(freq_axis[f_mask], phi_1l)
-        # self.phase_fit_(freq_axis[f_mask], phi_2l)
-
-        plt.figure("n_sub")
-        plt.plot(freq_axis, n_sub.real, label="Real part")
-        plt.plot(freq_axis, n_sub.imag, label="Imaginary part")
-        # plt.ylim((-0.005, 0.020))
-        plt.xlim(self.settings.eval_opt.fit_range)
-        plt.xlabel("Frequency (THz)")
-
-        t_mod_sub = res["t_mod_sub"]
-        plt.figure("Transmission fit abs sub")
-        plt.plot(freq_axis[f_mask], np.log10(np.abs(t_exp_1layer[f_mask])), label="Experiment")
-        plt.plot(freq_axis[f_mask], np.log10(np.abs(t_mod_sub[f_mask])), label="Model")
-        plt.xlabel("Frequency (THz)")
-        plt.ylabel("log10(|t|)")
-
-        plt.figure("Transmission fit angle sub")
-        plt.plot(freq_axis[f_mask], np.angle(t_exp_1layer[f_mask]), label="Experiment")
-        plt.plot(freq_axis[f_mask], np.angle(t_mod_sub[f_mask]), label="Model")
-        plt.xlabel("Frequency (THz)")
-
-        plt.figure("Transmission fit abs sub diff")
-        log_diff = np.log10((np.abs(t_exp_1layer[f_mask]) - np.abs(t_mod_sub[f_mask])) ** 2)
-        plt.plot(freq_axis[f_mask], log_diff, label="Log squared difference")
-        # plt.plot(freq_axis[f_mask], n_sub.imag[f_mask] / np.max(n_sub.imag[f_mask]), label="n_sub.imag")
-        plt.xlabel("Frequency (THz)")
-
-        t_mod_film = res["t_mod_film"]
-        plt.figure("Transmission fit abs film")
-        plt.plot(freq_axis[f_mask], np.abs(t_exp_2layer[f_mask]), label="Experiment", ls="dashed")
-        plt.plot(freq_axis[f_mask], np.abs(t_mod_film[f_mask]), label="Model (fit)")
-        plt.ylim((-0.05, 0.45))
-        plt.xlabel("Frequency (THz)")
-        plt.ylabel("|t|")
-
-        plt.figure("Transmission fit angle film")
-        plt.plot(freq_axis[f_mask], np.angle(t_exp_2layer[f_mask]), label="Experiment")
-        plt.plot(freq_axis[f_mask], np.angle(t_mod_film[f_mask]), label="Model")
-        plt.xlabel("Frequency (THz)")
-
-        if "sigma_n_film" in res:
-            sigma_n_film = res["sigma_n_film"]
-            plt.figure("Conductivity(fit)")
-            plt.plot(freq_axis, sigma_n_film.real, label="Real part")
-            plt.plot(freq_axis, sigma_n_film.imag, label="Imaginary part")
-
-        if "single_layer_eval" in res:
-            single_layer_eval = res["single_layer_eval"]
-
-            plt.figure("n_sub")
-            # plt.plot(freq_axis, single_layer_eval["refr_idx"].imag, label="Imaginary part (1 layer eval)")
-
-            plt.figure("absorption coefficient")
-            plt.plot(freq_axis, 4 * np.pi * n_sub.imag * freq_axis / 0.03, label="fit")
-            plt.plot(freq_axis, single_layer_eval["alpha"], label="single layer eval")
-            plt.xlabel("Frequency (THz)")
-            plt.ylabel("Absorption coefficient (1/cm)")
-            plt.ylim((0, 0.012))
-            plt.xlim((-0.05, 3.5))
-
-        if "n_film" in res:
-            n_film = res["n_film"]
-            plt.figure("n_film")
-            plt.plot(freq_axis, n_film.real, label="real")
-            plt.plot(freq_axis, n_film.imag, label="imag")
-            plt.xlabel("Frequency (THz)")
-
-        if "sigma_exp" in res and "sigma_mod" in res:
-            sigma_exp, sigma_mod = res["sigma_exp"], res["sigma_mod"]
-            plt.figure("Conductivity")
-            plt.plot(freq_axis[f_mask], sigma_exp[f_mask].real, label="Exp (real)")
-            plt.plot(freq_axis[f_mask], sigma_exp[f_mask].imag, label="Exp (imag)")
-            plt.plot(freq_axis[f_mask], sigma_mod[f_mask].real, label="Fit (real)")
-            plt.plot(freq_axis[f_mask], sigma_mod[f_mask].imag, label="Fit (imag)")
-            # plt.xlim((0.20, 2.55))
-            # plt.ylim((-10, 200))
-            plt.xlabel("Frequency (THz)")
-            plt.ylabel("Conductivity (S/cm)")
 
     def save_fig(self, fig_num_, filename=None, **kwargs):
         save_dir = Path(self.settings.export_csv_dir)

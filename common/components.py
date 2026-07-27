@@ -3,6 +3,7 @@ from traitlets import HasTraits, Unicode, Bool, Int, Instance
 import traitlets
 from PySide6 import QtWidgets
 from functools import wraps
+import matplotlib as mpl
 
 def is_component_trait(x):
     return isinstance(x, Instance) and issubclass(x.klass, ComponentBase)
@@ -19,8 +20,6 @@ def _dumb_list_of_actions(inst):
             pass
         except traitlets.TraitError:
             pass
-
-
 
 def action(name=None, help=None, check_init=False, **kwargs):
     if name is None:
@@ -40,7 +39,15 @@ def action(name=None, help=None, check_init=False, **kwargs):
                 if dataset is not None and not getattr(dataset, "is_initialized", False):
                     logging.warning(f"Action '{name or method.__name__}' blocked: Dataset is not initialized.")
                     return None
-            return method(self, *args, **kwargs_fn)
+
+            rc_params = kwargs.get("rc_params", None)
+            rc_params_dict = rc_params() if callable(rc_params) else rc_params
+
+            if rc_params_dict:
+                with mpl.rc_context(rc_params_dict):
+                    return method(self, *args, **kwargs_fn)
+            else:
+                return method(self, *args, **kwargs_fn)
 
         wrapper._isAction = True
         wrapper.metadata = kwargs
