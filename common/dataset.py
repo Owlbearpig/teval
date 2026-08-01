@@ -3,7 +3,6 @@ from common.default_appsettings import Dist, ReferenceSelection
 from common.settings import Settings
 from pathlib import Path
 import numpy as np
-from functools import partial
 from common.functions import window, butter_filt, do_fft, f_axis_idx_map, remove_offset, arr_statistics
 from common.measurements import Measurement, meas_id_func
 from mpl_settings import mpl_style_params
@@ -14,15 +13,16 @@ import colorlog
 from datetime import datetime
 from common.dataset_cache import DatasetCache
 import pandas as pd
-from common.traits import Q_, Path as TPath
+from common.traits import Q_, Path as TPath, ValueRange
 from scipy.stats import pearsonr
-from common.default_appsettings import Domain, QuantityEnum, DatasetOpt
+from common.default_appsettings import Domain, QuantityEnum
 from common.components import action
 import itertools
-from traitlets import Unicode, observe, Float, Bool
+from traitlets import Unicode, observe, Float, Bool, Enum as TEnum, Instance
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from PySide6.QtCore import QObject, Signal
+from functools import cached_property
 
 """
 TODOs: 
@@ -51,6 +51,36 @@ New ideas: add teralyzer evaluation (time consuming)
 [l] = µm, [t] = ps, [alpha] = 1/cm (absorption coe.), [sigma] = S/cm, [eps0] = Siemens * ps,
 [f] = THz (1/ps), [c_thz] = µm/ps
 """
+
+class DataSetInfoPane(ComponentBase):
+
+    max_amp_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Max amplitude measurement")
+    first_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="First measurement")
+    last_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Last measurement")
+
+    all_meas_cnt_info = Unicode("", group="Measurement classification", read_only=True).tag(
+        name="Number of measurements")
+    ref_meas_cnt_info = Unicode("", group="Measurement classification", read_only=True).tag(
+        name="Number of reference measurements")
+    sam_meas_cnt_info = Unicode("", group="Measurement classification", read_only=True).tag(
+        name="Number of sample measurements")
+
+    meas_time_info = Unicode("", group="Measurement time info", read_only=True).tag(name="Total measurement time")
+    mean_meas_time_info = Unicode("", group="Measurement time info", read_only=True).tag(name="Mean measurement time")
+
+    shape_w_info = Unicode("", group="Shape info", read_only=True).tag(name="Width (mm)")
+    shape_h_info = Unicode("", group="Shape info", read_only=True).tag(name="Height (mm)")
+    shape_dx_info = Unicode("", group="Shape info", read_only=True).tag(name="x-step (mm)")
+    shape_dy_info = Unicode("", group="Shape info", read_only=True).tag(name="y-step (mm)")
+    pixel_cnt = Unicode("", group="Shape info", read_only=True).tag(name="Pixel count", priority=99)
+
+    x_coord_extrema = Unicode("", group="Coordinate info",
+                              read_only=True).tag(name="x min, max (mm)")
+    y_coord_extrema = Unicode("", group="Coordinate info",
+                              read_only=True).tag(name="y min, max (mm)")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
 
 class ParsingSignalCarrier(QObject):
@@ -83,37 +113,25 @@ class DataSet(ComponentBase):
     caching_progress = Float(0, min=0, max=1, read_only=True).tag(name="Caching progress", priority=-1)
     is_initialized = Bool(False, read_only=True).tag(name="Dataset Initialized")
 
-    max_amp_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Max amplitude measurement")
-    first_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="First measurement")
-    last_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Last measurement")
+    dist_func = TEnum(Dist, default_value=Dist.Time).tag(priority=1000, name="Measurement distance function")
 
-    all_meas_cnt_info = Unicode("", group="Measurement classification", read_only=True).tag(name="Number of measurements")
-    ref_meas_cnt_info = Unicode("", group="Measurement classification", read_only=True).tag(name="Number of reference measurements")
-    sam_meas_cnt_info = Unicode("", group="Measurement classification", read_only=True).tag(name="Number of sample measurements")
+    reference_filter_group = "Reference filter"
+    ref_selection = TEnum(ReferenceSelection,
+                          default_value=ReferenceSelection.point_as_ref,
+                          group=reference_filter_group)
+    ref_pos = ValueRange([0, 0], group=reference_filter_group)
+    fix_ref = Bool(False, group=reference_filter_group)
+    ref_threshold = Float(0.95, group=reference_filter_group, min=0, max=1)
 
-    meas_time_info = Unicode("", group="Measurement time info", read_only=True).tag(name="Total measurement time")
-    mean_meas_time_info = Unicode("", group="Measurement time info", read_only=True).tag(name="Mean measurement time")
-
-    shape_w_info = Unicode("", group="Shape info", read_only=True).tag(name="Width (mm)")
-    shape_h_info = Unicode("", group="Shape info", read_only=True).tag(name="Height (mm)")
-    shape_dx_info = Unicode("", group="Shape info", read_only=True).tag(name="x-step (mm)")
-    shape_dy_info = Unicode("", group="Shape info", read_only=True).tag(name="y-step (mm)")
-    pixel_cnt = Unicode("", group="Shape info", read_only=True).tag(name="Pixel count", priority=99)
-
-    min_x_coord = Unicode("", group="Coordinate info", read_only=True).tag(name="Minimum x-coordinate (mm)")
-    max_x_coord = Unicode("", group="Coordinate info", read_only=True).tag(name="Maximum x-coordinate (mm)")
-    min_y_coord = Unicode("", group="Coordinate info", read_only=True).tag(name="Minimum y-coordinate (mm)")
-    max_y_coord = Unicode("", group="Coordinate info", read_only=True).tag(name="Maximum y-coordinate (mm)")
+    info_pane = Instance(DataSetInfoPane)
 
     def __init__(self, settings : Settings, **kwargs):
         super().__init__(**kwargs)
         self._parse_lock = Lock()
         self._is_parsing = False
 
-        self.noise_floor = None
-        self.time_axis = None
-        self.freq_axis = None
-        self.properties = {"data": {}, "shape": {}, }
+        self.info_pane = DataSetInfoPane(object_name="Info pane")
+
         self.measurements = {"refs": [], "sams": [], "all": ()}
 
         self.cache = None
@@ -122,15 +140,64 @@ class DataSet(ComponentBase):
 
         self.settings = settings
 
-        self._set_observers()
-
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.settings.save_configuration(self)
 
     def __enter__(self):
         self.settings.load_configuration(self)
+        self._set_observers()
 
         return self
+
+    @property
+    def func_map(self):
+        func_map = {QuantityEnum.P2P: self.p2p,
+                    QuantityEnum.Phase: self.phase,
+                    QuantityEnum.MeasTimeDeltaRef2Sam: self.meas_time_delta,
+                    QuantityEnum.Power: self.power,
+                    QuantityEnum.RefAmp: self.ref_max,
+                    QuantityEnum.RefArgmax: self.get_ref_argmax,
+                    QuantityEnum.RefPhase: self.ref_phase,
+                    QuantityEnum.ZeroCrossing: self.get_zero_crossing,
+                    QuantityEnum.TimeOfFlight: self.time_of_flight,
+                    QuantityEnum.Transmission: self.transmission,
+                    QuantityEnum.TransmissionAmp: self.amplitude_transmission,
+                    QuantityEnum.TransmissionPhase: self.phase_transmission,
+                    QuantityEnum.RefractiveIdx: self.refractive_idx,
+                    QuantityEnum.AbsorptionCoe: self.absorption_coef,
+                    QuantityEnum.Conductivity: self.conductivity,
+                    }
+        return func_map
+
+    @cached_property
+    def shape_properties(self):
+        return self._update_shape_properties()
+
+    def refresh_shape_properties(self):
+        self.__dict__.pop("shape_properties", None)
+
+    @property
+    def time_diffs(self):
+        time_diffs = []
+        for i in range(0, len(self.measurements["all"]) - 1):
+            m0, m1 = self.measurements["all"][i], self.measurements["all"][i + 1]
+            time_diffs.append(self.meas_time_diff(m0, m1).magnitude)
+
+        return time_diffs
+
+    @property
+    def mean_time_diff(self):
+        return np.mean(self.time_diffs)
+
+    @property
+    def time_axis(self):
+        sample_data_td = self.get_data(self.measurements["all"][0], domain=Domain.Time)
+        return sample_data_td[:, 0].real
+
+    @property
+    def freq_axis(self):
+        sample_data_fd = self.get_data(self.measurements["all"][0], domain=Domain.Frequency)
+        return sample_data_fd[:, 0].real
 
     @observe("data_path")
     def _set_path(self, change=None):
@@ -142,8 +209,8 @@ class DataSet(ComponentBase):
         self.set_trait("caching_progress", 1)
 
     def _set_observers(self):
-        reference_filter_trait_names = self.settings.dataset_opt.trait_names(group=DatasetOpt.reference_filter_group)
-        self.settings.dataset_opt.observe(self.update_meas_sorting, names=reference_filter_trait_names)
+        reference_filter_trait_names = self.trait_names(group=self.reference_filter_group)
+        self.observe(self.update_meas_sorting, names=reference_filter_trait_names)
 
     def update_cache_progress(self, progress):
         self.set_trait("caching_progress", progress)
@@ -154,7 +221,6 @@ class DataSet(ComponentBase):
             logging.info("Cache is None. Reset dataset path")
         else:
             self.cache.clear_cache()
-
 
     @action("Reparse measurements")
     def rebuild_cache(self):
@@ -187,7 +253,6 @@ class DataSet(ComponentBase):
                     return
 
                 self.cache = DatasetCache(self.measurements["all"], target_path, signal_carrier)
-                self._data_properties()
 
                 all_meas = self.measurements["all"]
                 max_amp_meas = (all_meas[0], -np.inf)
@@ -200,8 +265,6 @@ class DataSet(ComponentBase):
 
                 self._sort_meas_type()
 
-                self._shape_properties()
-
                 signal_carrier.initialization_complete_signal.emit("is_initialized", True)
 
             except Exception as e:
@@ -212,40 +275,10 @@ class DataSet(ComponentBase):
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(bg_worker, data_path)
 
-    @property
-    def func_map(self):
-        func_map = {QuantityEnum.P2P: self.p2p,
-                    QuantityEnum.Phase: self.phase,
-                    QuantityEnum.MeasTimeDeltaRef2Sam: self.meas_time_delta,
-                    QuantityEnum.Power: self.power,
-                    QuantityEnum.RefAmp: self.ref_max,
-                    QuantityEnum.RefArgmax: self.get_ref_argmax,
-                    QuantityEnum.RefPhase: self.ref_phase,
-                    QuantityEnum.ZeroCrossing: self.get_zero_crossing,
-                    QuantityEnum.TimeOfFlight: self.time_of_flight,
-                    QuantityEnum.Transmission: self.transmission,
-                    QuantityEnum.TransmissionAmp: self.amplitude_transmission,
-                    QuantityEnum.TransmissionPhase: self.phase_transmission,
-                    QuantityEnum.RefractiveIdx: self.refractive_idx,
-                    QuantityEnum.AbsorptionCoe: self.absorption_coef,
-                    QuantityEnum.Conductivity: self.conductivity,
-                    }
-        return func_map
-
     def update_meas_sorting(self, change):
         self._sort_meas_type()
 
-    def _data_properties(self):
-        sample_data_td, sample_data_fd = self.get_data(self.measurements["all"][0], domain=Domain.Both)
-        samples = int(sample_data_td.shape[0])
-        self.time_axis = sample_data_td[:, 0].real
-        self.freq_axis = sample_data_fd[:, 0].real
-
-        dt = np.mean(np.diff(self.time_axis))
-
-        self.properties["data"] = {"dt": dt, "samples": samples}
-
-    def _shape_properties(self):
+    def _update_shape_properties(self):
         x_coords, y_coords = [], []
         for sam_measurement in self.measurements["sams"]:
             x_coords.append(sam_measurement.position[0])
@@ -287,28 +320,28 @@ class DataSet(ComponentBase):
 
         extent = [x_coords[0], x_coords[-1], y_coords[0], y_coords[-1]]
 
-        self.properties["shape"] = {"w": w, "h": h, "dx": dx, "dy": dy, "extent": extent,
-                                    "x_coords": x_coords, "y_coords": y_coords, "all_points": all_points}
-        self.set_shape_info_traits()
+        shape = {"w": w, "h": h, "dx": dx, "dy": dy, "extent": extent,
+                 "x_coords": x_coords, "y_coords": y_coords, "all_points": all_points}
+        self.set_shape_info_traits(shape)
 
-    def set_shape_info_traits(self):
-        sd = self.properties["shape"]
+        return shape
 
-        self.set_trait("shape_w_info", str(sd["w"]))
-        self.set_trait("shape_h_info", str(sd["h"]))
-        self.set_trait("shape_dx_info", str(sd["dx"]))
-        self.set_trait("shape_dy_info", str(sd["dy"]))
-        self.set_trait("pixel_cnt", str(int((sd["h"]/sd["dy"])*(sd["w"]/sd["dx"]))))
+    def set_shape_info_traits(self, shape):
+        self.info_pane.set_trait("shape_w_info", str(shape["w"]))
+        self.info_pane.set_trait("shape_h_info", str(shape["h"]))
+        self.info_pane.set_trait("shape_dx_info", str(shape["dx"]))
+        self.info_pane.set_trait("shape_dy_info", str(shape["dy"]))
+        self.info_pane.set_trait("pixel_cnt", str(int((shape["h"]/shape["dy"])*(shape["w"]/shape["dx"]))))
 
-        self.set_trait("min_x_coord", str(np.min(sd["x_coords"])))
-        self.set_trait("max_x_coord", str(np.max(sd["x_coords"])))
-        self.set_trait("min_y_coord", str(np.min(sd["y_coords"])))
-        self.set_trait("max_y_coord", str(np.max(sd["y_coords"])))
+        x_extrema_str = f"{np.min(shape['x_coords'])}, {np.max(shape['x_coords'])}"
+        self.info_pane.set_trait("x_coord_extrema", x_extrema_str)
+
+        y_extrema_str = f"{np.min(shape['y_coords'])}, {np.max(shape['y_coords'])}"
+        self.info_pane.set_trait("y_coord_extrema", y_extrema_str)
 
     def find_climate_log_file(self, climate_log_file):
         log_file = Path(climate_log_file)
-        if log_file.is_file():
-            return log_file
+
         target_log_file = log_file.name
 
         checked_dirs = [self.data_path, self.data_path.parent]
@@ -359,7 +392,7 @@ class DataSet(ComponentBase):
     def _set_dataset_info(self):
         max_amp_meas = self.measurements["max_amp_meas"]
         logging.debug(f"Maximum amplitude measurement: {max_amp_meas.filepath.name}\n")
-        self.set_trait("max_amp_meas_info", max_amp_meas.filepath.stem)
+        self.info_pane.set_trait("max_amp_meas_info", max_amp_meas.filepath.stem)
 
         all_cnt = len(self.measurements["all"])
         ref_cnt = len(self.measurements["refs"])
@@ -382,37 +415,32 @@ class DataSet(ComponentBase):
         logging.debug(f"Total measurement time: {tot_hours} hours, "
                      f"{min_part} minute(s) and {sec_part} second(s) ({td_secs} seconds)\n")
 
-        time_diffs = [(self.measurements["all"][i + 1].meas_time -
-                       self.measurements["all"][i].meas_time).total_seconds()
-                      for i in range(0, len(self.measurements["all"]) - 1)]
-
-        mean_time_diff = np.mean(time_diffs)
-
-        self.properties["mean_time_diff"] = mean_time_diff
+        mean_time_diff = self.mean_time_diff
+        diffs = self.time_diffs
         logging.debug(f"Mean time between measurements: {np.round(mean_time_diff, 2)} seconds")
         logging.debug(f"Min and max time between measurements: "
-                     f"({np.min(time_diffs)}, {np.max(time_diffs)}) seconds\n")
+                     f"({np.min(diffs)}, {np.max(diffs)}) seconds\n")
 
-        self.set_trait("all_meas_cnt_info", str(all_cnt))
-        self.set_trait("ref_meas_cnt_info", str(ref_cnt))
-        self.set_trait("sam_meas_cnt_info", str(sam_cnt))
+        self.info_pane.set_trait("all_meas_cnt_info", str(all_cnt))
+        self.info_pane.set_trait("ref_meas_cnt_info", str(ref_cnt))
+        self.info_pane.set_trait("sam_meas_cnt_info", str(sam_cnt))
 
-        self.set_trait("first_meas_info", first_measurement.filepath.stem)
-        self.set_trait("last_meas_info", last_measurement.filepath.stem)
+        self.info_pane.set_trait("first_meas_info", first_measurement.filepath.stem)
+        self.info_pane.set_trait("last_meas_info", last_measurement.filepath.stem)
 
-        self.set_trait("meas_time_info", f"{tot_hours:02}:{min_part:02}:{sec_part:02}")
-        self.set_trait("mean_meas_time_info", f"{np.round(mean_time_diff, 2)} seconds")
+        self.info_pane.set_trait("meas_time_info", f"{tot_hours:02}:{min_part:02}:{sec_part:02}")
+        self.info_pane.set_trait("mean_meas_time_info", f"{np.round(mean_time_diff, 2)} seconds")
 
     def _sort_meas_type(self):
         all_measurements = self.measurements["all"]
 
-        ref_filter = self.settings.dataset_opt.ref_selection
+        ref_filter = self.ref_selection
 
-        threshold = self.settings.dataset_opt.ref_threshold
+        threshold = self.ref_threshold
         max_amp_meas = self.measurements["max_amp_meas"]
         max_amp = np.max(np.abs(self.get_data(max_amp_meas)[:, 1]))
 
-        manual_pos = self.settings.dataset_opt.ref_pos
+        manual_pos = self.ref_pos
 
         id_str = "ref"
 
@@ -438,11 +466,11 @@ class DataSet(ComponentBase):
         elif ref_filter == ReferenceSelection.horizontal_line_as_ref:
             y = manual_pos[1]
             logging.info(f"Selecting measurements along horizontal line at y={y} mm")
-            ref_line, x_coords = self.get_line(y=y)
+            ref_line, x_coords = self.get_cart_line(y=y)
         elif ref_filter == ReferenceSelection.vertical_line_as_ref:
             x = manual_pos[0]
             logging.info(f"Selecting measurements along vertical line at x={x} mm")
-            ref_line, y_coords = self.get_line(x=x)
+            ref_line, y_coords = self.get_cart_line(x=x)
         elif ref_filter == ReferenceSelection.above_threshold:
             refs_ = threshold_filter()
 
@@ -473,6 +501,8 @@ class DataSet(ComponentBase):
         logging.info(f"Classified {len(self.measurements['refs'])} measurement(s) as reference\n")
 
         self._set_dataset_info()
+
+        self.refresh_shape_properties()
 
     def link_sub_dataset(self, dataset_):
         if dataset_ is None:
@@ -580,7 +610,7 @@ class DataSet(ComponentBase):
             return meas_at_pos
 
         meas_idx0 = meas_at_pos.index(meas_)
-        max_dist = 2*self.properties["mean_time_diff"]
+        max_dist = 2*self.mean_time_diff
 
         time_diff = np.diff([meas.meas_time for meas in meas_at_pos])
         time_diff_sec = [t_diff.total_seconds() for t_diff in time_diff]
@@ -598,12 +628,52 @@ class DataSet(ComponentBase):
 
         return found_meas
 
-    def get_line(self, x=None, y=None, limits=None):
-        shape_properties = self.properties["shape"]
+    def get_arb_line(self, p0, p1):
+        # Bresenham's_line_algorithm
+        scale_x = 1 / self.shape_properties["dx"]
+        scale_y = 1 / self.shape_properties["dy"]
+
+        p0 = p0.magnitude if isinstance(p0, Q_) else p0
+        p1 = p1.magnitude if isinstance(p1, Q_) else p1
+
+        x0, y0 = round(p0[0] * scale_x), round(p0[1] * scale_y)
+        x1, y1 = round(p1[0] * scale_x), round(p1[1] * scale_y)
+
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+
+        err = dx - dy
+        curr_x, curr_y = x0, y0
+        points = []
+
+        while True:
+            points.append((curr_x / scale_x, curr_y / scale_y))
+
+            if curr_x == x1 and curr_y == y1:
+                break
+
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                curr_x += sx
+            if e2 < dx:
+                err += dx
+                curr_y += sy
+
+        meas_list = [self.get_measurement(*p) for p in points]
+        meas_list = list(dict.fromkeys(meas_list))
+        points = [meas.position for meas in meas_list]
+
+        return meas_list, points
+
+    def get_cart_line(self, x=None, y=None, limits=None):
+        shape = self.shape_properties
         if x is None and y is None:
             return None
 
-        x_coords, y_coords = shape_properties["x_coords"], shape_properties["y_coords"]
+        x_coords, y_coords = shape["x_coords"], shape["y_coords"]
 
         # vertical direction / slice
         if x is not None:
@@ -624,7 +694,7 @@ class DataSet(ComponentBase):
 
     def get_nearest_ref(self, meas_, dist_func=None) -> Measurement:
         if not dist_func:
-            dist_func = self.settings.dataset_opt.dist_func.value
+            dist_func = self.dist_func.value
         closest_ref, best_fit_val = None, np.inf
         for ref_meas in self.measurements["refs"]:
             dist_val = dist_func(ref_meas, meas_)
@@ -636,7 +706,7 @@ class DataSet(ComponentBase):
 
         logging.debug(f"Sam: {meas_})")
         logging.debug(f"Ref: {closest_ref})")
-        if self.settings.dataset_opt.dist_func == Dist.Time:
+        if self.dist_func == Dist.Time:
             logging.debug(f"Time between ref and sample: {best_fit_val} seconds")
         else:
             logging.debug(f"Distance between ref and sample: {best_fit_val} mm")
@@ -644,8 +714,8 @@ class DataSet(ComponentBase):
         return closest_ref
 
     def get_ref_data(self, domain=Domain.Time, point=None, ref_idx=None, ret_meas=False):
-        if self.settings.dataset_opt.fix_ref is not False:
-            chosen_ref = self.measurements["refs"][self.settings.dataset_opt.fix_ref]
+        if self.fix_ref is not False:
+            chosen_ref = self.measurements["refs"][self.fix_ref]
         elif point is not None:
             closest_sam = self.get_measurement(*point)
             chosen_ref = self.get_nearest_ref(closest_sam)
@@ -1134,8 +1204,8 @@ class DataSet(ComponentBase):
         return ref_interpol_fd
 
     def meas_time_diff(self, m1, m2):
-        # meas time difference in hours
-        return (m2.meas_time - m1.meas_time).total_seconds() / 3600
+        val = (m2.meas_time - m1.meas_time).total_seconds()
+        return Q_(val, "s")
 
     def export_as_csv(self, dict_, file_app=""):
         save_dir = self.settings.export_csv_dir

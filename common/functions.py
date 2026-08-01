@@ -127,7 +127,13 @@ def flip_phase(data_fd):
     return np.array([freq_axis, y_amp_ * np.exp(-1j*y_phi_)]).T
 
 
-def window(data_td, win_width=10, shift=0, en_plot=False, slope=0.15, **kwargs):
+def window(data_td, **kwargs):
+    win_width = kwargs.get("win_width", 10)
+    shift = kwargs.get("shift", 0)
+    en_plot = kwargs.get("en_plot", False)
+    slope = kwargs.get("slope", 0.15)
+    win_start = kwargs.get("win_start", None)
+
     t, y = data_td[:, 0], data_td[:, 1]
     t -= t[0]
     dt = np.mean(np.diff(t))
@@ -138,7 +144,8 @@ def window(data_td, win_width=10, shift=0, en_plot=False, slope=0.15, **kwargs):
         win_width = len(y)
 
     win_center = np.argmax(np.abs(y))
-    win_start = win_center - int(win_width / 2)
+    if win_start is None:
+        win_start = win_center - int(win_width / 2)
 
     if "type" in kwargs:
         window = kwargs["type"]

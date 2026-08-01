@@ -1347,13 +1347,11 @@ class SHGO:
             g_bounds = self.construct_lcb_simplicial(self.HC.V[x_min_t_norm])
             if 'bounds' in self.min_solver_args:
                 self.minimizer_kwargs['bounds'] = g_bounds
-                logging.info(self.minimizer_kwargs['bounds'])
 
         else:
             g_bounds = self.construct_lcb_delaunay(x_min, ind=ind)
             if 'bounds' in self.min_solver_args:
                 self.minimizer_kwargs['bounds'] = g_bounds
-                logging.info(self.minimizer_kwargs['bounds'])
 
         if self.disp and 'bounds' in self.minimizer_kwargs:
             logging.info('bounds in kwarg:')

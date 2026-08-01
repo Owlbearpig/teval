@@ -45,9 +45,9 @@ else:
 dataset = DataSet(sam_dataset_path, options)
 
 dataset.select_quantity(QuantityEnum.AbsorptionCoe)
-dataset.plot_line(line_coords=16, label="1.0 THz", fig_num_="x-slice_alpha", y_label=r"Refractive index")
+#dataset.plot_line(line_coords=16, label="1.0 THz", fig_num_="x-slice_alpha", y_label=r"Refractive index")
 dataset.select_freq(0.50)
-dataset.plot_line(line_coords=16, label="0.5 THz", fig_num_="x-slice_alpha", y_label=r"Refractive index")
+#dataset.plot_line(line_coords=16, label="0.5 THz", fig_num_="x-slice_alpha", y_label=r"Refractive index")
 # dataset.plot_point((10, 16))
 # dataset.plot_point((40, 16))
 # dataset.plot_point((50, 16))

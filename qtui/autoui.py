@@ -587,7 +587,8 @@ def generate_ui(component):
         prettyName = component.object_name or name
         newItem = QtWidgets.QTreeWidgetItem(treeitem)
         newItem.setText(0, prettyName)
-        newItem.setExpanded(True)
+        if "AppRoot" in prettyName:
+            newItem.setExpanded(True)
 
         widget = generate_component_ui(prettyName, component)
         newItem.widgetId = stack.addWidget(widget)

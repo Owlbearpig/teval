@@ -36,7 +36,7 @@ def run(globals, filename):
 
     with rootClass() as root:
         w, msgBrowser = generate_ui(root)
-        w.resize(1280, 720)
+        w.resize(1410, 792)
 
         logging.captureWarnings(True)
         handler = QTextBrowserLoggingHandler(msgBrowser)

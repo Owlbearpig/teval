@@ -2,12 +2,10 @@ import logging
 from enum import Enum, member
 from pathlib import Path
 import traitlets
-from traitlets import (
-    HasTraits, Bool, Int, Float, Unicode, Tuple,
+from traitlets import (Bool, Int, Float, Unicode, Tuple,
     List as TList, Dict as TDict, Enum as TEnum, Instance, Any as TAny
 )
-import common.consts
-from common import traits
+
 from common.components import ComponentBase
 from common.traits import ValueRange, Path as TPath, Q_, Quantity as TQuantity
 
@@ -358,6 +356,7 @@ class PlotOpt(ComponentBase):
     temp_sensor_idx = Int(-1, group=climate_group)
     climate_file = TPath(Path(), group=climate_group)
     clip_climate_data = Bool(False, group=climate_group)
+    climate_quantity = TEnum(ClimateQuantity, ClimateQuantity.Temperature, group=climate_group)
     redp_sensor_labels = TDict(
         key_trait=Unicode(),
         value_trait=Unicode(),
@@ -393,7 +392,6 @@ class PlotOpt(ComponentBase):
     fig_label = Unicode("", group=image_group)
     img_title = Unicode("", group=image_group)
     en_cbar_label = Bool(True, group=image_group)
-    plotted_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.P2P, group=image_group)
     en_cbar_lim = Bool(default_value=False, group=image_group)
 
     shown_plots_group = "Shown plots"
@@ -410,16 +408,6 @@ class PlotOpt(ComponentBase):
 
     only_shown_figures = TList(TAny(), default_value=[])
 
-class DatasetOpt(ComponentBase):
-    dist_func = TEnum(Dist, default_value=Dist.Time)
-
-    reference_filter_group = "Reference filter"
-    ref_selection = TEnum(ReferenceSelection,
-                          default_value=ReferenceSelection.point_as_ref,
-                          group=reference_filter_group)
-    ref_pos = ValueRange([0, 0], group=reference_filter_group)
-    fix_ref = Bool(False, group=reference_filter_group)
-    ref_threshold = Float(0.95, group=reference_filter_group, min=0, max=1)
 
 class AppSettings(ComponentBase):
     log_level = TEnum(LogLevel, default_value=LogLevel.info)
@@ -430,7 +418,6 @@ class AppSettings(ComponentBase):
     sample_properties = Instance(SampleProperties, args=())
     eval_opt = Instance(EvalOpt, args=())
     plot_opt = Instance(PlotOpt, args=())
-    dataset_opt = Instance(DatasetOpt, args=())
 
 if __name__ == '__main__':
     settings = AppSettings()

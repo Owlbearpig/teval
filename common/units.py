@@ -52,3 +52,11 @@ if pint.__version__ == '0.7.2':
         return '%s' % (format(units, spec))
 
     pint.unit._Unit.__format__ = __unbugged_format__
+if __name__ == '__main__':
+    import numpy as np
+    import matplotlib.pyplot as plt
+    q = 3 * np.ones(10) * Q_(np.ones(10), "h").to("s")
+    q.to("min")
+    print(q)
+    plt.plot(q.magnitude)
+    plt.show()
