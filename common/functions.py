@@ -450,6 +450,9 @@ def smooth(x, window_len=11, window='hanning'):
 
     return y
 
+def round_dx(x, dx):
+    return np.round(x / dx) * dx
+
 def local_minima_1d(arr, en_plot=True):
     win_len = 25
     if len(arr) > 100:

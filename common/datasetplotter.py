@@ -6,10 +6,10 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 from common.default_appsettings import Domain, Dist, Direction, ClimateQuantity, QuantityFunc, QuantityEnum
 from functools import partial
-from common.functions import moving_average, f_axis_idx_map, local_minima_1d
+from common.functions import moving_average, f_axis_idx_map, local_minima_1d, round_dx
 import logging
 from datetime import datetime
-from pathlib import Path
+from common.measurements import Measurement
 from scipy.special import erfc
 from scipy.optimize import curve_fit
 from common.eval_component.shgo import shgo
@@ -19,18 +19,16 @@ from mpl_settings import mpl_style_params
 from scipy.stats import pearsonr
 from tqdm import tqdm
 import pandas as pd
-from enum import Enum
+from common.dataset import SelectionCriterionEnum
+from matplotlib.backend_bases import MouseButton
 
 
 action = partial(action, check_init=True, rc_params=mpl_style_params)
 
-class SelectionEnum(Enum):
-    selected_timestamp = "Timestamp"
-    selected_point = "Point"
-
 class DataSetPlotter(ComponentBase):
 
-    selection_criterion = TEnum(SelectionEnum, SelectionEnum.selected_point).tag(name="Select measurement by", priority=-2)
+    selection_criterion = TEnum(SelectionCriterionEnum,
+                                SelectionCriterionEnum.selected_point).tag(name="Select measurement by", priority=-2)
     sel_freq_range = ValueRange(default_value=[Q_(1.000, "THz"), Q_(1.200, "THz")]).tag(
         name="Selected frequency range", priority=1000,
     )
@@ -43,10 +41,10 @@ class DataSetPlotter(ComponentBase):
 
     rect_sel_grp = "Average value rectangle"
     rect_sel_label = Unicode("").tag(name="Rectangle label", priority=1000, group=rect_sel_grp)
-    rect_sel_top_right = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
-        name="Top right rectangle selection", group=rect_sel_grp, priority=1001)
     rect_sel_bot_left = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
-        name="Bottom left rectangle selection", group=rect_sel_grp, priority=1002)
+        name="Bottom left rectangle selection", group=rect_sel_grp, priority=1001)
+    rect_sel_top_right = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
+        name="Top right rectangle selection", group=rect_sel_grp, priority=1002)
 
     image_grp = "Image actions"
     confine_to_extent = Bool(False,
@@ -55,6 +53,7 @@ class DataSetPlotter(ComponentBase):
         name="Set image x-range", group=image_grp, priority=1002)
     img_extent_y_range = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
         name="Set image y-range", group=image_grp, priority=1003)
+    enable_img_interaction = Bool(True, group=image_grp).tag(name="Enable interaction")
 
     line_plot_grp = "Image slice plot"
     line_start = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
@@ -168,6 +167,15 @@ class DataSetPlotter(ComponentBase):
 
         return " ".join([str(sel_quant), freq_label * en_freq_label])
 
+    def get_selected_measurement(self, also_return_ref=True):
+        selection_map = {
+            SelectionCriterionEnum.selected_timestamp: self.sel_timestamp,
+            SelectionCriterionEnum.selected_point: self.sel_point_1,
+        }
+
+        identifier = selection_map[self.selection_criterion]
+        return self.dataset.get_selected_measurement(self.selection_criterion, identifier, also_return_ref)
+
     def get_selected_quantity(self):
         self._update_quant_func()
         return self.selected_quantity.value
@@ -244,26 +252,8 @@ class DataSetPlotter(ComponentBase):
 
         return filtered_grid
 
-
-    def get_meas(self, also_return_ref=True):
-        if self.selection_criterion == SelectionEnum.selected_timestamp:
-            timestamp = self.sel_timestamp
-            selected_meas = self.dataset.get_measurement_from_timestamp(timestamp)
-        elif self.selection_criterion == SelectionEnum.selected_point:
-            point = self.sel_point_1
-            logging.info(f"Selecting by point 1: {point}")
-            selected_meas = self.dataset.get_measurement(*point)
-        else:
-            return None
-
-        if also_return_ref:
-            ref_meas = self.dataset.get_nearest_ref(selected_meas)
-            return ref_meas, selected_meas
-        else:
-            return selected_meas
-
-    def get_meas_quantities(self):
-        ref_meas, selected_meas = self.get_meas()
+    def get_meas_quantities(self, only_ret_quants=False):
+        ref_meas, selected_meas = self.get_selected_measurement()
         meas_quants = self.dataset.calc_meas_quantities(ref_meas, selected_meas)
 
         logging.info(f"Reference measurement: {ref_meas}")
@@ -278,11 +268,14 @@ class DataSetPlotter(ComponentBase):
         if self.plot_settings.remove_t_offset:
             meas_quants["sam_td"][:, 0] -= meas_quants["sam_td"][0, 0]
 
+        if only_ret_quants:
+            return meas_quants
+
         return ref_meas, selected_meas, meas_quants
 
     @action("Calculate quantity value", priority=1002)
     def calc_quant_value(self):
-        selected_meas = self.get_meas(also_return_ref=False)
+        selected_meas = self.get_selected_measurement(also_return_ref=False)
         sel_quant = self.get_selected_quantity()
         value = sel_quant.func(selected_meas)
 
@@ -292,12 +285,6 @@ class DataSetPlotter(ComponentBase):
             self.set_trait("quantity_value", s)
         else:
             logging.info("Selected quantity is not a scalar")
-
-    @action("Export measurement quantities")
-    def export_meas_quants(self):
-        label = self.plot_settings.label
-        _, _, meas_quants = self.get_meas_quantities()
-        self.dataset.export_as_csv(meas_quants, file_app=label)
 
     def set_time_axis_unit(self, axis):
         axis = axis.to("h")
@@ -555,6 +542,7 @@ class DataSetPlotter(ComponentBase):
         plt.plot(freq_axis[f_idx_range], y_db, label=label + " (Reference)")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Amplitude (dB)")
+        plt.draw()
 
         plt.figure(self.td_fig_num)
         plt.plot(ref_td[:, 0], ref_td[:, 1], label=label + " (Reference)")
@@ -563,11 +551,17 @@ class DataSetPlotter(ComponentBase):
         # plt.plot(ref_td[1:, 0], np.diff(np.abs(ref_td[:, 1])), label=label)
         plt.xlabel("Time (ps)")
         plt.ylabel("Amplitude (Arb. u.)")
+        plt.draw()
 
     @action("Waveform", group="Plots")
-    def plot_waveform(self):
-        ref_meas, selected_meas, meas_quants = self.get_meas_quantities()
-        point = selected_meas.position
+    def plot_waveform(self, point=None):
+        if point is not None:
+            sam_meas = self.dataset.get_measurement(*point)
+            ref_meas = self.dataset.get_nearest_ref(sam_meas)
+            meas_quants = self.dataset.calc_meas_quantities(ref_meas, sam_meas)
+        else:
+            ref_meas, sam_meas, meas_quants = self.get_meas_quantities()
+            point = sam_meas.position
 
         if not plt.fignum_exists(self.td_fig_num) or not plt.fignum_exists(self.fd_fig_num):
             self.plot_ref(ref_meas)
@@ -591,14 +585,18 @@ class DataSetPlotter(ComponentBase):
         if not np.isclose(td_scale, 1):
             td_label += f"\n(Amplitude x {td_scale})"
         plt.plot(sam_td[:, 0], td_scale * sam_td[:, 1], label=td_label)
+        plt.draw()
 
         plt.figure(self.fd_fig_num)
         y_db = (20 * np.log10(np.abs(sam_fd[f_idx_range, 1])) - noise_floor).real
         plt.plot(freq_axis[f_idx_range], y_db, label=label)
+        plt.draw()
+
+        return sam_meas
 
     @action("Phase plots", group="Phase plots")
     def plot_phase_plot(self):
-        selected_meas = self.get_meas(also_return_ref=False)
+        selected_meas = self.get_selected_measurement(also_return_ref=False)
 
         simple_eval_res = self.dataset.windowing_eval(selected_meas)
         phi = simple_eval_res["phi"][self.plot_idx_range]
@@ -626,12 +624,20 @@ class DataSetPlotter(ComponentBase):
         plt.ylabel("Phase (rad/THz)")
 
     @action("Plot selected quantity", group="Plots")
-    def plot_selected_quantity(self):
+    def plot_selected_quantity(self, point=None):
         fig_num_ext = self.plot_settings.fig_num_ext
-        ref_meas, selected_meas = self.get_meas()
+        if point is None:
+            ref_meas, selected_meas = self.get_selected_measurement()
+            point = selected_meas.position
+        else:
+            selected_meas = self.dataset.get_measurement(*point)
+            ref_meas = self.dataset.get_nearest_ref(selected_meas)
+
         sel_quant = self.get_selected_quantity()
         values = sel_quant.func(selected_meas)
         label = self.plot_settings.label
+        if not label:
+            label = f"(x,y)=({point[0]}, {point[1]})"
 
         if not isinstance(values, np.ndarray):
             logging.info("Selected quantity is a scalar")
@@ -659,12 +665,16 @@ class DataSetPlotter(ComponentBase):
             ax0.plot(self.plot_freq_axis, values.real, label=label)
             ax1.plot(self.plot_freq_axis, values.imag, label=label)
 
+        plt.draw()
+
+        return selected_meas
+
     @action("Phase difference", group="Phase plots")
     def plot_meas_phi_diff(self):
         label = self.plot_settings.label
         plot_range = self.plot_settings.plot_range
 
-        sam_meas0 = self.get_meas(also_return_ref=False)
+        sam_meas0 = self.get_selected_measurement(also_return_ref=False)
         sam_meas1 = self.dataset.get_measurement(x=self.sel_point_2[0], y=self.sel_point_2[1])
 
         simple_eval_res0 = self.dataset.windowing_eval(sam_meas0)
@@ -1145,6 +1155,32 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel(f"Measurement time (unit?)")
         plt.ylabel("Time (fs)")
 
+    def on_image_click(self, event):
+        if not self.enable_img_interaction:
+            return
+        if event.inaxes is None:
+            return
+        toolbar = event.canvas.toolbar
+        if toolbar is not None and toolbar.mode != "":
+            return
+
+        if event.button is MouseButton.LEFT:
+            dx = self.dataset.shape_properties["dx"]
+            dy = self.dataset.shape_properties["dy"]
+            x = round_dx(event.xdata, dx)
+            y = round_dx(event.ydata, dy)
+            point = (x, y)
+            if self.selected_quantity == QuantityEnum.P2P:
+                plotted_meas = self.plot_waveform(point)
+            else:
+                plotted_meas = self.plot_selected_quantity(point)
+
+
+        self._plot_meas_on_image(plotted_meas)
+
+        self.plt_show()
+
+
     @action("Plot image", group=image_grp, priority=1)
     def plot_image(self):
         shape_properties = self.img_shape
@@ -1194,6 +1230,7 @@ class DataSetPlotter(ComponentBase):
                          extent=axes_extent,
                          interpolation=self.plot_settings.pixel_interpolation.value
                          )
+
         if self.plot_settings.invert_x:
             ax.invert_xaxis()
         if self.plot_settings.invert_y:
@@ -1218,11 +1255,18 @@ class DataSetPlotter(ComponentBase):
             cbar_label = quant.label +" "+  quant.unit
             cbar.set_label(cbar_label, rotation=270, labelpad=30)
 
+        plt.connect('button_press_event', self.on_image_click)
+
         self.img_ax = ax
 
     def _plot_meas_on_image(self, measurements):
         if not plt.fignum_exists(self.image_fig_num):
             return
+        if measurements is None:
+            return
+
+        if isinstance(measurements, Measurement):
+            measurements = [measurements]
 
         plt.figure(num=self.image_fig_num)
         img_ax = self.img_ax
@@ -1379,15 +1423,19 @@ class DataSetPlotter(ComponentBase):
 
         return popt, pcov
 
-    def save_fig(self, fig_num_, filename=None, **kwargs):
-        save_dir = Path(self.settings.export_csv_dir)
+    def save_fig(self, fig_num_, **kwargs):
+        save_dir = self.settings.save_settings.path
         filetype = self.settings.save_settings.filetype
         kwargs.setdefault("dpi", self.settings.save_settings.dpi)
         kwargs.setdefault("bbox_inches", self.settings.save_settings.bbox_inches)
         kwargs.setdefault("pad_inches", self.settings.save_settings.pad_inches)
 
-        fig = plt.figure(fig_num_)
+        filename = str(fig_num_)
 
+        suffix = self.settings.save_settings.suffix
+        filename = str(fig_num_) if not suffix else str(fig_num_) + "_" + suffix
+
+        fig = plt.figure(fig_num_)
         if filename is None:
             try:
                 filename_s = str(fig.canvas.get_window_title())
@@ -1400,69 +1448,52 @@ class DataSetPlotter(ComponentBase):
         for char in illegal_chars:
             filename_s = filename_s.replace(char, '')
         filename_s.replace(" ", "_")
+        full_path = save_dir / (filename_s + str(filetype.value))
 
         w = self.settings.save_settings.set_size_inches
         fig.set_size_inches(w=w, forward=False)
         plt.subplots_adjust(wspace=0.3)
-        plt.savefig(save_dir / (filename_s + f".{filetype}"), **kwargs)
+        plt.savefig(full_path, **kwargs)
+
+        return full_path
 
     @action("Close all figures", group="Show / close plots")
     def close_figures(self):
         for fig_num in plt.get_fignums():
             plt.close(fig_num)
 
+    @action("Save open figures", group="Show / close plots")
+    def save_open_figures(self):
+        for i, fig_num in enumerate(plt.get_fignums()):
+            path = self.save_fig(fig_num)
+            logging.info(f"Saved figure {fig_num} to {path}")
+
     @action("Show plots", group="Show / close plots")
-    def plt_show(self, save_file_suffix=None, only_save_plots=False):
-
-        # fig_labels = [plt.figure(fig_num).get_label() for fig_num in plt.get_fignums()]
-        only_shown_fig_nums = []
-        if self.plot_settings.only_shown_figures:
-            only_shown_fig_nums = self.plot_settings.only_shown_figures
-            logging.warning(f"Only showing figures {self.plot_settings.only_shown_figures}")
-
-        if self.plot_settings.disable_legend:
-            figs_w_disabled_legends = self.plot_settings.disable_legend
-            logging.warning(f"Legends disabled for figure: {figs_w_disabled_legends}")
-
-        not_shown = []
-        for fig_num in plt.get_fignums():
+    def plt_show(self, save_file_suffix=None):
+        for i, fig_num in enumerate(plt.get_fignums()):
             fig = plt.figure(fig_num)
-            fig_label = fig.get_label()
             axes = fig.get_axes()
-            if not any([ax.get_legend() for ax in axes]):
-                for ax in axes:
-                    h, labels = ax.get_legend_handles_labels()
-                    if labels and not (fig_label in self.plot_settings.disable_legend):
-                        ax.legend()
+            for ax in axes:
+                leg = ax.get_legend()
+                h, labels = ax.get_legend_handles_labels()
+                if labels:
+                    if leg is not None:
+                        ax.legend(h, labels,
+                            loc=leg._loc,
+                            framealpha=leg.get_frame().get_alpha(),
+                        )
+                    else:
+                        ax.legend(h, labels)
 
             if self.settings.save_settings.save_plots:
-                save_file=None
-                if save_file_suffix:
-                    save_file = str(fig_num) + "_" + save_file_suffix
-                self.save_fig(fig_num, filename=save_file)
+                self.save_fig(fig_num)
 
-            if only_save_plots:
+            if self.settings.save_settings.only_save_plots:
+                if i == 0:
+                    logging.info("Showing plots disabled in settings. Only saving if enabled")
                 plt.close(fig_num)
                 continue
 
-            if only_shown_fig_nums and fig_label not in only_shown_fig_nums:
-                not_shown.append(fig_label)
-                plt.close(fig_num)
-                continue
-
-            shown_plots_dict = self.plot_settings.traits(group="Shown plots")
-            for shown_plot_num in shown_plots_dict:
-                if (shown_plot_num in fig_label) and (not shown_plots_dict[shown_plot_num]):
-                    not_shown.append(fig_label)
-                    plt.close(fig_num)
-            """
-            if fig_label in self.settings.shown_plots:
-                if not self.settings.shown_plots[fig_label]:
-                    not_shown.append(fig_label)
-                    plt.close(fig_num)"""
-
-        if not_shown:
-            logging.info(f"Not showing plots: {', '.join(not_shown)}")
         plt.show()
 
 

@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from PySide6.QtCore import QObject, Signal
 from functools import cached_property
+from enum import Enum
 
 """
 TODOs: 
@@ -51,6 +52,10 @@ New ideas: add teralyzer evaluation (time consuming)
 [l] = µm, [t] = ps, [alpha] = 1/cm (absorption coe.), [sigma] = S/cm, [eps0] = Siemens * ps,
 [f] = THz (1/ps), [c_thz] = µm/ps
 """
+
+class SelectionCriterionEnum(Enum):
+    selected_timestamp = "Timestamp"
+    selected_point = "Point"
 
 class DataSetInfoPane(ComponentBase):
 
@@ -122,6 +127,16 @@ class DataSet(ComponentBase):
     ref_pos = ValueRange([0, 0], group=reference_filter_group)
     fix_ref = Bool(False, group=reference_filter_group)
     ref_threshold = Float(0.95, group=reference_filter_group, min=0, max=1)
+
+    data_export_grp = "Data export"
+    export_csv_dir = TPath(Path(""), is_file=False).tag(name="Save directory", group=data_export_grp)
+    selection_criterion = TEnum(SelectionCriterionEnum,
+                                SelectionCriterionEnum.selected_point).tag(name="Select measurement by",
+                                                                           priority=-2, group=data_export_grp)
+    sel_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point (x, y)",
+                                                                             group=data_export_grp)
+    sel_timestamp = Unicode("").tag(name="Selected timestamp", group=data_export_grp)
+    data_export_label = Unicode("", group=data_export_grp)
 
     info_pane = Instance(DataSetInfoPane)
 
@@ -198,6 +213,17 @@ class DataSet(ComponentBase):
     def freq_axis(self):
         sample_data_fd = self.get_data(self.measurements["all"][0], domain=Domain.Frequency)
         return sample_data_fd[:, 0].real
+
+    @property
+    def active_selection_map(self):
+        return {
+            SelectionCriterionEnum.selected_timestamp: self.sel_timestamp,
+            SelectionCriterionEnum.selected_point: self.sel_point,
+        }
+
+    @property
+    def active_selection_id(self):
+        return self.active_selection_map.get(self.selection_criterion)
 
     @observe("data_path")
     def _set_path(self, change=None):
@@ -627,6 +653,21 @@ class DataSet(ComponentBase):
         found_meas = np.array(meas_at_pos)[meas_idx_range]
 
         return found_meas
+
+    def get_selected_measurement(self, criterion=None, identifier=None, also_return_ref=True):
+        criterion = criterion or self.selection_criterion
+        identifier = identifier if identifier is not None else self.active_selection_id
+
+        handlers = {
+            SelectionCriterionEnum.selected_timestamp: self.get_measurement_from_timestamp,
+            SelectionCriterionEnum.selected_point: lambda pt: self.get_measurement(*pt),
+        }
+
+        handler = handlers.get(criterion)
+
+        selected_meas = handler(identifier)
+
+        return (self.get_nearest_ref(selected_meas), selected_meas) if also_return_ref else selected_meas
 
     def get_arb_line(self, p0, p1):
         # Bresenham's_line_algorithm
@@ -1207,15 +1248,25 @@ class DataSet(ComponentBase):
         val = (m2.meas_time - m1.meas_time).total_seconds()
         return Q_(val, "s")
 
+    @action("Export measurement quantities", group=data_export_grp)
+    def export_meas_quants(self):
+        label = self.data_export_label
+        ref_meas, selected_meas = self.get_selected_measurement()
+        meas_quants = self.calc_meas_quantities(ref_meas, selected_meas)
+
+        self.export_as_csv(meas_quants, file_app=label)
+
     def export_as_csv(self, dict_, file_app=""):
-        save_dir = self.settings.export_csv_dir
-        save_path = save_dir / f"plotted_data_{file_app}.csv"
+        save_dir = self.export_csv_dir
+        if not file_app:
+            file_app = datetime.now().isoformat().replace(':', '-')
+        save_path = save_dir / f"exported_data_{file_app}.csv"
         logging.info(f"Exporting data to {save_path}")
 
         exp_dict = {}
         for k in dict_:
             if isinstance(dict_[k], np.ndarray):
-                if dict_[k].ndim != 1:
+                if dict_[k].ndim == 2:
                     arr = dict_[k][:, 1]
                 else:
                     arr = dict_[k]
@@ -1223,6 +1274,8 @@ class DataSet(ComponentBase):
                     exp_dict[k] = arr
 
         df = pd.DataFrame(exp_dict)
+        df = df.astype(str)
+        df = df.apply(lambda col: col.str.replace(r"^\((.*)\)$", r"\1", regex=True))
         df.to_csv(save_path, index=False)
 
     def print_ret(self, ret_, label=""):
@@ -1267,8 +1320,6 @@ class DataSet(ComponentBase):
                 msg += "\n"
 
             logging.info(msg)
-
-
 
 if __name__ == '__main__':
     options = {

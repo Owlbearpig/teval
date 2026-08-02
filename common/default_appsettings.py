@@ -67,6 +67,11 @@ class Direction(Enum):
     Horizontal = 0
     Vertical = 1
 
+class Filetype(Enum):
+    pdf = ".pdf"
+    png = ".png"
+    jpg = ".jpg"
+
 
 class WindowTypes(Enum):
     tukey = "tukey"
@@ -338,14 +343,15 @@ class SampleProperties(ComponentBase):
 
 
 class SaveSettings(ComponentBase):
-    path = TPath(Path(""))
-    filetype = Unicode("pdf")
-    suffix = Unicode("")
+    path = TPath(Path(""), is_file=False).tag(name="Save directory")
+    filetype = TEnum(Filetype, Filetype.jpg).tag(name="File type")
+    suffix = Unicode("").tag(name="Filename suffix")
     bbox_inches = Unicode("tight")
     dpi = Int(300)
     pad_inches = Int(0)
     set_size_inches = TList([12.0, 9.0])
     save_plots = Bool(False)
+    only_save_plots = Bool(False).tag(name="Hide plots (only save if enabled)")
 
 class PlotOpt(ComponentBase):
     plot_range = ValueRange([Q_(0.05, "THz"), Q_(3.5, "THz")], metadata={"priority": 1, "readonly": False})
@@ -379,7 +385,6 @@ class PlotOpt(ComponentBase):
     fig_num_ext = Unicode("")
 
     plot_zero_crossing = Bool(False)
-    disable_legend = TList(Int(), default_value=[])
 
     image_group = "Image"
     excluded_areas = TAny(None, allow_none=True, group=image_group)
@@ -394,24 +399,9 @@ class PlotOpt(ComponentBase):
     en_cbar_label = Bool(True, group=image_group)
     en_cbar_lim = Bool(default_value=False, group=image_group)
 
-    shown_plots_group = "Shown plots"
-    window = Bool(True, group=shown_plots_group)
-    time_domain = Bool(True, group=shown_plots_group)
-    spectrum = Bool(True, group=shown_plots_group)
-    phase = Bool(True, group=shown_plots_group)
-    phase_slope = Bool(False, group=shown_plots_group)
-    amplitude_transmission = Bool(False, group=shown_plots_group)
-    absorbance = Bool(False, group=shown_plots_group)
-    refractive_index = Bool(False, group=shown_plots_group)
-    absorption_coefficient = Bool(False, group=shown_plots_group)
-    conductivity = Bool(False, group=shown_plots_group)
-
-    only_shown_figures = TList(TAny(), default_value=[])
-
 
 class AppSettings(ComponentBase):
     log_level = TEnum(LogLevel, default_value=LogLevel.info)
-    export_csv_dir = TPath(Path(""))
 
     save_settings = Instance(SaveSettings, args=())
     pp_opt = Instance(PpOpt, args=())
