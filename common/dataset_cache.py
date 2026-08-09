@@ -14,6 +14,13 @@ def _generate_id_map(measurements):
     return dict(zip(ids, meas_idx_list))
 
 
+def _generate_filepath_map(measurements):
+    filepath_map = {}
+    for meas in measurements:
+        filepath_map[meas.filepath] = meas
+
+    return filepath_map
+
 class DatasetCache:
 
     def __init__(self, measurements, data_dir, signal_carrier=None):
@@ -22,11 +29,11 @@ class DatasetCache:
         self.coord_map = self._generate_coord_map(measurements)
 
         self.id_map = _generate_id_map(measurements)
+        self.filepath_map = _generate_filepath_map(measurements)
 
         self.data_dir = data_dir
         self.raw_data_td, self.raw_data_fd = self._make_cache(measurements)
         self.path = None
-
 
     def _generate_coord_map(self, measurements):
         coord_map = {}

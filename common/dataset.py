@@ -1,6 +1,7 @@
 from common.components import ComponentBase
 from common.default_appsettings import Dist, ReferenceSelection
 from common.settings import Settings
+from common.measurement_selection import MeasurementSelection, SelectionCriterionEnum
 from pathlib import Path
 import numpy as np
 from common.functions import window, butter_filt, do_fft, f_axis_idx_map, remove_offset, arr_statistics
@@ -18,12 +19,11 @@ from scipy.stats import pearsonr
 from common.default_appsettings import Domain, QuantityEnum
 from common.components import action
 import itertools
-from traitlets import Unicode, observe, Float, Bool, Enum as TEnum, Instance
+from traitlets import Unicode, observe, Float, Bool, Enum as TEnum, Instance, Int
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from PySide6.QtCore import QObject, Signal
 from functools import cached_property
-from enum import Enum
 
 """
 TODOs: 
@@ -52,10 +52,6 @@ New ideas: add teralyzer evaluation (time consuming)
 [l] = µm, [t] = ps, [alpha] = 1/cm (absorption coe.), [sigma] = S/cm, [eps0] = Siemens * ps,
 [f] = THz (1/ps), [c_thz] = µm/ps
 """
-
-class SelectionCriterionEnum(Enum):
-    selected_timestamp = "Timestamp"
-    selected_point = "Point"
 
 class DataSetInfoPane(ComponentBase):
 
@@ -113,20 +109,23 @@ def logger_config(settings):
     logger.setLevel(log_level)
 
 class DataSet(ComponentBase):
-    data_path = TPath(Path("."), is_file=False).tag(priority=-100, name="Dataset path",
+    data_path = TPath(Path(r"C:\Users\alexj\Data\IPHT2\Filter_coated\img0"), is_file=False).tag(priority=-100, name="Dataset path",
                                                     fullwidth=True).tag(priority=-2)
     caching_progress = Float(0, min=0, max=1, read_only=True).tag(name="Caching progress", priority=-1)
     is_initialized = Bool(False, read_only=True).tag(name="Dataset Initialized")
 
     dist_func = TEnum(Dist, default_value=Dist.Time).tag(priority=1000, name="Measurement distance function")
+    sub_linked = Bool(False, read_only=True).tag(name="Substrate dataset linked")
 
-    reference_filter_group = "Reference filter"
+    reference_filter_group = "Reference classification"
     ref_selection = TEnum(ReferenceSelection,
                           default_value=ReferenceSelection.point_as_ref,
-                          group=reference_filter_group)
-    ref_pos = ValueRange([0, 0], group=reference_filter_group)
-    fix_ref = Bool(False, group=reference_filter_group)
-    ref_threshold = Float(0.95, group=reference_filter_group, min=0, max=1)
+                          group=reference_filter_group).tag(name="Reference selection criteria")
+    ref_pos = ValueRange([0, 0], group=reference_filter_group).tag(name="Reference position")
+    fix_ref = Bool(False, group=reference_filter_group).tag(name="Use fixed reference")
+    fix_ref_idx = Int(0, min=-1, group=reference_filter_group).tag(name="Fixed reference index")
+    ref_threshold = Float(0.95, group=reference_filter_group, min=0, max=1,
+                          help="Threshold relative to maximum amplitude measurement").tag(name="Reference threshold")
 
     data_export_grp = "Data export"
     export_csv_dir = TPath(Path(""), is_file=False).tag(name="Save directory", group=data_export_grp)
@@ -136,9 +135,12 @@ class DataSet(ComponentBase):
     sel_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point (x, y)",
                                                                              group=data_export_grp)
     sel_timestamp = Unicode("").tag(name="Selected timestamp", group=data_export_grp)
-    data_export_label = Unicode("", group=data_export_grp)
+    string_match = Unicode("").tag(name="Filter string", group=data_export_grp)
+    data_export_label = Unicode("", group=data_export_grp).tag(name="Data export label")
 
     info_pane = Instance(DataSetInfoPane)
+
+    measurement_selector = Instance(MeasurementSelection)
 
     def __init__(self, settings : Settings, **kwargs):
         super().__init__(**kwargs)
@@ -151,9 +153,10 @@ class DataSet(ComponentBase):
 
         self.cache = None
         self.sub_dataset = None
-        self.is_sub_dataset = False
 
         self.settings = settings
+
+        self.measurement_selector = MeasurementSelection(self)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.settings.save_configuration(self)
@@ -205,25 +208,30 @@ class DataSet(ComponentBase):
         return np.mean(self.time_diffs)
 
     @property
-    def time_axis(self):
+    def sample_data_td(self):
         sample_data_td = self.get_data(self.measurements["all"][0], domain=Domain.Time)
-        return sample_data_td[:, 0].real
+        return sample_data_td
+
+    @property
+    def sample_data_fd(self):
+        sample_data_fd = self.get_data(self.measurements["all"][0], domain=Domain.Frequency)
+        return sample_data_fd
+
+    @property
+    def time_axis(self):
+        return self.sample_data_td[:, 0].real
 
     @property
     def freq_axis(self):
-        sample_data_fd = self.get_data(self.measurements["all"][0], domain=Domain.Frequency)
-        return sample_data_fd[:, 0].real
+        return self.sample_data_fd[:, 0].real
 
     @property
-    def active_selection_map(self):
-        return {
-            SelectionCriterionEnum.selected_timestamp: self.sel_timestamp,
-            SelectionCriterionEnum.selected_point: self.sel_point,
-        }
+    def td_shape(self):
+        return self.sample_data_td.shape
 
     @property
-    def active_selection_id(self):
-        return self.active_selection_map.get(self.selection_criterion)
+    def fd_shape(self):
+        return self.sample_data_fd.shape
 
     @observe("data_path")
     def _set_path(self, change=None):
@@ -487,7 +495,7 @@ class DataSet(ComponentBase):
             if not refs_:
                 logging.info(f"No explicit references found in the dataset based on filename ({id_str}).")
         elif ref_filter == ReferenceSelection.point_as_ref:
-            refs_ = [self.get_measurement(*manual_pos)]
+            refs_ = [self.get_measurement_from_point(*manual_pos)]
             logging.warning(f"Using measurement closest to {manual_pos} as ref. (ref: {refs_[0]})")
         elif ref_filter == ReferenceSelection.horizontal_line_as_ref:
             y = manual_pos[1]
@@ -533,9 +541,9 @@ class DataSet(ComponentBase):
     def link_sub_dataset(self, dataset_):
         if dataset_ is None:
             return
-        dataset_.is_sub_dataset = True
+
         self.sub_dataset = dataset_
-        self.settings.eval_opt.set_trait("substrate_dataset_linked", True)
+        self.set_trait("sub_linked", True)
 
     def _pre_process(self, meas_):
         pp_opt = self.settings.pp_opt
@@ -547,10 +555,11 @@ class DataSet(ComponentBase):
             data_td = remove_offset(data_td)
 
         if pp_opt.window_enabled:
-            data_td = window(data_td, **pp_opt.traits())
+            win_kwargs = {k: getattr(pp_opt, k) for k in pp_opt.traits()}
+            data_td = window(data_td, **win_kwargs)
 
         if pp_opt.filter_enabled:
-            data_td = butter_filt(data_td, pp_opt.f_range)
+            data_td = butter_filt(data_td, pp_opt.f_range.magnitude)
 
         return data_td
 
@@ -565,14 +574,11 @@ class DataSet(ComponentBase):
         elif domain == Domain.Frequency:
             return do_fft(data_td)
         else:
-            return data_td, do_fft(data_td)
+            return np.array([data_td, do_fft(data_td)])
 
     def _get_multi_data(self, meas_list, domain=Domain.Both):
-        y0_td = self.get_data(meas_list[0])
-        y0_fd = do_fft(y0_td)
-
-        data_td = np.zeros([len(meas_list), *y0_td.shape])
-        data_fd = np.zeros([len(meas_list), *y0_fd.shape], dtype=complex)
+        data_td = np.zeros([len(meas_list), *self.td_shape])
+        data_fd = np.zeros([len(meas_list), *self.fd_shape], dtype=complex)
 
         for meas_idx, meas in enumerate(meas_list):
             data_td[meas_idx] = self._pre_process(meas)
@@ -583,9 +589,9 @@ class DataSet(ComponentBase):
         elif domain == Domain.Frequency:
             return data_fd
         else:
-            return data_td, data_fd
+            return np.array([data_td, data_fd])
 
-    def get_measurement(self, x, y, return_single=True):
+    def get_measurement_from_point(self, x, y, return_single=True):
         if self.cache is None:
             logging.info("Cache not loaded, check dataset path")
             return None
@@ -628,6 +634,21 @@ class DataSet(ComponentBase):
 
         return found_meas
 
+    def get_measurement_from_string(self, string=""):
+        if not string:
+            logging.warning("No filter string set. Returning first measurement")
+            return self.measurements["all"][0]
+
+        found_meas = None
+        for meas in self.measurements["all"]:
+            if string in meas.filepath.name:
+                found_meas = meas
+
+        if found_meas is None:
+            logging.warning(f"No measurement containing the string {string} in the filename found in dataset")
+
+        return found_meas
+
     def get_consecutive_meas(self, meas_):
         # measurements with same position as meas_ sampled without interruption (compared to avg meas time)
         coord_map_key = self.cache.coord_map_key_func(meas_.position)
@@ -654,18 +675,32 @@ class DataSet(ComponentBase):
 
         return found_meas
 
-    def get_selected_measurement(self, criterion=None, identifier=None, also_return_ref=True):
-        criterion = criterion or self.selection_criterion
-        identifier = identifier if identifier is not None else self.active_selection_id
+    def get_meas_from_filenames(self):
+        ref_paths = self.measurement_selector.references.selected_paths
+        sam_paths = self.measurement_selector.samples.selected_paths
 
+        ref_meas_list = [self.cache.filepath_map[p] for p in ref_paths]
+        sam_meas_list = [self.cache.filepath_map[p] for p in sam_paths]
+
+        return ref_meas_list, sam_meas_list
+
+    def get_selected_measurement(self, also_return_ref=True):
+        identifier_map = {
+            SelectionCriterionEnum.file_selection: None,
+            SelectionCriterionEnum.selected_timestamp: self.measurement_selector.sel_timestamp,
+            SelectionCriterionEnum.selected_point: self.measurement_selector.sel_point,
+            SelectionCriterionEnum.string_search: self.measurement_selector.string_match,
+        }
         handlers = {
+            SelectionCriterionEnum.file_selection: self.get_meas_from_filenames,
             SelectionCriterionEnum.selected_timestamp: self.get_measurement_from_timestamp,
-            SelectionCriterionEnum.selected_point: lambda pt: self.get_measurement(*pt),
+            SelectionCriterionEnum.selected_point: lambda pnt: self.get_measurement_from_point(*pnt),
+            SelectionCriterionEnum.string_search: self.get_measurement_from_string,
         }
 
-        handler = handlers.get(criterion)
-
-        selected_meas = handler(identifier)
+        handler = handlers[self.selection_criterion]
+        identifier = identifier_map[self.selection_criterion]
+        selected_meas = handler(identifier) if identifier else handler()
 
         return (self.get_nearest_ref(selected_meas), selected_meas) if also_return_ref else selected_meas
 
@@ -703,7 +738,7 @@ class DataSet(ComponentBase):
                 err += dx
                 curr_y += sy
 
-        meas_list = [self.get_measurement(*p) for p in points]
+        meas_list = [self.get_measurement_from_point(*p) for p in points]
         meas_list = list(dict.fromkeys(meas_list))
         points = [meas.position for meas in meas_list]
 
@@ -718,9 +753,9 @@ class DataSet(ComponentBase):
 
         # vertical direction / slice
         if x is not None:
-            ret = [self.get_measurement(x, y_) for y_ in y_coords], y_coords
+            ret = [self.get_measurement_from_point(x, y_) for y_ in y_coords], y_coords
         else:  # horizontal direction / slice
-            ret = [self.get_measurement(x_, y) for x_ in x_coords], x_coords
+            ret = [self.get_measurement_from_point(x_, y) for x_ in x_coords], x_coords
 
         if limits is None:
             return ret
@@ -756,9 +791,9 @@ class DataSet(ComponentBase):
 
     def get_ref_data(self, domain=Domain.Time, point=None, ref_idx=None, ret_meas=False):
         if self.fix_ref is not False:
-            chosen_ref = self.measurements["refs"][self.fix_ref]
+            chosen_ref = self.measurements["refs"][self.fix_ref_idx]
         elif point is not None:
-            closest_sam = self.get_measurement(*point)
+            closest_sam = self.get_measurement_from_point(*point)
             chosen_ref = self.get_nearest_ref(closest_sam)
         else:
             if ref_idx is None:
@@ -776,12 +811,6 @@ class DataSet(ComponentBase):
             return ret, chosen_ref
         else:
             return ret
-
-    def get_ref_sam_meas(self, point):
-        sam_meas = self.get_measurement(*point)
-        ref_meas = self.get_nearest_ref(sam_meas)
-
-        return ref_meas, sam_meas
 
     def _calc_ndim_quant(self, *arrs, op, out_like=None):
         ndim = arrs[0].ndim
@@ -835,10 +864,9 @@ class DataSet(ComponentBase):
 
             ref_td, ref_fd = self.get_data(ref_meas_, Domain.Both)
             sam_td, sam_fd = self.get_data(meas_, Domain.Both)
-
         else:
             ref_meas_list = self.get_consecutive_meas(ref_meas_)
-            sam_meas_list = self.get_measurement(*meas_.position, return_single=False)
+            sam_meas_list = self.get_measurement_from_point(*meas_.position, return_single=False)
 
             logging.info("Average measurement evaluation")
             logging.info(f"Reference measurement list (count: {len(ref_meas_list)}):")
@@ -865,12 +893,7 @@ class DataSet(ComponentBase):
         return meas_quants
 
     def windowing_eval(self, meas_):
-        if self.settings.sample_properties.default_values:
-            sam_props = self.settings.sample_properties
-            sam_prop_dict = {k: getattr(sam_props, k) for k in sam_props.traits()}
-            logging.warning(f"Using default sample properties: {sam_prop_dict}")
-
-        d = self.settings.sample_properties.d.magnitude
+        d = self.settings.eval_opt.d.magnitude
 
         og_pp_opt_state = {name: trait.get(self.settings.pp_opt)
                            for name, trait in self.settings.pp_opt.traits().items()}
@@ -940,7 +963,7 @@ class DataSet(ComponentBase):
             single_layer_approx = self.sub_dataset.single_layer_eval(meas)
             t = self.sub_dataset.transmission(meas)
         else:
-            meas = self.get_measurement(*sub_pnt)
+            meas = self.get_measurement_from_point(*sub_pnt)
             single_layer_approx = self.windowing_eval(meas)
             t = self.transmission(meas)
 
@@ -1122,7 +1145,6 @@ class DataSet(ComponentBase):
 
     def transmission(self, meas_, phase_sign=1):
         ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Frequency)
-
         sam_fd = self.get_data(meas_, Domain.Frequency)
 
         t = sam_fd[:, 1] / ref_fd[:, 1]
@@ -1192,7 +1214,7 @@ class DataSet(ComponentBase):
         n_sub = sub_properties["single_layer_approx"]["refr_idx"]
         t_sub = sub_properties["t"]
 
-        d_film = self.settings.sample_properties.d_film.magnitude
+        d_film = self.settings.eval_opt.d_film.magnitude
         if np.isclose(d_film, 0):
             d_film = 1e-3
 

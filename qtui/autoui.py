@@ -1,10 +1,11 @@
 from PySide6 import QtWidgets, QtCore, QtGui
 from traitlets import Integer, Float, Unicode, Bool, Tuple, Enum
+from common.measurement_selection import MeasurementSelection
 from qtui.changeindicatorspinbox import ChangeIndicatorSpinBox
 from qtui.changeindicatorlineedit import ChangeIndicatorLineEdit
 from common.components import ComponentBase
 from traitlets import Instance
-from common.traits import Quantity, Path as PathTrait, ValueRange
+from common.traits import Quantity, Path as PathTrait, ValueRange, MultiPathSelection, MultiPathClass
 from pathlib import Path
 import types
 import logging
@@ -399,6 +400,48 @@ def create_path_selector(component, name, prettyName, trait):
 
     return layout
 
+
+def create_tree_path_selector(component, name, prettyName, trait):
+    container = QtWidgets.QWidget()
+    layout = QtWidgets.QVBoxLayout(container)
+    layout.setContentsMargins(0, 0, 0, 0)
+
+    model = QtWidgets.QFileSystemModel()
+    root_path = getattr(trait.get(component), "root_path", None)
+    initial_path = str(root_path) if root_path is not None else QtCore.QDir.homePath()
+    model.setRootPath(initial_path)
+    model.setNameFilters(["*.txt"])
+
+    tree = QtWidgets.QTreeView()
+    tree.setModel(model)
+    tree.hideColumn(1)  # Size
+    tree.hideColumn(2)  # Type
+    tree.hideColumn(3)  # Date Modified
+    tree.setRootIndex(model.index(initial_path))
+    tree.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+
+    tree.setMinimumHeight(180)
+
+    def update_trait_selection():
+        selected_indexes = tree.selectionModel().selectedRows(column=0)
+        paths = [Path(model.filePath(idx)) for idx in selected_indexes]
+        root_path = Path(model.rootPath())
+        multi_path_class = MultiPathClass(root_path, paths)
+        setattr(component, name, multi_path_class)
+        tree.setRootIndex(model.index(str(root_path)))
+
+    tree.selectionModel().selectionChanged.connect(lambda *args: update_trait_selection())
+
+    def update_root(change):
+        new_path_str = str(getattr(change["new"], "root_path"))
+        model.setRootPath(new_path_str)
+        tree.setRootIndex(model.index(new_path_str))
+
+    component.observe(update_root, name)
+
+    layout.addWidget(tree)
+    return container
+
 def create_plot_area(component, name, prettyName, trait):
     def draw(change):
         canvas.set_canvas_values(change["new"],
@@ -490,6 +533,8 @@ def generate_component_ui(name, component):
         if trait.metadata.get("fullwidth", False):
             groups[group].fullwidth = True
 
+        groups[group].combine = trait.metadata.get("combine", False)
+
         field_widget = None
         if (isinstance(trait, ValueRange)):
             field_widget = create_range_entry(component, name, trait)
@@ -513,12 +558,19 @@ def generate_component_ui(name, component):
                 field_widget = create_lineedit(component, name, trait)
         elif isinstance(trait, PathTrait):
                 field_widget = create_path_selector(component, name, prettyName, trait)
+        elif isinstance(trait, MultiPathSelection):
+            field_widget = create_tree_path_selector(component, name, prettyName, trait)
 
         if field_widget:
-            label_widget = QtWidgets.QLabel(prettyName + ": ")
-            layout.addRow(label_widget, field_widget)
+            if isinstance(trait, MultiPathSelection):
+                label_widget = None
+                layout.addRow(field_widget)
+            else:
+                label_widget = QtWidgets.QLabel(prettyName + ": ")
+                layout.addRow(label_widget, field_widget)
             controlWidget.param_widgets[name] = (label_widget, field_widget)
-        elif callable(trait):
+
+        if callable(trait):
             qaction = create_action(component, trait)
             qaction.setParent(controlWidget)
             btn = QtWidgets.QToolButton()
@@ -526,15 +578,36 @@ def generate_component_ui(name, component):
             layout.addRow(None, btn)
 
     controlLayout = FlowLayout(controlWidget)
-    for i, group in enumerate(groups.values()):
-        controlLayout.addWidget(group)
-
     scrollArea = QtWidgets.QScrollArea()
     scrollArea.setFrameStyle(QtWidgets.QFrame.NoFrame)
     scrollArea.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
     scrollArea.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOn)
     scrollArea.setWidgetResizable(True)
-    scrollArea.setWidget(controlWidget)
+
+    for group in groups.values():
+        if not group.combine:
+            controlLayout.addWidget(group)
+
+    if isinstance(component, MeasurementSelection):
+        vSplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        vSplitter.setChildrenCollapsible(False)
+
+        hSplitter = QtWidgets.QSplitter()
+        hSplitter.setStretchFactor(1, 0)
+        hSplitter.setStretchFactor(0, 1)
+        hSplitter.setChildrenCollapsible(False)
+        for group in groups.values():
+            if group.combine:
+                hSplitter.addWidget(group)
+
+        vSplitter.addWidget(controlWidget)
+        vSplitter.addWidget(hSplitter)
+        vSplitter.setStretchFactor(0, 0)
+        vSplitter.setStretchFactor(1, 1)
+        scrollArea.setWidget(vSplitter)
+    else:
+        scrollArea.setWidget(controlWidget)
+
 
     class ViewportResizeFilter(QtCore.QObject):
         def eventFilter(self, obj, event):
@@ -545,12 +618,13 @@ def generate_component_ui(name, component):
                 for box in groups.values():
                     if getattr(box, "fullwidth", False):
                         box.setFixedWidth(max(viewport_width, 0))
+                    elif getattr(box, "halfwidth", False):
+                        box.setFixedWidth(max(viewport_width/2, 0))
 
             return super().eventFilter(obj, event)
 
     controlWidget._resize_filter = ViewportResizeFilter()
     scrollArea.viewport().installEventFilter(controlWidget._resize_filter)
-
     scrollArea.setMinimumWidth(scrollArea.sizeHint().width())
 
     if not groups:
@@ -571,14 +645,14 @@ def generate_component_ui(name, component):
 
         plotBox.addWidget(create_plot_area(component, name, prettyName, trait))
 
-    splitter = QtWidgets.QSplitter()
-    splitter.addWidget(plotWidget)
-    splitter.addWidget(scrollArea)
-    splitter.setStretchFactor(1, 0)
-    splitter.setStretchFactor(0, 1)
-    splitter.setChildrenCollapsible(False)
+    hSplitter = QtWidgets.QSplitter()
+    hSplitter.addWidget(plotWidget)
+    hSplitter.addWidget(scrollArea)
+    hSplitter.setStretchFactor(1, 0)
+    hSplitter.setStretchFactor(0, 1)
+    hSplitter.setChildrenCollapsible(False)
 
-    return splitter
+    return hSplitter
 
 def generate_ui(component):
     stack = QtWidgets.QStackedWidget()

@@ -8,6 +8,7 @@ from traitlets import (Bool, Int, Float, Unicode, Tuple,
 
 from common.components import ComponentBase
 from common.traits import ValueRange, Path as TPath, Q_, Quantity as TQuantity
+from common.functions import WindowTypes
 
 class SimRISelection(Enum):
     const = 0
@@ -71,12 +72,6 @@ class Filetype(Enum):
     pdf = ".pdf"
     png = ".png"
     jpg = ".jpg"
-
-
-class WindowTypes(Enum):
-    tukey = "tukey"
-    hannin = "hanning"
-    rectangular = "rectangular"
 
 class ColorMaps(Enum):
     magma = "magma"
@@ -294,75 +289,77 @@ class QuantityEnum(Enum):
 
 
 class EvalOpt(ComponentBase):
-    dt = TQuantity(Q_(0.0, "fs"))
-    fit_range = ValueRange([Q_(0.50, "THz"), Q_(2.20, "THz")])
-    q_space_range = ValueRange([Q_(0.75, "THz"), Q_(2.00, "THz")])
-    phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")])
-    average = Bool(False)
-    delta_d = TQuantity(Q_(2.0, "µm"))
+    dt = TQuantity(Q_(0.0, "fs")).tag(name="Conductivity pulse shift")
+    fit_range = ValueRange([Q_(0.50, "THz"), Q_(2.20, "THz")]).tag(name="Fit range")
+    q_space_range = ValueRange([Q_(0.75, "THz"), Q_(2.00, "THz")]).tag(name="Q-space minimization range")
+    phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(name="Phase correction fit range")
+    average = Bool(False,
+                   help="Average over consecutive measurements with same position").tag(name="Average measurements")
+    delta_d = TQuantity(Q_(2.0, "µm")).tag(name="Thickness uncertainty")
     fp_count = Int(0).tag(name="Number of Fabry-Perots")
-    phi_offset_correction = Bool(True)
+    phi_offset_correction = Bool(True).tag(name="Phase offset correction")
     printed_freqs = TList(trait=Float(), default_value=[1.000, 2.000])
-    d_opt_axis = TAny(None, allow_none=True)
 
-    sim_d = TQuantity(Q_(100, "µm"), group="Transmission simulation")
-    sim_h = TQuantity(Q_(1, "µm"), group="Transmission simulation")
-    sim_nfp = Int(8, group="Transmission simulation").tag(name="Fabry perot count")
-    sim_shift = TQuantity(Q_(0, "fs"), group="Transmission simulation")
+    d = TQuantity(Q_(0.0, "µm")).tag(name="Sample thickness")
+    d_film = TQuantity(Q_(0.0, "µm")).tag(name="Film thickness")
+    fp_spacing = TQuantity(Q_(12, "fs")).tag(name="Approximate Fabry-perot spacing")
+
+    transmission_sim_grp = "Transmission simulation"
+    sim_d = TQuantity(Q_(100, "µm"), group=transmission_sim_grp).tag(name="Simulation thickness")
+    sim_h = TQuantity(Q_(1, "µm"), group=transmission_sim_grp).tag(name="Simulation film thickness")
+    sim_nfp = Int(8, group=transmission_sim_grp).tag(name="Fabry perot count")
+    sim_shift = TQuantity(Q_(0, "fs"), group=transmission_sim_grp).tag(name="Added phase shift")
     sim_n_sub = ValueRange([1, 0],
-                           group="Transmission simulation").tag(name="Refractive index sub. (real, imag)")
+                           group=transmission_sim_grp).tag(name="Refractive index sub. (real, imag)")
     sim_n_film = ValueRange([1, 0],
-                           group="Transmission simulation").tag(name="Refractive index film (real, imag)")
-    sim_n_selection = TEnum(SimRISelection, SimRISelection.const, group="Transmission simulation")
+                           group=transmission_sim_grp).tag(name="Refractive index film (real, imag)")
+    sim_n_selection = TEnum(SimRISelection, SimRISelection.const,
+                            group=transmission_sim_grp).tag(name="Simulation refractive index")
 
-    use_sub_dataset = Bool(False, group="Conductivity").tag(name="Use separate substrate dataset")
-    sub_pnt = ValueRange([0, 0], group="Conductivity").tag(name="Substrate point")
-    substrate_dataset_linked = Bool(False, group="Conductivity",
-                                    read_only=True).tag(name="Substrate dataset linked")
+    conductivity_calc_grp = "Conductivity calculation"
+    use_sub_dataset = Bool(False, group=conductivity_calc_grp).tag(name="Use separate substrate dataset")
+    sub_pnt = ValueRange([0, 0], group=conductivity_calc_grp).tag(name="Substrate point")
 
 class PpOpt(ComponentBase):
+    remove_dc = Bool(True).tag(name="Subtract DC")
+
     window_group = "Window options"
-    window_enabled = Bool(False, group=window_group, name="Enabled")
-    win_width = Int(10, group=window_group)
-    shift = Float(0, group=window_group).tag(name="Window shift")
-    slope = Float(0.15, group=window_group)
-    en_plot = Bool(False, group=window_group)
-    type = TEnum(WindowTypes, default_value=WindowTypes.tukey, group=window_group)
+    window_enabled = Bool(False, group=window_group, name="Enabled").tag(name="Enable window")
+    win_width = Int(10, group=window_group).tag(name="Window width").tag(name="Window width")
+    shift = Float(0, group=window_group).tag(name="Window shift").tag(name="Window shift")
+    slope = Float(0.15, group=window_group).tag(name="Tukey slope")
+    en_plot = Bool(False, group=window_group).tag(name="Enable window plot")
+    type = TEnum(WindowTypes, default_value=WindowTypes.tukey, group=window_group).tag(name="Window type")
 
-    filter_group = "Filter options"
-    filter_enabled = Bool(False, group=filter_group, name="Enabled")
-    f_range = Tuple(Float(), Float(), default_value=(0.3, 3.0), group=filter_group)
-    remove_dc = Bool(True, group=filter_group)
-
-class SampleProperties(ComponentBase):
-    d = TQuantity(Q_(0.0, "µm"))
-    d_film = TQuantity(Q_(0.0, "µm")).tag(name="Film thickness")
-    layers = Int(1)
-    default_values = Bool(True, read_only=True)
-    fp_spacing = TQuantity(Q_(12, "fs"))
+    filter_group = "Frequency filter options"
+    filter_enabled = Bool(False, group=filter_group, name="Enabled").tag(name="Enable filter")
+    f_range = ValueRange([Q_(0.35, "THz"), Q_(3.0, "THz")], group=filter_group).tag(name="Filter range")
 
 
 class SaveSettings(ComponentBase):
     path = TPath(Path(""), is_file=False).tag(name="Save directory")
     filetype = TEnum(Filetype, Filetype.jpg).tag(name="File type")
     suffix = Unicode("").tag(name="Filename suffix")
-    bbox_inches = Unicode("tight")
-    dpi = Int(300)
-    pad_inches = Int(0)
-    set_size_inches = TList([12.0, 9.0])
-    save_plots = Bool(False)
+    bbox_inches = Unicode("tight", help="Should be set to tight").tag(name="Bounding box")
+    dpi = Int(300).tag(name="DPI")
+    pad_inches = Int(0).tag(name="Pad inches")
+    set_size_inches = TList([12.0, 9.0]).tag(name="Set size inches")
+    save_plots = Bool(False).tag(name="Enable saving of plots")
     only_save_plots = Bool(False).tag(name="Hide plots (only save if enabled)")
 
 class PlotOpt(ComponentBase):
-    plot_range = ValueRange([Q_(0.05, "THz"), Q_(3.5, "THz")], metadata={"priority": 1, "readonly": False})
+    plot_range = ValueRange([Q_(0.05, "THz"), Q_(3.5, "THz")],
+                            metadata={"priority": 1, "readonly": False}).tag(name="Plot range")
 
     climate_group = "Stability and climate"
-    stability_plot_rel_change = Bool(False, group=climate_group)
-    subtract_mean = Bool(False, group=climate_group)
-    temp_sensor_idx = Int(-1, group=climate_group)
-    climate_file = TPath(Path(), group=climate_group)
-    clip_climate_data = Bool(False, group=climate_group)
-    climate_quantity = TEnum(ClimateQuantity, ClimateQuantity.Temperature, group=climate_group)
+    stability_plot_rel_change = Bool(False, group=climate_group).tag(name="Convert to percent")
+    subtract_mean = Bool(False, group=climate_group).tag(name="Subtract mean value")
+    temp_sensor_idx = Int(-1, group=climate_group, help="-1 selects all sensors").tag(name="Select sensor index")
+    climate_file = TPath(Path(), group=climate_group).tag(name="Climate log file")
+    clip_climate_data = Bool(False, group=climate_group, help="Clip climate data to THz measurement",
+                             ).tag(name="Clip climate data")
+    climate_quantity = TEnum(ClimateQuantity, ClimateQuantity.Temperature,
+                             group=climate_group).tag(name="Climate quantity")
     redp_sensor_labels = TDict(
         key_trait=Unicode(),
         value_trait=Unicode(),
@@ -375,41 +372,37 @@ class PlotOpt(ComponentBase):
         group=climate_group
     )
 
-    shift_sam2ref = Bool(False)
-    label = Unicode("")
-    sub_noise_floor = Bool(False)
-    td_scale = Float(1.0)
-    remove_t_offset = Bool(False)
-    err_bar_limits = ValueRange([90, 110])
-    ref_err_bars = Bool(False)
-    fig_num_ext = Unicode("")
+    shift_sam2ref = Bool(False).tag(name="Shift sample pulse to ref")
+    label = Unicode("").tag(name="Legend label")
+    sub_noise_floor = Bool(False).tag(name="Subtract spectrum noise floor")
+    td_scale = Float(1.0).tag(name="Scale waveform")
+    remove_t_offset = Bool(False).tag(name="Start t-axis at 0 ps")
+    fig_num_ext = Unicode("").tag(name="Figure number extension")
 
-    plot_zero_crossing = Bool(False)
+    plot_zero_crossing = Bool(False).tag(name="Plot zero crossing")
 
     image_group = "Image"
-    excluded_areas = TAny(None, allow_none=True, group=image_group)
-    cbar_lim = ValueRange(default_value=[0, 0], group=image_group)
-    log_scale = Bool(False, group=image_group)
+    cbar_lim = ValueRange(default_value=[0, 0], group=image_group).tag(name="Custom color bar limits")
+    log_scale = Bool(False, group=image_group).tag(name="Log scale")
     color_map = traitlets.Enum(ColorMaps, default_value=ColorMaps.autumn).tag(name="Colormaps", group=image_group)
-    invert_x = Bool(False, group=image_group)
-    invert_y = Bool(False, group=image_group)
-    pixel_interpolation = TEnum(PixelInterpolation, default_value=PixelInterpolation.none, group=image_group)
-    fig_label = Unicode("", group=image_group)
-    img_title = Unicode("", group=image_group)
-    en_cbar_label = Bool(True, group=image_group)
-    en_cbar_lim = Bool(default_value=False, group=image_group)
-
+    invert_x = Bool(False, group=image_group).tag(name="Invert x")
+    invert_y = Bool(False, group=image_group).tag(name="Invert y")
+    pixel_interpolation = TEnum(PixelInterpolation, default_value=PixelInterpolation.none,
+                                group=image_group).tag(name="Pixel interpolation")
+    img_fig_num_ext = Unicode("", group=image_group).tag(name="Figure number extension")
+    img_title = Unicode("", group=image_group).tag(name="Image title")
+    en_cbar_label = Bool(True, group=image_group).tag(name="Enable color bar label")
+    en_cbar_lim = Bool(default_value=False, group=image_group).tag(name="Enable custom color bar limits")
 
 class AppSettings(ComponentBase):
-    log_level = TEnum(LogLevel, default_value=LogLevel.info)
+    log_level = TEnum(LogLevel, default_value=LogLevel.info).tag(name="Log level")
 
     save_settings = Instance(SaveSettings, args=())
     pp_opt = Instance(PpOpt, args=())
-    sample_properties = Instance(SampleProperties, args=())
     eval_opt = Instance(EvalOpt, args=())
     plot_opt = Instance(PlotOpt, args=())
 
 if __name__ == '__main__':
     settings = AppSettings()
 
-    print([getattr(settings.sample_properties, k) for k in settings.sample_properties.traits()])
+    print([getattr(settings.eval_opt, k) for k in settings.eval_opt.traits()])

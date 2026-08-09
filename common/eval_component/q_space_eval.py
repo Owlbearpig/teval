@@ -28,7 +28,7 @@ class QSpaceEval:
         self.transmission_model = self.dataset_eval.transmission_model
 
         self.opt_state = {
-            "d": self.settings.sample_properties.d.magnitude,
+            "d": self.settings.eval_opt.d.magnitude,
             "shift": 0,
             "q_min": np.inf
         }
@@ -97,7 +97,7 @@ class QSpaceEval:
         q_val_axis = np.abs(y_ft)[0:]
         t_axis = t_axis[0:]
 
-        fp_spacing = self.settings.sample_properties.fp_spacing.magnitude
+        fp_spacing = self.settings.eval_opt.fp_spacing.magnitude
         t0 = np.argmin(np.abs(t_axis - (fp_spacing - 2)))
         t1 = np.argmin(np.abs(t_axis - (fp_spacing + 2)))
 
@@ -188,7 +188,7 @@ class QSpaceEval:
         if self.dataset_eval.use_custom_d_opt_axis:
             bnds = self.dataset_eval.d_opt_axis_bounds
             step = self.dataset_eval.d_opt_axis_step
-            d_axis = np.arange(bnds[0].magnitude, bnds[1].magnitude, step.magnitude)
+            d_axis = np.arange(*bnds.magnitude, step.magnitude)
 
             tasks = []
             for d in d_axis:

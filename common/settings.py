@@ -34,7 +34,6 @@ class Settings(AppSettings):
         custom_names = {
             "pp_opt": "Preprocessing",
             "eval_opt": "Evaluation",
-            "sample_properties": "Sample Properties",
             "save_settings": "Save Plot Settings",
             "plot_opt": "Plotting",
             "shown_plots": "Visible Plots"
@@ -53,6 +52,7 @@ class Settings(AppSettings):
 
         comp_class = component_instance.__class__
         comp_class_name = comp_class.__name__
+        simple_types = (float, str, list, bool, int)
 
         def make_dump_dict(dump_dict, instance):
             for k, trait in instance.attributes.items():
@@ -69,8 +69,8 @@ class Settings(AppSettings):
                             val = [val[0].magnitude, val[1].magnitude]
                         else:
                             val = [val[0], val[1]]
-
-                    dump_dict[k] = val
+                    if isinstance(val, simple_types):
+                        dump_dict[k] = val
                 else:
                     if issubclass(trait.klass, EvalResult):
                         continue

@@ -99,20 +99,6 @@ class ResultSaver(ComponentBase):
     _fileNameTranslationTable = str.maketrans(_forbiddenCharacters,
                                               '_' * len(_forbiddenCharacters))
 
-    def registerManipulator(self, manipulator, name=None):
-        if name is None:
-            name = manipulator.objectName
-
-        self._manipulators[name] = manipulator
-
-        trait = deepcopy(self.traits()['fileNameTemplate'])
-        additionalHelpString = ('\n{{{}}}: The value of manipulator {}'
-                                .format(name, manipulator.objectName))
-        trait.help += additionalHelpString
-        if 'help' in trait.metadata:
-            trait.metadata['help'] += additionalHelpString
-        self.add_traits(fileNameTemplate=trait)
-
     def registerObjectAttribute(self, inst, attr, name=None):
         if name is None:
             name = attr

@@ -3,7 +3,7 @@ from datetime import datetime
 from common.dataset import DataSet, Domain
 from common.components import ComponentBase, action
 from common.datasetplotter import DataSetPlotter
-from common.functions import window, do_ifft, phase_correction, f_axis_idx_map
+from common.functions import f_axis_idx_map
 from common.eval_component.shgo import shgo
 from scipy.optimize import shgo
 from functools import partial
@@ -70,7 +70,8 @@ class DatasetEval(ComponentBase):
     shgo_options = Instance(SHGOOptions)
 
     sel_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point (x, y)")
-    selected_cost_fun = TEnum(CostFunctions, default_value=CostFunctions.abs_cost)
+    selected_cost_fun = TEnum(CostFunctions, default_value=CostFunctions.abs_cost,
+                              help="Model to experimental data metric").tag(name="Selected cost function")
     selected_result_path = TPath(Path("")).tag(name="Load result")
     selected_substrate_result_path = TPath(Path("")).tag(name="Substrate result")
     optimization_progress = Float(0, min=0, max=1,
@@ -79,8 +80,10 @@ class DatasetEval(ComponentBase):
     reg_grp_name = "Regression"
     selected_meas_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.TransmissionAmp,
                                    group=reg_grp_name).tag(name="Measurement quantity")
-    selected_reg_model = TEnum(RegressionModels, default_value=RegressionModels.drude, group=reg_grp_name)
-    convert_sigma_to_t = Bool(default_value=False, group=reg_grp_name)
+    selected_reg_model = TEnum(RegressionModels, default_value=RegressionModels.drude,
+                               group=reg_grp_name).tag(name="Selected regression model")
+    convert_sigma_to_t = Bool(default_value=False, group=reg_grp_name,
+                              help="Calculate sigma -> 2 layer model to calculate t").tag(name="Fit to transmission")
 
     sig0_bounds = ValueRange([Q_(10, "S/cm"), Q_(20, "S/cm")], group=reg_grp_name).tag(name="σ₀ Bounds")
     tau_bounds = ValueRange([Q_(10, "fs"), Q_(1000, "fs")], group=reg_grp_name).tag(name="τ Bounds")
@@ -91,24 +94,22 @@ class DatasetEval(ComponentBase):
 
     t_fit_grp_name = "Transmission q-space fit"
     transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.tmm_1layer,
-                               group=t_fit_grp_name)
-    d_opt_axis_bounds = ValueRange([Q_(500, "µm"), Q_(580, "µm", )], group=t_fit_grp_name)
-    d_opt_axis_step = Quantity(Q_(10, "µm"), group=t_fit_grp_name)
-    use_custom_d_opt_axis = Bool(True, group=t_fit_grp_name)
-    number_of_workers = Integer(8, group=t_fit_grp_name).tag(name="Number of workers")
+                               group=t_fit_grp_name).tag(name="Selected transmission model")
+    d_opt_axis_bounds = ValueRange([Q_(500, "µm"), Q_(580, "µm", )],
+                                   group=t_fit_grp_name).tag(name="Custom thickness axis bounds")
+    d_opt_axis_step = Quantity(Q_(10, "µm"), group=t_fit_grp_name).tag(name="Custom thickness axis step")
+    use_custom_d_opt_axis = Bool(True, group=t_fit_grp_name).tag(name="Use custom thickness axis")
+    number_of_workers = Integer(8, group=t_fit_grp_name).tag(name="Number of cpu cores to assign")
     add_sim_to_res = Bool(False, group=t_fit_grp_name).tag(name="Add simulated t to result")
-
 
     current_result = Instance(EvalResult)
     selected_substrate_result = Instance(EvalResult)
     result_saver = Instance(ResultSaver)
 
-    def __init__(self, dataset: DataSet, dataset_sub: DataSet=None,
-                 plotter: DataSetPlotter=None, object_name: str = None):
-        super().__init__(object_name=object_name)
+    def __init__(self, dataset: DataSet, dataset_sub: DataSet=None, **kwargs):
+        super().__init__(**kwargs)
         self.dataset = dataset
-        self.sub_dataset = self._link_sub_dataset(dataset_sub)
-        self.plotter = plotter
+        self.dataset.link_sub_dataset(dataset_sub)
 
         self.shgo_options = SHGOOptions()
 
@@ -150,7 +151,7 @@ class DatasetEval(ComponentBase):
 
     @property
     def y_meas(self):
-        meas = self.dataset.get_measurement(*self.sel_point)
+        meas = self.dataset.get_measurement_from_point(*self.sel_point)
         y_meas = self.meas_quantity.value.func(meas)
 
         y_meas = y_meas[self.f_idx]
@@ -168,7 +169,7 @@ class DatasetEval(ComponentBase):
         cost_func = self.selected_cost_fun.value
 
         t_mod_kwargs = self.get_t_model_kwargs()
-        t_mod_kwargs["d"] = self.settings.sample_properties.d.magnitude
+        t_mod_kwargs["d"] = self.settings.eval_opt.d.magnitude
 
         def t_mod_func(*args, **kwargs):
             sigma = reg_mod(*args, **kwargs)
@@ -196,7 +197,7 @@ class DatasetEval(ComponentBase):
             "opt_func": self.opt_func,
         }
 
-        conf_dict["h"] = self.settings.sample_properties.d_film.magnitude
+        conf_dict["h"] = self.settings.eval_opt.d_film.magnitude
 
         if self.dataset.sub_dataset is not None:
             sub_dataset_path = self.dataset.sub_dataset.data_path
@@ -246,24 +247,6 @@ class DatasetEval(ComponentBase):
     def update_progress(self, progress_value):
         self.set_trait("optimization_progress", progress_value)
 
-    def _link_sub_dataset(self, dataset: DataSet = None):
-        if dataset is None:
-            return None
-
-        self.dataset.link_sub_dataset(dataset)
-
-        return dataset
-
-    def _get_dataset(self, which=DataSetType.Main):
-        if which == DataSetType.Main:
-            return self
-        elif which == DataSetType.Sub:
-            if self.sub_dataset is None:
-                raise ValueError("No sub-dataset linked.")
-            return self.sub_dataset
-        else:
-            return self, self.sub_dataset
-
     def get_bounds(self):
         params = model_params(self.selected_reg_model.name)
         bounds, units = [], []
@@ -310,7 +293,7 @@ class DatasetEval(ComponentBase):
         model_kwargs["shift"] = 0
 
         if self.is_two_layer_t_model(model_kwargs):
-            model_kwargs["h"] = self.settings.sample_properties.d_film.magnitude
+            model_kwargs["h"] = self.settings.eval_opt.d_film.magnitude
             substrate_result = self.selected_substrate_result.quantity_dict
             try:
                 n_sub_real_dataset = substrate_result["n"]

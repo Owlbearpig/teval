@@ -19,7 +19,6 @@ from mpl_settings import mpl_style_params
 from scipy.stats import pearsonr
 from tqdm import tqdm
 import pandas as pd
-from common.dataset import SelectionCriterionEnum
 from matplotlib.backend_bases import MouseButton
 
 
@@ -27,14 +26,10 @@ action = partial(action, check_init=True, rc_params=mpl_style_params)
 
 class DataSetPlotter(ComponentBase):
 
-    selection_criterion = TEnum(SelectionCriterionEnum,
-                                SelectionCriterionEnum.selected_point).tag(name="Select measurement by", priority=-2)
     sel_freq_range = ValueRange(default_value=[Q_(1.000, "THz"), Q_(1.200, "THz")]).tag(
         name="Selected frequency range", priority=1000,
     )
-    sel_point_1 = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point 1 (x, y)")
-    sel_point_2 = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point 2 (x, y)")
-    sel_timestamp = Unicode("").tag(name="Selected timestamp")
+    comparison_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Point for comparison (x, y)")
 
     selected_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(name="Selected quantity", priority=1001)
     quantity_value = Unicode("", read_only=True).tag(name="Quantity value", priority=1003)
@@ -143,8 +138,8 @@ class DataSetPlotter(ComponentBase):
         sel_quant = self.get_selected_quantity()
         en_freq_label = Domain.Frequency == sel_quant.domain
         fig_num = ""
-        if self.plot_settings.fig_label:
-            fig_num += self.plot_settings.fig_label + " "
+        if self.plot_settings.img_fig_num_ext:
+            fig_num += self.plot_settings.img_fig_num_ext + " "
         fig_num += str(sel_quant)
 
         f1, f2 = int(self.sel_freq_range[0].magnitude * 1e3), int(self.sel_freq_range[1].magnitude * 1e3)
@@ -154,7 +149,7 @@ class DataSetPlotter(ComponentBase):
             fig_num += en_freq_label * f" {f1}-{f2} GHz"
         fig_num = fig_num.replace(" ", "_")
 
-        return fig_num + self.dataset.is_sub_dataset * "_subset"
+        return fig_num
 
     @property
     def quantity_label(self):
@@ -167,23 +162,22 @@ class DataSetPlotter(ComponentBase):
 
         return " ".join([str(sel_quant), freq_label * en_freq_label])
 
-    def get_selected_measurement(self, also_return_ref=True):
-        selection_map = {
-            SelectionCriterionEnum.selected_timestamp: self.sel_timestamp,
-            SelectionCriterionEnum.selected_point: self.sel_point_1,
-        }
-
-        identifier = selection_map[self.selection_criterion]
-        return self.dataset.get_selected_measurement(self.selection_criterion, identifier, also_return_ref)
+    def get_selected_measurement(self, **kwargs):
+        return self.dataset.get_selected_measurement(**kwargs)
 
     def get_selected_quantity(self):
         self._update_quant_func()
         return self.selected_quantity.value
 
-    def _calc_grid_vals(self):
+    def _get_empty_grid(self):
         img_shape = self.img_shape
         w, h = img_shape["w"], img_shape["h"]
         grid_vals = np.zeros((w, h), dtype=complex)
+
+        return grid_vals
+
+    def _calc_grid_vals(self):
+        grid = self._get_empty_grid()
         sam_meas = self.measurements["sams"]
 
         iter_ = tqdm(enumerate(sam_meas), total=len(sam_meas),
@@ -191,9 +185,9 @@ class DataSetPlotter(ComponentBase):
         for i, measurement in iter_:
             x_idx, y_idx = self._coords_to_idx(*measurement.position)
 
-            grid_vals[x_idx, y_idx] = self.scalar_func(measurement)
+            grid[x_idx, y_idx] = self.scalar_func(measurement)
 
-        return grid_vals
+        return grid
 
     def _update_quant_func(self):
         func_map = self.dataset.func_map
@@ -227,7 +221,7 @@ class DataSetPlotter(ComponentBase):
         return x, y
 
     def _is_excluded(self, idx_tuple):
-        excl_areas = self.plot_settings.excluded_areas
+        excl_areas = None # not implemented
         if excl_areas is None:
             return False
 
@@ -243,12 +237,13 @@ class DataSetPlotter(ComponentBase):
         return False
 
     def _exclude_pixels(self, grid_vals):
+        empty_grid = self._get_empty_grid()
         filtered_grid = grid_vals.copy()
         dims = filtered_grid.shape
         for x_idx in range(dims[0]):
             for y_idx in range(dims[1]):
                 if self._is_excluded((x_idx, y_idx)):
-                    filtered_grid[x_idx, y_idx] = 0
+                    filtered_grid[x_idx, y_idx] = empty_grid[x_idx, y_idx]
 
         return filtered_grid
 
@@ -556,7 +551,7 @@ class DataSetPlotter(ComponentBase):
     @action("Waveform", group="Plots")
     def plot_waveform(self, point=None):
         if point is not None:
-            sam_meas = self.dataset.get_measurement(*point)
+            sam_meas = self.dataset.get_measurement_from_point(*point)
             ref_meas = self.dataset.get_nearest_ref(sam_meas)
             meas_quants = self.dataset.calc_meas_quantities(ref_meas, sam_meas)
         else:
@@ -630,7 +625,7 @@ class DataSetPlotter(ComponentBase):
             ref_meas, selected_meas = self.get_selected_measurement()
             point = selected_meas.position
         else:
-            selected_meas = self.dataset.get_measurement(*point)
+            selected_meas = self.dataset.get_measurement_from_point(*point)
             ref_meas = self.dataset.get_nearest_ref(selected_meas)
 
         sel_quant = self.get_selected_quantity()
@@ -675,7 +670,7 @@ class DataSetPlotter(ComponentBase):
         plot_range = self.plot_settings.plot_range
 
         sam_meas0 = self.get_selected_measurement(also_return_ref=False)
-        sam_meas1 = self.dataset.get_measurement(x=self.sel_point_2[0], y=self.sel_point_2[1])
+        sam_meas1 = self.dataset.get_measurement_from_point(*self.comparison_point)
 
         simple_eval_res0 = self.dataset.windowing_eval(sam_meas0)
         simple_eval_res1 = self.dataset.windowing_eval(sam_meas1)

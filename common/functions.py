@@ -12,6 +12,11 @@ from enum import Enum
 from matplotlib._pylab_helpers import Gcf
 from scipy.signal import butter, filtfilt, get_window
 
+class WindowTypes(Enum):
+    tukey = "tukey"
+    hannin = "hanning"
+    rectangular = "rectangular"
+
 def do_fft(data_td):
     data_td = nan_to_num(data_td)
 
@@ -128,11 +133,11 @@ def flip_phase(data_fd):
 
 
 def window(data_td, **kwargs):
-    win_width = kwargs.get("win_width", 10)
-    shift = kwargs.get("shift", 0)
-    en_plot = kwargs.get("en_plot", False)
-    slope = kwargs.get("slope", 0.15)
-    win_start = kwargs.get("win_start", None)
+    win_width = kwargs.get("win_width")
+    shift = kwargs.get("shift")
+    en_plot = kwargs.get("en_plot")
+    slope = kwargs.get("slope")
+    win_start = kwargs.get("win_start")
 
     t, y = data_td[:, 0], data_td[:, 1]
     t -= t[0]
@@ -149,10 +154,10 @@ def window(data_td, **kwargs):
 
     if "type" in kwargs:
         window = kwargs["type"]
-        if window == "tukey":
-            window_arr = get_window(window, win_width, slope)
+        if window == WindowTypes.tukey:
+            window_arr = get_window(window.name, win_width, slope)
         else:
-            window_arr = get_window(window, win_width)
+            window_arr = get_window(window.name, win_width)
 
     window_mask = np.zeros(len(y))
     window_mask[:win_width] = window_arr

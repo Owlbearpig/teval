@@ -21,7 +21,7 @@ import typing as t
 
 import traitlets
 from common.eval_component.quantity_set import DataSetDict as DataSetDictClass
-from traitlets import TraitError, Undefined, TraitType, List as TList, Float, Integer
+from traitlets import TraitError, Undefined, TraitType, List as TList, Float, Integer, Instance, HasTraits
 
 if float(traitlets.__version__[0]) <= 4:
     from traitlets import class_of
@@ -50,7 +50,7 @@ class TraitTypePatched(TraitType):
 class QuantityDict(TraitTypePatched):
 
     default_value = DataSetDictClass()
-    info_text = "an evaluation result instance"
+    info_text = "Dict collection of datasets"
 
     def validate(self, obj, value):
         if isinstance(value, DataSetDictClass):
@@ -85,6 +85,38 @@ class Path(TraitTypePatched):
                 raise TraitError("The path '%s' is not a directory" % value)
         return value
 
+class MultiPathClass():
+    root_path = pathlib.Path()
+    selected_paths = []
+
+    def __init__(self, root_path=None, selected_paths=None):
+        self.root_path = root_path if root_path else self.root_path
+        self.selected_paths = selected_paths if selected_paths else self.selected_paths
+
+    def exists(self, obj, value):
+        if not isinstance(value.root_path, pathlib.Path):
+            raise TraitError("'%s' is not a Path object!" % repr(value.root_path))
+        if not value.root_path.exists():
+            raise TraitError("The path '%s' does not exist" % value.root_path)
+
+        for val in value.selected_paths:
+            if not isinstance(val, pathlib.Path):
+                raise TraitError("'%s' is not a Path object!" % repr(val))
+            if not val.exists():
+                raise TraitError("The path '%s' does not exist" % val)
+
+class MultiPathSelection(TraitTypePatched):
+    default_value = MultiPathClass()
+    info_text = 'a multi path'
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def validate(self, obj, value):
+        if isinstance(value, MultiPathClass):
+            value.exists(obj, value)
+            return value
+        self.error(obj, value)
 
 class Quantity(TraitTypePatched):
 
