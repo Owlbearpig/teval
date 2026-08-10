@@ -17,7 +17,7 @@ class MeasurementSelection(ComponentBase):
     sel_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point (x, y)")
     sel_timestamp = Unicode("").tag(name="Selected timestamp")
     string_match = Unicode("").tag(name="Filter string")
-    allow_averaging = Bool(False).tag(name="Allow averaging")
+    average_selection = Bool(False).tag(name="Allow averaging")
 
     references = MultiPathSelection().tag(fullwidth = False, group="Reference selection", combine=True)
     samples = MultiPathSelection().tag(fullwidth = False, group="Sample selection", combine=True)

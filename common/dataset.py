@@ -209,12 +209,12 @@ class DataSet(ComponentBase):
 
     @property
     def sample_data_td(self):
-        sample_data_td = self.get_data(self.measurements["all"][0], domain=Domain.Time)
+        sample_data_td = self.get_single_meas_data(self.measurements["all"][0], domain=Domain.Time)
         return sample_data_td
 
     @property
     def sample_data_fd(self):
-        sample_data_fd = self.get_data(self.measurements["all"][0], domain=Domain.Frequency)
+        sample_data_fd = self.get_single_meas_data(self.measurements["all"][0], domain=Domain.Frequency)
         return sample_data_fd
 
     @property
@@ -224,14 +224,6 @@ class DataSet(ComponentBase):
     @property
     def freq_axis(self):
         return self.sample_data_fd[:, 0].real
-
-    @property
-    def td_shape(self):
-        return self.sample_data_td.shape
-
-    @property
-    def fd_shape(self):
-        return self.sample_data_fd.shape
 
     @observe("data_path")
     def _set_path(self, change=None):
@@ -259,6 +251,19 @@ class DataSet(ComponentBase):
     @action("Reparse measurements")
     def rebuild_cache(self):
         self._parse_measurements()
+
+    def max_amp_meas_filter(self, meas_list, threshold=1):
+        meas_list = np.array(meas_list, dtype=object)
+        data_td = self.get_multi_data(meas_list, domain=Domain.Time)
+        max_per_measurement = np.max(np.abs(data_td[:, :, 1]), axis=1)
+        threshold_mask = max_per_measurement >= (threshold * np.max(max_per_measurement))
+
+        ret_list = list(meas_list[threshold_mask])
+
+        if threshold < 1:
+            return ret_list
+        else:
+            return ret_list[0]
 
     def _parse_measurements(self, data_path=None):
         if data_path is None:
@@ -288,14 +293,7 @@ class DataSet(ComponentBase):
 
                 self.cache = DatasetCache(self.measurements["all"], target_path, signal_carrier)
 
-                all_meas = self.measurements["all"]
-                max_amp_meas = (all_meas[0], -np.inf)
-                for meas in all_meas:
-                    data_td = self.get_data(meas)
-                    max_amp = np.max(np.abs(data_td[:, 1]))
-                    if max_amp > max_amp_meas[1]:
-                        max_amp_meas = (meas, max_amp)
-                self.measurements["max_amp_meas"] = max_amp_meas[0]
+                self.measurements["max_amp_meas"] = self.max_amp_meas_filter(self.measurements["all"])
 
                 self._sort_meas_type()
 
@@ -470,22 +468,9 @@ class DataSet(ComponentBase):
 
         ref_filter = self.ref_selection
 
-        threshold = self.ref_threshold
-        max_amp_meas = self.measurements["max_amp_meas"]
-        max_amp = np.max(np.abs(self.get_data(max_amp_meas)[:, 1]))
-
         manual_pos = self.ref_pos
 
         id_str = "ref"
-
-        def threshold_filter():
-            ret = []
-            for meas in self.measurements["all"]:
-                data_td = self.get_data(meas)
-                amp = np.max(np.abs(data_td[:, 1]))
-                if amp > threshold * max_amp:
-                    ret.append(meas)
-            return ret
 
         refs_ = []
         if ref_filter == ReferenceSelection.from_file_name:
@@ -495,9 +480,17 @@ class DataSet(ComponentBase):
             if not refs_:
                 logging.info(f"No explicit references found in the dataset based on filename ({id_str}).")
         elif ref_filter == ReferenceSelection.point_as_ref:
-            refs_ = [self.get_measurement_from_point(*manual_pos)]
-            logging.warning(f"Using measurement closest to {manual_pos} as ref. (ref: {refs_[0]})")
-        elif ref_filter == ReferenceSelection.horizontal_line_as_ref:
+            refs_ = self.get_measurements_from_point(*manual_pos)
+            logging.info(f"Using measurement closest to {manual_pos} as ref. (ref: {refs_[0]})")
+        elif ref_filter == ReferenceSelection.above_threshold:
+            refs_ = self.max_amp_meas_filter(self.measurements["all"], self.ref_threshold)
+            logging.info(f"Using measurements near max amplitude as ref. (Threshold: {self.ref_threshold})")
+        elif ref_filter == ReferenceSelection.max_amp_measurement:
+            refs_ = [self.measurements["max_amp_meas"]]
+            logging.info("Using the measurement with the highest amplitude as reference")
+
+        ref_line = []
+        if ref_filter == ReferenceSelection.horizontal_line_as_ref:
             y = manual_pos[1]
             logging.info(f"Selecting measurements along horizontal line at y={y} mm")
             ref_line, x_coords = self.get_cart_line(y=y)
@@ -505,21 +498,11 @@ class DataSet(ComponentBase):
             x = manual_pos[0]
             logging.info(f"Selecting measurements along vertical line at x={x} mm")
             ref_line, y_coords = self.get_cart_line(x=x)
-        elif ref_filter == ReferenceSelection.above_threshold:
-            refs_ = threshold_filter()
 
-        if ref_filter in [ReferenceSelection.horizontal_line_as_ref, ReferenceSelection.vertical_line_as_ref]:
-            for meas in ref_line:
-                data_td = self.get_data(meas)
-                if np.max(np.abs(data_td[:, 1])) > threshold * max_amp:
-                    refs_.append(meas)
-
+        if ref_line:
+            refs_ = self.max_amp_meas_filter(ref_line, self.ref_threshold)
             if len(refs_) > 1:
                 logging.info(f"Using reference measurements: {refs_[0].filepath.stem} to {refs_[-1].filepath.stem}")
-
-        if not refs_:
-            refs_ = threshold_filter()
-            logging.info(f"Using measurements near max amplitude as ref. (Threshold: {threshold})")
 
         if not refs_:
             logging.warning(f"No suitable refs found. Check settings.")
@@ -563,35 +546,46 @@ class DataSet(ComponentBase):
 
         return data_td
 
-    def get_data(self, meas, domain=None):
-        if domain is None:
-            domain = Domain.Time
-
+    def get_single_meas_data(self, meas, domain=Domain.Both):
         data_td = self._pre_process(meas)
 
         if domain == Domain.Time:
-            return data_td
+            data = data_td
         elif domain == Domain.Frequency:
-            return do_fft(data_td)
+            data = do_fft(data_td)
         else:
-            return np.array([data_td, do_fft(data_td)])
+            data = np.array([data_td, do_fft(data_td)])
 
-    def _get_multi_data(self, meas_list, domain=Domain.Both):
-        data_td = np.zeros([len(meas_list), *self.td_shape])
-        data_fd = np.zeros([len(meas_list), *self.fd_shape], dtype=complex)
+        if data.ndim == 2:
+            return np.insert(data, 2, np.zeros_like(data[:, 0]), axis=1)
+        else:
+            return np.insert(data, 2, np.zeros_like(data[0, :, 0]), axis=2)
 
-        for meas_idx, meas in enumerate(meas_list):
-            data_td[meas_idx] = self._pre_process(meas)
-            data_fd[meas_idx] = do_fft(data_td[meas_idx])
+    def get_multi_data(self, meas_list, domain=Domain.Both, en_average=False):
+        def _td_data():
+            data_td = np.zeros([len(meas_list), *self.sample_data_td.shape])
+            for meas_idx, meas in enumerate(meas_list):
+                data_td[meas_idx] = self.get_single_meas_data(meas, domain=Domain.Time)
+
+            return data_td
+
+        def _fd_data():
+            data_fd = np.zeros([len(meas_list), *self.sample_data_fd.shape], dtype=complex)
+            for meas_idx, meas in enumerate(meas_list):
+                data_fd[meas_idx] = self.get_single_meas_data(meas, domain=Domain.Frequency)
+
+            return data_fd
 
         if domain == Domain.Time:
-            return data_td
+            data = _td_data()
         elif domain == Domain.Frequency:
-            return data_fd
+            data = _fd_data()
         else:
-            return np.array([data_td, data_fd])
+            data = np.array([_td_data(), _fd_data()])
 
-    def get_measurement_from_point(self, x, y, return_single=True):
+        return arr_statistics(data) if en_average else data
+
+    def get_measurements_from_point(self, x, y):
         if self.cache is None:
             logging.info("Cache not loaded, check dataset path")
             return None
@@ -601,53 +595,43 @@ class DataSet(ComponentBase):
         if isinstance(y, Q_):
             y = y.magnitude
         pnt = (x, y)
-        try:
-            key = self.cache.coord_map_key_func(pnt)
-            found_meas_list = self.cache.coord_map[key]
-        except KeyError:
-            found_meas_list, best_fit_val = None, np.inf
-            for meas in meas_list:
-                val = abs(meas.position[0] - pnt[0]) + abs(meas.position[1] - pnt[1])
-                if val < best_fit_val:
-                    best_fit_val = val
-                    found_meas_list = [meas]
 
-        if return_single:
-            return found_meas_list[0]
-        else:
-            return found_meas_list
+        key = self.cache.coord_map_key_func(pnt)
+        found_meas_list = self.cache.coord_map[key]
 
-    def get_measurement_from_timestamp(self, timestamp_str=""):
+        return found_meas_list
+
+    def get_measurements_from_timestamp(self, timestamp_str=""):
         if not timestamp_str:
             logging.warning("No timestamp set. Returning first measurement")
             return self.measurements["all"][0]
         logging.info("Selecting measurement by timestamp", timestamp_str)
         meas_id_ = self._timestamp2id(timestamp_str)
 
-        found_meas = None
+        found_meas_list = []
         for meas in self.measurements["all"]:
             if meas.identifier == meas_id_:
-                found_meas = meas
+                found_meas_list.append(meas)
 
-        if found_meas is None:
-            logging.warning(f"Measurement with timestamp: {timestamp_str} (id: {meas_id_}) not found in dataset")
+        if not found_meas_list:
+            logging.warning(f"No measurement with timestamp: {timestamp_str} (id: {meas_id_}) found in dataset")
 
-        return found_meas
+        return found_meas_list
 
-    def get_measurement_from_string(self, string=""):
+    def get_measurements_from_string(self, string=""):
         if not string:
             logging.warning("No filter string set. Returning first measurement")
             return self.measurements["all"][0]
 
-        found_meas = None
+        found_meas_list = []
         for meas in self.measurements["all"]:
             if string in meas.filepath.name:
-                found_meas = meas
+                found_meas_list.append(meas)
 
-        if found_meas is None:
+        if not found_meas_list:
             logging.warning(f"No measurement containing the string {string} in the filename found in dataset")
 
-        return found_meas
+        return found_meas_list
 
     def get_consecutive_meas(self, meas_):
         # measurements with same position as meas_ sampled without interruption (compared to avg meas time)
@@ -684,25 +668,29 @@ class DataSet(ComponentBase):
 
         return ref_meas_list, sam_meas_list
 
-    def get_selected_measurement(self, also_return_ref=True):
+    def get_selected_measurements(self, also_return_ref=True):
         identifier_map = {
-            SelectionCriterionEnum.file_selection: None,
             SelectionCriterionEnum.selected_timestamp: self.measurement_selector.sel_timestamp,
             SelectionCriterionEnum.selected_point: self.measurement_selector.sel_point,
             SelectionCriterionEnum.string_search: self.measurement_selector.string_match,
         }
         handlers = {
-            SelectionCriterionEnum.file_selection: self.get_meas_from_filenames,
-            SelectionCriterionEnum.selected_timestamp: self.get_measurement_from_timestamp,
-            SelectionCriterionEnum.selected_point: lambda pnt: self.get_measurement_from_point(*pnt),
-            SelectionCriterionEnum.string_search: self.get_measurement_from_string,
+            SelectionCriterionEnum.selected_timestamp: self.get_measurements_from_timestamp,
+            SelectionCriterionEnum.selected_point: lambda pnt: self.get_measurements_from_point(*pnt),
+            SelectionCriterionEnum.string_search: self.get_measurements_from_string,
         }
 
-        handler = handlers[self.selection_criterion]
-        identifier = identifier_map[self.selection_criterion]
-        selected_meas = handler(identifier) if identifier else handler()
+        if self.selection_criterion == SelectionCriterionEnum.file_selection:
+            refs, selected_meas = self.get_meas_from_filenames()
+        else:
+            handler = handlers[self.selection_criterion]
+            identifier = identifier_map[self.selection_criterion]
+            selected_meas = handler(identifier)
+            refs = []
+            for m in selected_meas:
+                refs.append(self.get_nearest_ref(m, excluded_refs=refs))
 
-        return (self.get_nearest_ref(selected_meas), selected_meas) if also_return_ref else selected_meas
+        return (refs, selected_meas) if also_return_ref else selected_meas
 
     def get_arb_line(self, p0, p1):
         # Bresenham's_line_algorithm
@@ -738,7 +726,7 @@ class DataSet(ComponentBase):
                 err += dx
                 curr_y += sy
 
-        meas_list = [self.get_measurement_from_point(*p) for p in points]
+        meas_list = [self.get_measurements_from_point(*p) for p in points]
         meas_list = list(dict.fromkeys(meas_list))
         points = [meas.position for meas in meas_list]
 
@@ -753,9 +741,9 @@ class DataSet(ComponentBase):
 
         # vertical direction / slice
         if x is not None:
-            ret = [self.get_measurement_from_point(x, y_) for y_ in y_coords], y_coords
+            ret = [self.get_measurements_from_point(x, y_) for y_ in y_coords], y_coords
         else:  # horizontal direction / slice
-            ret = [self.get_measurement_from_point(x_, y) for x_ in x_coords], x_coords
+            ret = [self.get_measurements_from_point(x_, y) for x_ in x_coords], x_coords
 
         if limits is None:
             return ret
@@ -768,16 +756,20 @@ class DataSet(ComponentBase):
 
             return meas_in_limit_range, coords
 
-    def get_nearest_ref(self, meas_, dist_func=None) -> Measurement:
+    def get_nearest_ref(self, meas_, dist_func=None, excluded_refs=None):
         if not dist_func:
             dist_func = self.dist_func.value
+        if not excluded_refs:
+            excluded_refs = []
         closest_ref, best_fit_val = None, np.inf
         for ref_meas in self.measurements["refs"]:
+            if ref_meas in excluded_refs:
+                continue
             dist_val = dist_func(ref_meas, meas_)
             if np.abs(dist_val) < np.abs(best_fit_val):
                 best_fit_val = dist_val
                 closest_ref = ref_meas
-        from random import choice
+        # from random import choice
         # closest_ref = choice(self.measurements["refs"])
 
         logging.debug(f"Sam: {meas_})")
@@ -786,6 +778,9 @@ class DataSet(ComponentBase):
             logging.debug(f"Time between ref and sample: {best_fit_val} seconds")
         else:
             logging.debug(f"Distance between ref and sample: {best_fit_val} mm")
+        if closest_ref is None:
+            logging.warning("No nearest reference found, returning first reference")
+            return self.measurements["refs"][0]
 
         return closest_ref
 
@@ -793,7 +788,7 @@ class DataSet(ComponentBase):
         if self.fix_ref is not False:
             chosen_ref = self.measurements["refs"][self.fix_ref_idx]
         elif point is not None:
-            closest_sam = self.get_measurement_from_point(*point)
+            closest_sam = self.get_measurements_from_point(*point)
             chosen_ref = self.get_nearest_ref(closest_sam)
         else:
             if ref_idx is None:
@@ -803,9 +798,9 @@ class DataSet(ComponentBase):
         # chosen_ref = np.random.choice(self.measurements["refs"])
 
         if domain in [Domain.Time, Domain.Frequency]:
-            ret = self.get_data(chosen_ref, domain=domain)
+            ret = self.get_multi_data(chosen_ref, domain=domain)
         else:
-            ret = self.get_data(chosen_ref, domain=Domain.Both)
+            ret = self.get_multi_data(chosen_ref, domain=Domain.Both)
 
         if ret_meas:
             return ret, chosen_ref
@@ -834,7 +829,7 @@ class DataSet(ComponentBase):
         all_refs = self.measurements["refs"]
         ref_data = np.zeros((len(all_refs), len(self.freq_axis)), dtype=complex)
         for ref_idx, ref_meas in enumerate(all_refs):
-            ref_fd = self.get_data(ref_meas, domain=Domain.Frequency)
+            ref_fd = self.get_multi_data(ref_meas, domain=Domain.Frequency)
             ref_data[ref_idx] = ref_fd[:, 1]
 
         freq_range = (0.35 < self.freq_axis)*(self.freq_axis < 4.0)
@@ -862,11 +857,11 @@ class DataSet(ComponentBase):
             logging.info(f"Reference measurement: {ref_meas_}")
             logging.info(f"Sample measurement: {meas_}")
 
-            ref_td, ref_fd = self.get_data(ref_meas_, Domain.Both)
-            sam_td, sam_fd = self.get_data(meas_, Domain.Both)
+            ref_td, ref_fd = self.get_multi_data(ref_meas_, Domain.Both)
+            sam_td, sam_fd = self.get_multi_data(meas_, Domain.Both)
         else:
             ref_meas_list = self.get_consecutive_meas(ref_meas_)
-            sam_meas_list = self.get_measurement_from_point(*meas_.position, return_single=False)
+            sam_meas_list = self.get_measurements_from_point(*meas_.position, return_single=False)
 
             logging.info("Average measurement evaluation")
             logging.info(f"Reference measurement list (count: {len(ref_meas_list)}):")
@@ -874,8 +869,8 @@ class DataSet(ComponentBase):
             logging.info(f"Sample measurement list (count {len(sam_meas_list)}): ")
             logging.info(f"{[meas.filepath.name for meas in sam_meas_list]}")
 
-            ref_td, ref_fd = self._get_multi_data(ref_meas_list, Domain.Both)
-            sam_td, sam_fd = self._get_multi_data(sam_meas_list, Domain.Both)
+            ref_td, ref_fd = self.get_multi_data(ref_meas_list, Domain.Both)
+            sam_td, sam_fd = self.get_multi_data(sam_meas_list, Domain.Both)
 
         meas_quants["ref_td"], meas_quants["ref_td_std"] = arr_statistics(ref_td)
         meas_quants["sam_td"], meas_quants["sam_td_std"] = arr_statistics(sam_td)
@@ -904,7 +899,7 @@ class DataSet(ComponentBase):
         self.settings.pp_opt.en_plot = False
 
         ref_td, ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Both)
-        sam_td, sam_fd = self.get_data(meas_, Domain.Both)
+        sam_td, sam_fd = self.get_multi_data(meas_, Domain.Both)
 
         for name, value in og_pp_opt_state.items():
             setattr(self.settings.pp_opt, name, value)
@@ -963,7 +958,7 @@ class DataSet(ComponentBase):
             single_layer_approx = self.sub_dataset.single_layer_eval(meas)
             t = self.sub_dataset.transmission(meas)
         else:
-            meas = self.get_measurement_from_point(*sub_pnt)
+            meas = self.get_measurements_from_point(*sub_pnt)
             single_layer_approx = self.windowing_eval(meas)
             t = self.transmission(meas)
 
@@ -973,14 +968,14 @@ class DataSet(ComponentBase):
 
 
     def get_ref_argmax(self, measurement_):
-        ref_td = self.get_data(measurement_)
+        ref_td = self.get_multi_data(measurement_)
         t, y = ref_td[:, 0], ref_td[:, 1]
 
         return t[np.argmax(y)]
 
     def spectral_similarity(self, meas_0, meas_1, freq_min=0.15, freq_max=2.00):
-        data_fd_0 = self.get_data(meas_0, domain=Domain.Frequency)
-        data_fd_1 = self.get_data(meas_1, domain=Domain.Frequency)
+        data_fd_0 = self.get_multi_data(meas_0, domain=Domain.Frequency)
+        data_fd_1 = self.get_multi_data(meas_1, domain=Domain.Frequency)
 
         f_idx_range = f_axis_idx_map(self.freq_axis, (freq_min, freq_max))
         x, y = np.abs(data_fd_0[f_idx_range, 1]), np.abs(data_fd_1[f_idx_range, 1])
@@ -988,10 +983,10 @@ class DataSet(ComponentBase):
         return 1+np.log(np.abs(pearsonr(x, y).statistic))
 
     def delay_from_phaseslope(self, meas_0, meas_1, freq_min=0.15, freq_max=0.85):
-        data_td_0 = self.get_data(meas_0)
+        data_td_0 = self.get_multi_data(meas_0)
         t0, y0 = data_td_0[:, 0], data_td_0[:, 1]
 
-        data_td_1 = self.get_data(meas_1)
+        data_td_1 = self.get_multi_data(meas_1)
         t1, y1 = data_td_1[:, 0], data_td_1[:, 1]
 
         dt = t0[1] - t0[0]
@@ -1033,10 +1028,10 @@ class DataSet(ComponentBase):
 
     def _get_cross_correlation_delay(self, meas_0, meas_1):
         upsample = 10
-        data_td_0 = self.get_data(meas_0)
+        data_td_0 = self.get_multi_data(meas_0)
         t0, y0 = data_td_0[:, 0], data_td_0[:, 1]
 
-        data_td_1 = self.get_data(meas_1)
+        data_td_1 = self.get_multi_data(meas_1)
         t1, y1 = data_td_1[:, 0], data_td_1[:, 1]
 
         dt = t0[1] - t0[0]
@@ -1063,7 +1058,7 @@ class DataSet(ComponentBase):
         return delay
 
     def get_zero_crossing(self, measurement_):
-        data_td = self.get_data(measurement_)
+        data_td = self.get_multi_data(measurement_)
         t, y = data_td[:, 0], data_td[:, 1]
         y_abs_max = np.argmax(np.abs(y))
         # y_abs_max = np.argmax(y)
@@ -1088,16 +1083,16 @@ class DataSet(ComponentBase):
             return zero_crossing_interp
 
     def p2p(self, meas_: Measurement):
-        y_td = self.get_data(meas_)
+        y_td = self.get_multi_data(meas_)
         return np.max(y_td[:, 1]) - np.min(y_td[:, 1])
 
     def phase(self, meas_: Measurement):
-        y_fd = self.get_data(meas_, domain=Domain.Frequency)
+        y_fd = self.get_multi_data(meas_, domain=Domain.Frequency)
         return np.angle(y_fd[:, 1])
 
     def power(self, meas_: Measurement):
         ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Frequency)
-        sam_fd = self.get_data(meas_, domain=Domain.Frequency)
+        sam_fd = self.get_multi_data(meas_, domain=Domain.Frequency)
 
         power_val_ref = np.abs(ref_fd[:, 1])
         power_val_sam = np.abs(sam_fd[:, 1])
@@ -1108,7 +1103,7 @@ class DataSet(ComponentBase):
         freq_slice = (freq_range[0] < self.freq_axis) * (self.freq_axis < freq_range[1])
 
         ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Frequency)
-        sam_fd = self.get_data(meas_, domain=Domain.Frequency)
+        sam_fd = self.get_multi_data(meas_, domain=Domain.Frequency)
 
         power_val_ref = np.sum(np.abs(ref_fd[freq_slice, 1]) ** 2)
         power_val_sam = np.sum(np.abs(sam_fd[freq_slice, 1]) ** 2)
@@ -1131,7 +1126,7 @@ class DataSet(ComponentBase):
         return np.angle(y_fd[:, 1])
 
     def simple_peak_cnt(self, meas_: Measurement, threshold: float):
-        data_td = self.get_data(meas_)
+        data_td = self.get_multi_data(meas_)
         y_ = data_td[:, 1]
         y_ -= (np.mean(y_[:10]) + np.mean(y_[-10:])) * 0.5
 
@@ -1145,7 +1140,7 @@ class DataSet(ComponentBase):
 
     def transmission(self, meas_, phase_sign=1):
         ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Frequency)
-        sam_fd = self.get_data(meas_, Domain.Frequency)
+        sam_fd = self.get_multi_data(meas_, Domain.Frequency)
 
         t = sam_fd[:, 1] / ref_fd[:, 1]
 
@@ -1239,7 +1234,7 @@ class DataSet(ComponentBase):
         ref_idx = self.measurements["all"].index(nearest_ref)
 
         if len(self.measurements["refs"]) < 2:
-            return self.get_data(self.measurements["refs"][0], domain=Domain.Frequency)
+            return self.get_multi_data(self.measurements["refs"][0], domain=Domain.Frequency)
 
         ref_list_idx = self.measurements["refs"].index(nearest_ref)
         if sam_idx < ref_idx:
@@ -1250,8 +1245,8 @@ class DataSet(ComponentBase):
             ref_before = self.measurements["refs"][ref_list_idx]
             ref_after = self.measurements["refs"][ref_list_idx + 1]
 
-        ref_before_fd = self.get_data(ref_before, domain=Domain.Frequency)
-        ref_after_fd =  self.get_data(ref_after, domain=Domain.Frequency)
+        ref_before_fd = self.get_multi_data(ref_before, domain=Domain.Frequency)
+        ref_after_fd =  self.get_multi_data(ref_after, domain=Domain.Frequency)
 
         t0 = self.measurements["refs"][0].meas_time
         t = [(ref_before.meas_time - t0).total_seconds(), (ref_after.meas_time - t0).total_seconds()]
@@ -1273,7 +1268,7 @@ class DataSet(ComponentBase):
     @action("Export measurement quantities", group=data_export_grp)
     def export_meas_quants(self):
         label = self.data_export_label
-        ref_meas, selected_meas = self.get_selected_measurement()
+        ref_meas, selected_meas = self.get_selected_measurements()
         meas_quants = self.calc_meas_quantities(ref_meas, selected_meas)
 
         self.export_as_csv(meas_quants, file_app=label)

@@ -163,7 +163,7 @@ class DataSetPlotter(ComponentBase):
         return " ".join([str(sel_quant), freq_label * en_freq_label])
 
     def get_selected_measurement(self, **kwargs):
-        return self.dataset.get_selected_measurement(**kwargs)
+        return self.dataset.get_selected_measurements(**kwargs)
 
     def get_selected_quantity(self):
         self._update_quant_func()
@@ -328,7 +328,7 @@ class DataSetPlotter(ComponentBase):
         }
 
         for i, meas_ in enumerate(meas_set):
-            ref_td, ref_fd = self.dataset.get_data(meas_, domain=Domain.Both)
+            ref_td, ref_fd = self.dataset.get_multi_data(meas_, domain=Domain.Both)
             fd_val = ref_fd[self.freq_idx, 1]
 
             ret["meas_times"][i] = self.dataset.meas_time_diff(meas0, meas_)
@@ -458,8 +458,8 @@ class DataSetPlotter(ComponentBase):
         # print(ref1)
         # print(ref2)
 
-        ref1_fd = self.dataset.get_data(ref1, domain=Domain.Frequency)
-        ref2_fd = self.dataset.get_data(ref2, domain=Domain.Frequency)
+        ref1_fd = self.dataset.get_multi_data(ref1, domain=Domain.Frequency)
+        ref2_fd = self.dataset.get_multi_data(ref2, domain=Domain.Frequency)
 
         freq = ref1_fd[:, 0]
 
@@ -509,7 +509,7 @@ class DataSetPlotter(ComponentBase):
                 ref_meas_ = self.measurements["refs"][0]
                 label = "Reference idx: 0"
         elif ref_meas_ is None:
-            ref_meas_ = self.dataset.get_measurement_from_timestamp(timestamp)
+            ref_meas_ = self.dataset.get_measurements_from_timestamp(timestamp)
             if ref_meas_ is None:
                 return
 
@@ -519,7 +519,7 @@ class DataSetPlotter(ComponentBase):
         # zx_phase = self._delay_from_phaseslope(self.measurements["refs"][0], ref_meas_)
         # print(zx_simple*1e3, zx_phase*1e3)
 
-        ref_td, ref_fd = self.dataset.get_data(ref_meas_, domain=Domain.Both)
+        ref_td, ref_fd = self.dataset.get_multi_data(ref_meas_, domain=Domain.Both)
         freq_axis = ref_fd[:, 0].real
         plot_range = self.plot_settings.plot_range
         f_idx_range = f_axis_idx_map(self.dataset.freq_axis, plot_range)
@@ -551,7 +551,7 @@ class DataSetPlotter(ComponentBase):
     @action("Waveform", group="Plots")
     def plot_waveform(self, point=None):
         if point is not None:
-            sam_meas = self.dataset.get_measurement_from_point(*point)
+            sam_meas = self.dataset.get_measurements_from_point(*point)
             ref_meas = self.dataset.get_nearest_ref(sam_meas)
             meas_quants = self.dataset.calc_meas_quantities(ref_meas, sam_meas)
         else:
@@ -625,7 +625,7 @@ class DataSetPlotter(ComponentBase):
             ref_meas, selected_meas = self.get_selected_measurement()
             point = selected_meas.position
         else:
-            selected_meas = self.dataset.get_measurement_from_point(*point)
+            selected_meas = self.dataset.get_measurements_from_point(*point)
             ref_meas = self.dataset.get_nearest_ref(selected_meas)
 
         sel_quant = self.get_selected_quantity()
@@ -670,7 +670,7 @@ class DataSetPlotter(ComponentBase):
         plot_range = self.plot_settings.plot_range
 
         sam_meas0 = self.get_selected_measurement(also_return_ref=False)
-        sam_meas1 = self.dataset.get_measurement_from_point(*self.comparison_point)
+        sam_meas1 = self.dataset.get_measurements_from_point(*self.comparison_point)
 
         simple_eval_res0 = self.dataset.windowing_eval(sam_meas0)
         simple_eval_res1 = self.dataset.windowing_eval(sam_meas1)
@@ -695,7 +695,7 @@ class DataSetPlotter(ComponentBase):
 
         ampl_arr_db = np.zeros((len(ref_meas_set), len(freq_axis)))
         for i, ref in enumerate(ref_meas_set):
-            ref_td, ref_fd = self.dataset.get_data(ref, domain=Domain.Both)
+            ref_td, ref_fd = self.dataset.get_multi_data(ref, domain=Domain.Both)
             ampl_arr_db[i] = 20*np.log10(np.abs(ref_fd[:, 1]))
 
         plt.figure("Amplitude noise (standard deviation of all refs)")
@@ -768,8 +768,8 @@ class DataSetPlotter(ComponentBase):
         from random import choice
         idx = choice(range(len(meas_set) - 1))
         meas0, meas1 = meas_set[idx], meas_set[idx + 1]
-        meas0_fd = self.dataset.get_data(meas0, domain=Domain.Frequency)
-        meas1_fd = self.dataset.get_data(meas1, domain=Domain.Frequency)
+        meas0_fd = self.dataset.get_multi_data(meas0, domain=Domain.Frequency)
+        meas1_fd = self.dataset.get_multi_data(meas1, domain=Domain.Frequency)
         phi0, phi1 = np.angle(meas0_fd[:, 1]), np.angle(meas1_fd[:, 1])
         amp0, amp1 = np.abs(meas0_fd[:, 1]), np.abs(meas1_fd[:, 1])
         w = 2 * np.pi * self.dataset.freq_axis

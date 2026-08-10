@@ -27,6 +27,7 @@ class ReferenceSelection(Enum):
     horizontal_line_as_ref = 2
     vertical_line_as_ref = 3
     above_threshold = 4
+    max_amp_measurement = 5
 
 class PixelInterpolation(Enum):
     none = None

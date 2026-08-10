@@ -496,22 +496,35 @@ def smooth_temp_values(meas_time, temp, humidity):
 
     return meas_time, temp, humidity
 
-def arr_statistics(arr) -> np.array:
-    def _std(data_):
+def arr_statistics(arr):
+    def _std(data_, **kwargs):
         if np.iscomplex(data_).any():
-            a = np.std(data_.real, ddof=1, axis=0)
-            b = np.std(data_.imag, ddof=1, axis=0)
+            a = np.std(data_.real, ddof=1, **kwargs)
+            b = np.std(data_.imag, ddof=1, **kwargs)
             return a + 1j * b
         else:
-            return np.std(data_, ddof=1, axis=0)
+            return np.std(data_, ddof=1, **kwargs)
 
     if arr.ndim <= 2:
-        avg = arr
-        std = np.zeros_like(arr)
-    else:
-        avg = np.mean(arr, axis=0)
-        std = _std(arr)
+        avg_std = arr
+    elif arr.ndim == 3: # [meas0, ..., meas_n][[x0, y0], ..., [xn, yn]]
+        avg_std = np.mean(arr, axis=0)
+        avg_std[:, 2] = _std(arr[:, :, 1], axis=0)
+    else: # [ref, sam][meas0, ..., meas_n][[x0, y0], ..., [xn, yn]]
+        avg_std_ref = np.mean(arr[0], axis=0)
+        avg_std_ref[:, 2] = _std(arr[0, :, :, 1], axis=0)
 
-    return avg, std
+        avg_std_sam = np.mean(arr[1], axis=0)
+        avg_std_sam[:, 2] = _std(arr[1, :, :, 1], axis=0)
+
+        avg_std = np.array([avg_std_ref, avg_std_sam])
+
+    return avg_std
 
 
+if __name__ == '__main__':
+    arr = np.random.random((2, 12, 5, 3))
+    barr = arr_statistics(arr)
+    print(barr)
+    print(arr.shape)
+    print(barr.shape)

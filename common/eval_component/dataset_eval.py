@@ -151,7 +151,7 @@ class DatasetEval(ComponentBase):
 
     @property
     def y_meas(self):
-        meas = self.dataset.get_measurement_from_point(*self.sel_point)
+        meas = self.dataset.get_measurements_from_point(*self.sel_point)
         y_meas = self.meas_quantity.value.func(meas)
 
         y_meas = y_meas[self.f_idx]
