@@ -5,7 +5,7 @@ from numpy.fft import rfft, rfftfreq
 from pathlib import Path
 
 meas_id_func = lambda meas_datetime: int((meas_datetime - datetime.min).total_seconds() * 1e6)
-
+timestamp2id = lambda timestamp_str: meas_id_func(datetime.strptime(timestamp_str, "%Y-%m-%dT%H-%M-%S.%f"))
 
 class Measurement:
     filepath = Path()

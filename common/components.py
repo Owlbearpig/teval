@@ -85,20 +85,22 @@ class ComponentBase(HasTraits):
 
         return False
 
-    def toggle_traits(self, active_traits, component_inst, group_filter="", endswith_filter=""):
-        ui_widget = getattr(component_inst, "_ui_control_widget", None)
-        if ui_widget and hasattr(ui_widget, "param_widgets"):
-            for trait_name, widgets in ui_widget.param_widgets.items():
-                if trait_name.endswith(endswith_filter) and trait_name in component_inst.traits(group=group_filter):
-                    is_visible = (trait_name in active_traits)
-                    widgets[0].setVisible(is_visible)
+    def override(self, **kwargs):
+        class _OverrideContext:
 
-                    if isinstance(widgets[1], QtWidgets.QLayout):
-                        for i in range(widgets[1].count()):
-                            w = widgets[1].itemAt(i).widget()
-                            if w: w.setVisible(is_visible)
-                    else:
-                        widgets[1].setVisible(is_visible)
+            def __enter__(ctx_self):
+                ctx_self.og_state = {
+                    name: trait.get(self) for name, trait in self.traits().items()
+                }
+                for name, value in kwargs.items():
+                    setattr(self, name, value)
+                return self
+
+            def __exit__(ctx_self, exc_type, exc_val, exc_tb):
+                for name, value in ctx_self.og_state.items():
+                    setattr(self, name, value)
+
+        return _OverrideContext()
 
     @property
     def actions(self):

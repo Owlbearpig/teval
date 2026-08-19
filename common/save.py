@@ -80,7 +80,7 @@ class ResultSaver(ComponentBase):
     fileFormat = EnumTrait(Formats, Formats.HDF5).tag(name="File format")
 
     textFileWithHeaders = Bool(False).tag(name="Write header to text files")
-    fileNameTemplate = Unicode('{date}-{name}-{sel_point}-{result_type}',
+    fileNameTemplate = Unicode('{date}-{name}-{result_type}',
                                help="File name template, valid identifiers "
                                     "are:\n"
                                     "{name}: The main file name\n"

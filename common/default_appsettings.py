@@ -21,13 +21,12 @@ class LogLevel(Enum):
     critical = logging.CRITICAL
 
 
-class ReferenceSelection(Enum):
-    from_file_name = 0
-    point_as_ref = 1
-    horizontal_line_as_ref = 2
-    vertical_line_as_ref = 3
-    above_threshold = 4
-    max_amp_measurement = 5
+class ReferenceClassification(Enum):
+    from_file_name = "From file name"
+    horizontal_line_as_ref = "Horizontal line"
+    vertical_line_as_ref = "Vertical line"
+    above_threshold = "Above threshold"
+
 
 class PixelInterpolation(Enum):
     none = None
@@ -58,7 +57,6 @@ class ClimateQuantity(Enum):
 class Domain(Enum):
     Time = 0
     Frequency = 1
-    Both = 2
 
 class Dist(Enum):
     Position = member(lambda meas1, meas2: (abs(meas1.position[0] - meas2.position[0]) +

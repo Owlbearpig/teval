@@ -3,7 +3,7 @@ from datetime import datetime
 from common.dataset import DataSet, Domain
 from common.components import ComponentBase, action
 from common.datasetplotter import DataSetPlotter
-from common.functions import f_axis_idx_map
+from common.functions import f_axis_idx_map, avg_data_array
 from common.eval_component.shgo import shgo
 from scipy.optimize import shgo
 from functools import partial
@@ -33,14 +33,13 @@ class ProgressSignalCarrier(QObject):
     progress_changed = Signal(float)
 
 def abs_cost_fun(y_meas, y_mod):
-
-    abs_diff = (np.abs(y_meas) - np.abs(y_mod)) ** 2
+    abs_diff = (np.abs(y_meas[:, 1]) - np.abs(y_mod)) ** 2
 
     return np.sum(abs_diff)
 
 
 def phi_cost_fun(y_meas, y_mod):
-    phi_diff = (np.angle(y_meas) - np.angle(y_mod)) ** 2
+    phi_diff = (np.angle(y_meas[:, 1]) - np.angle(y_mod)) ** 2
 
     return np.sum(phi_diff)
 
@@ -69,13 +68,12 @@ class DatasetEval(ComponentBase):
 
     shgo_options = Instance(SHGOOptions)
 
-    sel_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Selected point (x, y)")
     selected_cost_fun = TEnum(CostFunctions, default_value=CostFunctions.abs_cost,
                               help="Model to experimental data metric").tag(name="Selected cost function")
     selected_result_path = TPath(Path("")).tag(name="Load result")
     selected_substrate_result_path = TPath(Path("")).tag(name="Substrate result")
-    optimization_progress = Float(0, min=0, max=1,
-                                  group="General", read_only=True).tag(name="Progress")
+    optimization_progress = Float(0, min=0, max=1, read_only=True).tag(name="Progress")
+    only_eval_avg = Bool(False).tag(name="Only evaluate average")
 
     reg_grp_name = "Regression"
     selected_meas_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.TransmissionAmp,
@@ -150,22 +148,44 @@ class DatasetEval(ComponentBase):
         return meas_quantity
 
     @property
-    def y_meas(self):
-        meas = self.dataset.get_measurements_from_point(*self.sel_point)
-        y_meas = self.meas_quantity.value.func(meas)
-
-        y_meas = y_meas[self.f_idx]
-
-        return y_meas
+    def selected_measurements(self):
+        return self.dataset.measurement_selector.selected_measurements
 
     @property
-    def reg_model_freq_set(self):
+    def y_meas_dict(self):
+        meas_list = self.selected_measurements
+        y_meas = self.meas_quantity.value.func(meas_list)
+
+        f_sub = self.freq_axis
+        y_sub = y_meas[:, self.f_idx]
+
+        freq_grid = np.tile(f_sub, (y_sub.shape[0], 1))
+        std_grid = np.zeros_like(y_sub)
+
+        stacked = np.stack((freq_grid, y_sub, std_grid), axis=2)
+
+        if len(meas_list) == 1:
+            return {meas_list[0].identifier: stacked[0]}
+
+        result = {"Average": avg_data_array(stacked)}
+
+        if not self.only_eval_avg:
+            individual_y_meas = {
+                meas.identifier: stacked[meas_idx]
+                for meas_idx, meas in enumerate(meas_list)
+            }
+            result.update(individual_y_meas)
+
+        return result
+
+    @property
+    def set_reg_model_freq(self):
         model_func = self.selected_reg_model.value
         return partial(model_func, self.freq_axis)
 
     @property
-    def opt_func(self):
-        reg_mod = self.reg_model_freq_set
+    def opt_func_dict(self):
+        reg_mod = self.set_reg_model_freq
         cost_func = self.selected_cost_fun.value
 
         t_mod_kwargs = self.get_t_model_kwargs()
@@ -173,7 +193,7 @@ class DatasetEval(ComponentBase):
 
         def t_mod_func(*args, **kwargs):
             sigma = reg_mod(*args, **kwargs)
-            n = self.sigma_to_n(self.freq_axis, sigma)
+            n = self.dataset.sigma_to_n(self.freq_axis, sigma)
 
             t = self.transmission_model.value(n, self.freq_axis, **t_mod_kwargs)
 
@@ -181,23 +201,27 @@ class DatasetEval(ComponentBase):
 
         mod_func = t_mod_func if self.convert_sigma_to_t else reg_mod
 
-        return lambda p: cost_func(self.y_meas, mod_func(*p))
+        y_dict = self.y_meas_dict
+        opt_func_dict = {
+            meas_id: (lambda params, m_id=meas_id: cost_func(y_dict[m_id], mod_func(*params)))
+            for meas_id in y_dict
+        }
+
+        return opt_func_dict
 
     @property
     def _opt_conf(self):
         bounds, bounds_units = self.get_bounds()
-        conf_dict = {
-            "freq_axis": self.freq_axis,
-            "meas_quantity": self.meas_quantity,
-            "y_meas": self.y_meas,
-            "model": self.reg_model_freq_set,
-            "model_name": self.selected_reg_model.name,
-            "bounds": bounds,
-            "bounds_units": bounds_units,
-            "opt_func": self.opt_func,
-        }
-
-        conf_dict["h"] = self.settings.eval_opt.d_film.magnitude
+        conf_dict = {"measurements": {meas.identifier: str(meas) for meas in self.selected_measurements},
+                     "freq_axis": self.freq_axis,
+                     "meas_quantity": self.meas_quantity,
+                     "y_meas_dict": self.y_meas_dict,
+                     "model": self.set_reg_model_freq,
+                     "model_name": self.selected_reg_model.name,
+                     "bounds": bounds,
+                     "bounds_units": bounds_units,
+                     "opt_func_dict": self.opt_func_dict,
+                     }
 
         if self.dataset.sub_dataset is not None:
             sub_dataset_path = self.dataset.sub_dataset.data_path
@@ -239,7 +263,6 @@ class DatasetEval(ComponentBase):
 
     def setup_saver(self):
         res_saver = ResultSaver()
-        res_saver.registerObjectAttribute(self, "sel_point")
         res_saver.registerObjectAttribute(self.current_result, "result_type")
 
         return res_saver
@@ -264,35 +287,23 @@ class DatasetEval(ComponentBase):
 
         return bounds, units
 
-    def is_two_layer_t_model(self, model_kwargs):
-        try:
-            # check if transmission model expects n_sub
-            test_kwargs = model_kwargs.copy()
-            test_kwargs["d"] = 1
-            test_kwargs["shift"] = 0
-            test_kwargs["n_sub"] = 1
-            if "h" in test_kwargs:
-                test_kwargs.pop("h")
-            self.transmission_model.value(n=1, freq=1, **test_kwargs)
-            return False
-        except KeyError:
-            return True
+    def is_two_layer_t_model(self):
+        layer_cnt = getattr(self.transmission_model.value, "layer_cnt", 1)
+        return layer_cnt == 2
 
     def get_t_model_kwargs(self):
-        single_layer_properties = self.dataset.get_single_layer_properties()
-        meas = single_layer_properties["meas"]
-        ref_meas = self.dataset.get_nearest_ref(meas)
+        window_eval_res = self.dataset.get_single_layer_properties()
+        meas = self.dataset.measurement_selector.selected_measurements
 
-        meas_quants = self.dataset.calc_meas_quantities(ref_meas, meas)
-        model_kwargs = {}
-        model_kwargs["meas_quants"] = meas_quants
-        model_kwargs["single_layer_approx"] = single_layer_properties["single_layer_approx"]
-        model_kwargs["nfp"] = self.settings.eval_opt.fp_count
-        model_kwargs["n1"] = 1
-        model_kwargs["n4"] = 1
-        model_kwargs["shift"] = 0
+        model_kwargs = {"t_exp": self.dataset.transmission(meas),
+                        "n_guess": window_eval_res.refr_idx,
+                        "nfp": self.settings.eval_opt.fp_count,
+                        "n1": 1,
+                        "n4": 1,
+                        "shift": 0,
+                        }
 
-        if self.is_two_layer_t_model(model_kwargs):
+        if self.is_two_layer_t_model():
             model_kwargs["h"] = self.settings.eval_opt.d_film.magnitude
             substrate_result = self.selected_substrate_result.quantity_dict
             try:
@@ -307,15 +318,17 @@ class DatasetEval(ComponentBase):
 
         return model_kwargs
 
-    def prepare_regression_result(self, opt_res, opt_conf):
+    def prepare_regression_result(self, shgo_opt_res, opt_conf, meas_id):
         model_name = opt_conf["model_name"]
-        x = opt_res.x
+        x = shgo_opt_res.x
 
-        opt_res_dict = {"model_name": model_name,
-                        "result_type": "Regression",
-                        "sub_dataset_path": opt_conf["sub_dataset_path"],
-                        "dataset_path": opt_conf["dataset_path"],
-                        }
+        opt_res_dict = {
+            "measurement": opt_conf["measurements"].get(meas_id, "Average"),
+            "model_name": model_name,
+            "result_type": "Regression",
+            "sub_dataset_path": opt_conf["sub_dataset_path"],
+            "dataset_path": opt_conf["dataset_path"],
+        }
         for param_idx, p in enumerate(model_params(model_name)):
             unit = opt_conf["bounds_units"][param_idx]
             if not unit:
@@ -323,17 +336,21 @@ class DatasetEval(ComponentBase):
             else:
                 opt_res_dict[p] = Q_(x[param_idx], unit)
 
-        opt_res_dict["nit"] = opt_res.nit
-        opt_res_dict["fun"] = opt_res.fun
-        opt_res_dict["converged"] = opt_res.success
+        opt_res_dict["nit"] = shgo_opt_res.nit
+        opt_res_dict["fun"] = shgo_opt_res.fun
+        opt_res_dict["converged"] = shgo_opt_res.success
         opt_res_dict["timestamp"] = str(datetime.now().isoformat())
 
         freq_axis = Q_(opt_conf["freq_axis"], "THz")
         unit = opt_conf["meas_quantity"].value.unit
-        opt_res_dict["y_meas"] = SingleQuantityDataSet(axes=[freq_axis], data=Q_(opt_conf["y_meas"], unit),
+        y_meas_data = opt_conf["y_meas_dict"][meas_id][:, 1]
+
+        opt_res_dict["y_meas"] = SingleQuantityDataSet(axes=[freq_axis],
+                                                       data=Q_(y_meas_data, unit),
                                                        axes_labels=["Frequency"],
                                                        data_label=opt_conf["meas_quantity"].name)
-        opt_res_dict["y_mod"] = SingleQuantityDataSet(axes=[freq_axis], data=Q_(opt_conf["model"](*x), unit),
+        opt_res_dict["y_mod"] = SingleQuantityDataSet(axes=[freq_axis],
+                                                      data=Q_(opt_conf["model"](*x), unit),
                                                       axes_labels=["Frequency"],
                                                       data_label=opt_conf["meas_quantity"].name)
 
@@ -343,28 +360,30 @@ class DatasetEval(ComponentBase):
     def perform_regression(self):
         opt_conf = self._opt_conf
         shgo_options = self.shgo_options
-        def bg_worker():
+        def bg_worker(meas_id):
             try:
                 min_kwargs = shgo_options.minimizer_kwargs.traits(group=MinimizerOptions.minimizer_opt_grp)
                 min_kwargs["method"] = str(shgo_options.minimizer_kwargs.method.value)
 
-                opt_res_ = shgo(func=opt_conf["opt_func"],
+                shgo_opt_res = shgo(func=opt_conf["opt_func_dict"][meas_id],
                                 bounds=opt_conf["bounds"],
                                 n=shgo_options.n,
                                 iters=shgo_options.iters,
                                 minimizer_kwargs=min_kwargs,
                                 options=shgo_options.get_shgo_options(),
                                 )
-                logging.info("Fit result: {}".format(opt_res_))
+                logging.info(f"Fit result {meas_id}: {shgo_opt_res}")
 
-                reg_res = self.prepare_regression_result(opt_res_, opt_conf)
+                reg_res = self.prepare_regression_result(shgo_opt_res, opt_conf, meas_id)
 
                 self.current_result.result_carrier.received_result.emit(reg_res)
             except Exception:
                 traceback.print_exc()
 
-        executor = ThreadPoolExecutor(max_workers=1)
-        executor.submit(bg_worker)
+        executor = ThreadPoolExecutor(max_workers=self.number_of_workers)
+        for meas_key in opt_conf["y_meas_dict"].keys():
+            executor.submit(bg_worker, meas_key)
+        executor.shutdown(wait=False)
 
     @action("Fit transmission model", group=t_fit_grp_name)
     def fit_unknown_layer(self):
@@ -381,14 +400,6 @@ class DatasetEval(ComponentBase):
             executor.submit(bg_worker)
         except Exception as e:
             traceback.print_exc()
-
-    def sigma_to_n(self, freq, sigma):
-        w = 2 * np.pi * freq
-
-        sigma *= 1e-4 # S/cm -> S/µm
-        n_ = (1 + 1j) * np.sqrt(sigma/(2*w*eps0_thz))
-
-        return n_
 
 if __name__ == "__main__":
 

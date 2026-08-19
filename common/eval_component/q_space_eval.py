@@ -133,8 +133,8 @@ class QSpaceEval:
         opt_config = {
             "f_idx_range_": f_idx_fit_range,
             "freq_axis": self.freq_axis,
-            "single_layer_approx": model_kwargs["single_layer_approx"],
-            "t_exp": model_kwargs["meas_quants"]["t_exp"],
+            "n_guess": model_kwargs["n_guess"],
+            "t_exp": model_kwargs["t_exp"],
             "transmission_model": self.transmission_model.value,
             "cost_fun": self.cost_fun,
             "minimizer_kwargs": self.dataset_eval.shgo_options.get_minimizer_kwargs(),
@@ -266,7 +266,7 @@ class QSpaceEval:
         model_kwargs["nfp"] = self.settings.eval_opt.sim_nfp
         model_kwargs["shift"] = self.settings.eval_opt.sim_shift.magnitude
 
-        if self.dataset_eval.is_two_layer_t_model(model_kwargs):
+        if self.dataset_eval.is_two_layer_t_model():
             model_kwargs["n_sub"] = n_sub
             model_kwargs["h"] = self.settings.eval_opt.sim_h.magnitude
             n = n_film

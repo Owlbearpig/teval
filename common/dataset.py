@@ -1,11 +1,11 @@
 from common.components import ComponentBase
-from common.default_appsettings import Dist, ReferenceSelection
+from common.default_appsettings import Dist, ReferenceClassification, Domain, QuantityEnum
 from common.settings import Settings
-from common.measurement_selection import MeasurementSelection, SelectionCriterionEnum
+from common.measurement_selection import MeasurementSelection, SelectionCriterionEnum, ReferenceSelection
 from pathlib import Path
 import numpy as np
-from common.functions import window, butter_filt, do_fft, f_axis_idx_map, remove_offset, arr_statistics
-from common.measurements import Measurement, meas_id_func
+from common.functions import window, butter_filt, do_fft, f_axis_idx_map, remove_offset
+from common.measurements import Measurementtimestamp2id, Measurement
 from mpl_settings import mpl_style_params
 import matplotlib as mpl
 from common.consts import c_thz, eps0_thz
@@ -14,9 +14,8 @@ import colorlog
 from datetime import datetime
 from common.dataset_cache import DatasetCache
 import pandas as pd
-from common.traits import Q_, Path as TPath, ValueRange
+from common.traits import Q_, Path as TPath, ValueRange, Quantity
 from scipy.stats import pearsonr
-from common.default_appsettings import Domain, QuantityEnum
 from common.components import action
 import itertools
 from traitlets import Unicode, observe, Float, Bool, Enum as TEnum, Instance, Int
@@ -24,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from PySide6.QtCore import QObject, Signal
 from functools import cached_property
+from dataclasses import dataclass
 
 """
 TODOs: 
@@ -52,6 +52,16 @@ New ideas: add teralyzer evaluation (time consuming)
 [l] = µm, [t] = ps, [alpha] = 1/cm (absorption coe.), [sigma] = S/cm, [eps0] = Siemens * ps,
 [f] = THz (1/ps), [c_thz] = µm/ps
 """
+
+class WindowEvalResult:
+    def __init__(self, **kwargs):
+        self.meas = kwargs.get("meas", None)
+        self.t = kwargs.get("t", None)
+        self.freq_axis = kwargs.get("freq_axis", None)
+        self.refr_idx = kwargs.get("refr_idx", None)
+        self.abs_coe = kwargs.get("abs_coe", None)
+        self.phi = kwargs.get("phi", None)
+        self.phi_corrected = kwargs.get("phi_corrected", None)
 
 class DataSetInfoPane(ComponentBase):
 
@@ -114,18 +124,18 @@ class DataSet(ComponentBase):
     caching_progress = Float(0, min=0, max=1, read_only=True).tag(name="Caching progress", priority=-1)
     is_initialized = Bool(False, read_only=True).tag(name="Dataset Initialized")
 
-    dist_func = TEnum(Dist, default_value=Dist.Time).tag(priority=1000, name="Measurement distance function")
+
     sub_linked = Bool(False, read_only=True).tag(name="Substrate dataset linked")
 
     reference_filter_group = "Reference classification"
-    ref_selection = TEnum(ReferenceSelection,
-                          default_value=ReferenceSelection.point_as_ref,
-                          group=reference_filter_group).tag(name="Reference selection criteria")
-    ref_pos = ValueRange([0, 0], group=reference_filter_group).tag(name="Reference position")
-    fix_ref = Bool(False, group=reference_filter_group).tag(name="Use fixed reference")
-    fix_ref_idx = Int(0, min=-1, group=reference_filter_group).tag(name="Fixed reference index")
+    ref_classifier = TEnum(ReferenceClassification,
+                           default_value=ReferenceClassification.point_as_ref,
+                           group=reference_filter_group).tag(name="Reference classification criteria")
     ref_threshold = Float(0.95, group=reference_filter_group, min=0, max=1,
                           help="Threshold relative to maximum amplitude measurement").tag(name="Reference threshold")
+    horizontal_ref_coord = Quantity(Q_(0.0, "mm")).tag(group=reference_filter_group, name="Horizontal line coordinate")
+    vertical_ref_coord = Quantity(Q_(0.0, "mm")).tag(group=reference_filter_group, name="Vertical line coordinate")
+    ref_id_str = Unicode("ref").tag(group=reference_filter_group, name="Filter string")
 
     data_export_grp = "Data export"
     export_csv_dir = TPath(Path(""), is_file=False).tag(name="Save directory", group=data_export_grp)
@@ -174,13 +184,13 @@ class DataSet(ComponentBase):
                     QuantityEnum.MeasTimeDeltaRef2Sam: self.meas_time_delta,
                     QuantityEnum.Power: self.power,
                     QuantityEnum.RefAmp: self.ref_max,
-                    QuantityEnum.RefArgmax: self.get_ref_argmax,
+                    QuantityEnum.RefArgmax: self.get_ref_abs_argmax,
                     QuantityEnum.RefPhase: self.ref_phase,
                     QuantityEnum.ZeroCrossing: self.get_zero_crossing,
                     QuantityEnum.TimeOfFlight: self.time_of_flight,
                     QuantityEnum.Transmission: self.transmission,
                     QuantityEnum.TransmissionAmp: self.amplitude_transmission,
-                    QuantityEnum.TransmissionPhase: self.phase_transmission,
+                    QuantityEnum.TransmissionPhase: self.phase_difference,
                     QuantityEnum.RefractiveIdx: self.refractive_idx,
                     QuantityEnum.AbsorptionCoe: self.absorption_coef,
                     QuantityEnum.Conductivity: self.conductivity,
@@ -209,12 +219,12 @@ class DataSet(ComponentBase):
 
     @property
     def sample_data_td(self):
-        sample_data_td = self.get_single_meas_data(self.measurements["all"][0], domain=Domain.Time)
+        sample_data_td = self._single_meas_data(self.measurements["all"][0], domain=Domain.Time)
         return sample_data_td
 
     @property
     def sample_data_fd(self):
-        sample_data_fd = self.get_single_meas_data(self.measurements["all"][0], domain=Domain.Frequency)
+        sample_data_fd = self._single_meas_data(self.measurements["all"][0], domain=Domain.Frequency)
         return sample_data_fd
 
     @property
@@ -416,11 +426,6 @@ class DataSet(ComponentBase):
 
         return measurements
 
-    def _timestamp2id(self, timestamp_str):
-        timestamp_dt = datetime.strptime(timestamp_str, "%Y-%m-%dT%H-%M-%S.%f")
-
-        return meas_id_func(timestamp_dt)
-
     def _set_dataset_info(self):
         max_amp_meas = self.measurements["max_amp_meas"]
         logging.debug(f"Maximum amplitude measurement: {max_amp_meas.filepath.name}\n")
@@ -466,38 +471,28 @@ class DataSet(ComponentBase):
     def _sort_meas_type(self):
         all_measurements = self.measurements["all"]
 
-        ref_filter = self.ref_selection
-
-        manual_pos = self.ref_pos
-
-        id_str = "ref"
+        id_str = self.ref_id_str
 
         refs_ = []
-        if ref_filter == ReferenceSelection.from_file_name:
-            for meas in all_measurements:
-                if id_str in str(meas.filepath.stem).lower():
-                    refs_.append(meas)
-            if not refs_:
-                logging.info(f"No explicit references found in the dataset based on filename ({id_str}).")
-        elif ref_filter == ReferenceSelection.point_as_ref:
-            refs_ = self.get_measurements_from_point(*manual_pos)
-            logging.info(f"Using measurement closest to {manual_pos} as ref. (ref: {refs_[0]})")
-        elif ref_filter == ReferenceSelection.above_threshold:
-            refs_ = self.max_amp_meas_filter(self.measurements["all"], self.ref_threshold)
-            logging.info(f"Using measurements near max amplitude as ref. (Threshold: {self.ref_threshold})")
-        elif ref_filter == ReferenceSelection.max_amp_measurement:
-            refs_ = [self.measurements["max_amp_meas"]]
-            logging.info("Using the measurement with the highest amplitude as reference")
-
         ref_line = []
-        if ref_filter == ReferenceSelection.horizontal_line_as_ref:
-            y = manual_pos[1]
-            logging.info(f"Selecting measurements along horizontal line at y={y} mm")
-            ref_line, x_coords = self.get_cart_line(y=y)
-        elif ref_filter == ReferenceSelection.vertical_line_as_ref:
-            x = manual_pos[0]
-            logging.info(f"Selecting measurements along vertical line at x={x} mm")
-            ref_line, y_coords = self.get_cart_line(x=x)
+        match self.ref_classifier:
+            case ReferenceClassification.from_file_name:
+                for meas in all_measurements:
+                    if id_str in str(meas.filepath.stem).lower():
+                        refs_.append(meas)
+                if not refs_:
+                    logging.info(f"No explicit references found in the dataset based on filename ({id_str}).")
+            case ReferenceClassification.above_threshold:
+                refs_ = self.max_amp_meas_filter(self.measurements["all"], self.ref_threshold)
+                logging.info(f"Using measurements near max amplitude as ref. (Threshold: {self.ref_threshold})")
+            case ReferenceClassification.horizontal_line_as_ref:
+                y = self.horizontal_ref_coord
+                logging.info(f"Selecting measurements along horizontal line at y={y}")
+                ref_line, x_coords = self.get_cart_line(y=y)
+            case ReferenceClassification.vertical_line_as_ref:
+                x = self.vertical_ref_coord
+                logging.info(f"Selecting measurements along vertical line at x={x}")
+                ref_line, y_coords = self.get_cart_line(x=x)
 
         if ref_line:
             refs_ = self.max_amp_meas_filter(ref_line, self.ref_threshold)
@@ -546,567 +541,168 @@ class DataSet(ComponentBase):
 
         return data_td
 
-    def get_single_meas_data(self, meas, domain=Domain.Both):
+    def _single_meas_data(self, meas, domain=Domain.Time):
         data_td = self._pre_process(meas)
 
         if domain == Domain.Time:
             data = data_td
-        elif domain == Domain.Frequency:
-            data = do_fft(data_td)
         else:
-            data = np.array([data_td, do_fft(data_td)])
+            data = do_fft(data_td)
 
         if data.ndim == 2:
             return np.insert(data, 2, np.zeros_like(data[:, 0]), axis=1)
         else:
             return np.insert(data, 2, np.zeros_like(data[0, :, 0]), axis=2)
 
-    def get_multi_data(self, meas_list, domain=Domain.Both, en_average=False):
-        def _td_data():
-            data_td = np.zeros([len(meas_list), *self.sample_data_td.shape])
-            for meas_idx, meas in enumerate(meas_list):
-                data_td[meas_idx] = self.get_single_meas_data(meas, domain=Domain.Time)
+    def get_multi_data(self, meas_list, domain=Domain.Time):
+        shape = self.sample_data_td.shape if domain == Domain.Time else self.sample_data_fd.shape
 
-            return data_td
+        data_arr = np.zeros([len(meas_list), *shape])
+        for meas_idx, meas in enumerate(meas_list):
+            data_arr[meas_idx] = self._single_meas_data(meas, domain=domain)
 
-        def _fd_data():
-            data_fd = np.zeros([len(meas_list), *self.sample_data_fd.shape], dtype=complex)
-            for meas_idx, meas in enumerate(meas_list):
-                data_fd[meas_idx] = self.get_single_meas_data(meas, domain=Domain.Frequency)
-
-            return data_fd
-
-        if domain == Domain.Time:
-            data = _td_data()
-        elif domain == Domain.Frequency:
-            data = _fd_data()
-        else:
-            data = np.array([_td_data(), _fd_data()])
-
-        return arr_statistics(data) if en_average else data
-
-    def get_measurements_from_point(self, x, y):
-        if self.cache is None:
-            logging.info("Cache not loaded, check dataset path")
-            return None
-        meas_list = self.measurements["all"]
-        if isinstance(x, Q_):
-            x = x.magnitude
-        if isinstance(y, Q_):
-            y = y.magnitude
-        pnt = (x, y)
-
-        key = self.cache.coord_map_key_func(pnt)
-        found_meas_list = self.cache.coord_map[key]
-
-        return found_meas_list
-
-    def get_measurements_from_timestamp(self, timestamp_str=""):
-        if not timestamp_str:
-            logging.warning("No timestamp set. Returning first measurement")
-            return self.measurements["all"][0]
-        logging.info("Selecting measurement by timestamp", timestamp_str)
-        meas_id_ = self._timestamp2id(timestamp_str)
-
-        found_meas_list = []
-        for meas in self.measurements["all"]:
-            if meas.identifier == meas_id_:
-                found_meas_list.append(meas)
-
-        if not found_meas_list:
-            logging.warning(f"No measurement with timestamp: {timestamp_str} (id: {meas_id_}) found in dataset")
-
-        return found_meas_list
-
-    def get_measurements_from_string(self, string=""):
-        if not string:
-            logging.warning("No filter string set. Returning first measurement")
-            return self.measurements["all"][0]
-
-        found_meas_list = []
-        for meas in self.measurements["all"]:
-            if string in meas.filepath.name:
-                found_meas_list.append(meas)
-
-        if not found_meas_list:
-            logging.warning(f"No measurement containing the string {string} in the filename found in dataset")
-
-        return found_meas_list
-
-    def get_consecutive_meas(self, meas_):
-        # measurements with same position as meas_ sampled without interruption (compared to avg meas time)
-        coord_map_key = self.cache.coord_map_key_func(meas_.position)
-        meas_at_pos = self.cache.coord_map[coord_map_key]
-        if len(meas_at_pos) == 1:
-            return meas_at_pos
-
-        meas_idx0 = meas_at_pos.index(meas_)
-        max_dist = 2*self.mean_time_diff
-
-        time_diff = np.diff([meas.meas_time for meas in meas_at_pos])
-        time_diff_sec = [t_diff.total_seconds() for t_diff in time_diff]
-        jump_idx_list = np.where(time_diff_sec > max_dist)[0]
-
-        interval_idx = np.digitize(meas_idx0, jump_idx_list, right=True)
-        if interval_idx == 0:
-            meas_idx_range = np.arange(0, jump_idx_list[0]+1)
-        elif interval_idx == len(jump_idx_list):
-            meas_idx_range = np.arange(jump_idx_list[-1]+1, len(meas_at_pos))
-        else:
-            meas_idx_range = np.arange(jump_idx_list[interval_idx-1]+1, jump_idx_list[interval_idx]+1)
-
-        found_meas = np.array(meas_at_pos)[meas_idx_range]
-
-        return found_meas
-
-    def get_meas_from_filenames(self):
-        ref_paths = self.measurement_selector.references.selected_paths
-        sam_paths = self.measurement_selector.samples.selected_paths
-
-        ref_meas_list = [self.cache.filepath_map[p] for p in ref_paths]
-        sam_meas_list = [self.cache.filepath_map[p] for p in sam_paths]
-
-        return ref_meas_list, sam_meas_list
-
-    def get_selected_measurements(self, also_return_ref=True):
-        identifier_map = {
-            SelectionCriterionEnum.selected_timestamp: self.measurement_selector.sel_timestamp,
-            SelectionCriterionEnum.selected_point: self.measurement_selector.sel_point,
-            SelectionCriterionEnum.string_search: self.measurement_selector.string_match,
-        }
-        handlers = {
-            SelectionCriterionEnum.selected_timestamp: self.get_measurements_from_timestamp,
-            SelectionCriterionEnum.selected_point: lambda pnt: self.get_measurements_from_point(*pnt),
-            SelectionCriterionEnum.string_search: self.get_measurements_from_string,
-        }
-
-        if self.selection_criterion == SelectionCriterionEnum.file_selection:
-            refs, selected_meas = self.get_meas_from_filenames()
-        else:
-            handler = handlers[self.selection_criterion]
-            identifier = identifier_map[self.selection_criterion]
-            selected_meas = handler(identifier)
-            refs = []
-            for m in selected_meas:
-                refs.append(self.get_nearest_ref(m, excluded_refs=refs))
-
-        return (refs, selected_meas) if also_return_ref else selected_meas
-
-    def get_arb_line(self, p0, p1):
-        # Bresenham's_line_algorithm
-        scale_x = 1 / self.shape_properties["dx"]
-        scale_y = 1 / self.shape_properties["dy"]
-
-        p0 = p0.magnitude if isinstance(p0, Q_) else p0
-        p1 = p1.magnitude if isinstance(p1, Q_) else p1
-
-        x0, y0 = round(p0[0] * scale_x), round(p0[1] * scale_y)
-        x1, y1 = round(p1[0] * scale_x), round(p1[1] * scale_y)
-
-        dx = abs(x1 - x0)
-        dy = abs(y1 - y0)
-        sx = 1 if x0 < x1 else -1
-        sy = 1 if y0 < y1 else -1
-
-        err = dx - dy
-        curr_x, curr_y = x0, y0
-        points = []
-
-        while True:
-            points.append((curr_x / scale_x, curr_y / scale_y))
-
-            if curr_x == x1 and curr_y == y1:
-                break
-
-            e2 = 2 * err
-            if e2 > -dy:
-                err -= dy
-                curr_x += sx
-            if e2 < dx:
-                err += dx
-                curr_y += sy
-
-        meas_list = [self.get_measurements_from_point(*p) for p in points]
-        meas_list = list(dict.fromkeys(meas_list))
-        points = [meas.position for meas in meas_list]
-
-        return meas_list, points
-
-    def get_cart_line(self, x=None, y=None, limits=None):
-        shape = self.shape_properties
-        if x is None and y is None:
-            return None
-
-        x_coords, y_coords = shape["x_coords"], shape["y_coords"]
-
-        # vertical direction / slice
-        if x is not None:
-            ret = [self.get_measurements_from_point(x, y_) for y_ in y_coords], y_coords
-        else:  # horizontal direction / slice
-            ret = [self.get_measurements_from_point(x_, y) for x_ in x_coords], x_coords
-
-        if limits is None:
-            return ret
-        else:
-            measurements, coords = ret
-            meas_in_limit_range = []
-            for i, coord in enumerate(coords):
-                if (limits[0] < coord) and (coord < limits[1]):
-                    meas_in_limit_range.append(measurements[i])
-
-            return meas_in_limit_range, coords
-
-    def get_nearest_ref(self, meas_, dist_func=None, excluded_refs=None):
-        if not dist_func:
-            dist_func = self.dist_func.value
-        if not excluded_refs:
-            excluded_refs = []
-        closest_ref, best_fit_val = None, np.inf
-        for ref_meas in self.measurements["refs"]:
-            if ref_meas in excluded_refs:
-                continue
-            dist_val = dist_func(ref_meas, meas_)
-            if np.abs(dist_val) < np.abs(best_fit_val):
-                best_fit_val = dist_val
-                closest_ref = ref_meas
-        # from random import choice
-        # closest_ref = choice(self.measurements["refs"])
-
-        logging.debug(f"Sam: {meas_})")
-        logging.debug(f"Ref: {closest_ref})")
-        if self.dist_func == Dist.Time:
-            logging.debug(f"Time between ref and sample: {best_fit_val} seconds")
-        else:
-            logging.debug(f"Distance between ref and sample: {best_fit_val} mm")
-        if closest_ref is None:
-            logging.warning("No nearest reference found, returning first reference")
-            return self.measurements["refs"][0]
-
-        return closest_ref
-
-    def get_ref_data(self, domain=Domain.Time, point=None, ref_idx=None, ret_meas=False):
-        if self.fix_ref is not False:
-            chosen_ref = self.measurements["refs"][self.fix_ref_idx]
-        elif point is not None:
-            closest_sam = self.get_measurements_from_point(*point)
-            chosen_ref = self.get_nearest_ref(closest_sam)
-        else:
-            if ref_idx is None:
-                ref_idx = -1
-            chosen_ref = self.measurements["refs"][ref_idx]
-
-        # chosen_ref = np.random.choice(self.measurements["refs"])
-
-        if domain in [Domain.Time, Domain.Frequency]:
-            ret = self.get_multi_data(chosen_ref, domain=domain)
-        else:
-            ret = self.get_multi_data(chosen_ref, domain=Domain.Both)
-
-        if ret_meas:
-            return ret, chosen_ref
-        else:
-            return ret
-
-    def _calc_ndim_quant(self, *arrs, op, out_like=None):
-        ndim = arrs[0].ndim
-
-        if out_like is not None:
-            val = out_like.copy()
-        else:
-            val = arrs[0].copy()
-
-        if ndim == 1:
-            val = op(*arrs)
-        elif ndim == 2:
-            val[:, 1] = op(*(a for a in arrs))
-        else:
-            for i in range(arrs[0].shape[0]):
-                val[i, :, 1] = op(*(a[i, :, :] for a in arrs))
-
-        return val
-
-    def ref_std(self):
-        all_refs = self.measurements["refs"]
-        ref_data = np.zeros((len(all_refs), len(self.freq_axis)), dtype=complex)
-        for ref_idx, ref_meas in enumerate(all_refs):
-            ref_fd = self.get_multi_data(ref_meas, domain=Domain.Frequency)
-            ref_data[ref_idx] = ref_fd[:, 1]
-
-        freq_range = (0.35 < self.freq_axis)*(self.freq_axis < 4.0)
-        amp_argmin = np.argmin(np.abs(ref_data[:, freq_range]))
-        amp_argmin = np.unravel_index(amp_argmin, ref_data[:, freq_range].shape)[0]
-        amp_min = ref_data[amp_argmin]
-
-        amp_argmax = np.argmax(np.abs(ref_data[:, freq_range]))
-        amp_argmax = np.unravel_index(amp_argmax, ref_data[:, freq_range].shape)[0]
-        amp_max = ref_data[amp_argmax]
-
-        amp_mean, amp_std = np.mean(np.abs(ref_data), axis=0), np.std(np.abs(ref_data), axis=0)
-        phi = np.unwrap(np.angle(ref_data))
-        phi_mean, phi_std = np.mean(phi, axis=0), np.std(phi, axis=0)
-
-        return amp_mean, amp_std, phi_mean, phi_std
-
-    def calc_meas_quantities(self, ref_meas_, meas_):
-        meas_quants = {}
-        meas_quants["freq_axis"] = self.freq_axis
-
-        is_avg_eval = self.settings.eval_opt.average
-        if not is_avg_eval:
-            logging.info("Single measurement evaluation")
-            logging.info(f"Reference measurement: {ref_meas_}")
-            logging.info(f"Sample measurement: {meas_}")
-
-            ref_td, ref_fd = self.get_multi_data(ref_meas_, Domain.Both)
-            sam_td, sam_fd = self.get_multi_data(meas_, Domain.Both)
-        else:
-            ref_meas_list = self.get_consecutive_meas(ref_meas_)
-            sam_meas_list = self.get_measurements_from_point(*meas_.position, return_single=False)
-
-            logging.info("Average measurement evaluation")
-            logging.info(f"Reference measurement list (count: {len(ref_meas_list)}):")
-            logging.info(f"{[meas.filepath.name for meas in ref_meas_list]}")
-            logging.info(f"Sample measurement list (count {len(sam_meas_list)}): ")
-            logging.info(f"{[meas.filepath.name for meas in sam_meas_list]}")
-
-            ref_td, ref_fd = self.get_multi_data(ref_meas_list, Domain.Both)
-            sam_td, sam_fd = self.get_multi_data(sam_meas_list, Domain.Both)
-
-        meas_quants["ref_td"], meas_quants["ref_td_std"] = arr_statistics(ref_td)
-        meas_quants["sam_td"], meas_quants["sam_td_std"] = arr_statistics(sam_td)
-        meas_quants["ref_fd"], meas_quants["ref_fd_std"] = arr_statistics(ref_fd)
-        meas_quants["sam_fd"], meas_quants["sam_fd_std"] = arr_statistics(sam_fd)
-
-        t_exp_amp = self._calc_ndim_quant(sam_fd, ref_fd, op=lambda a, b: np.abs(np.divide(a[:, 1], b[:, 1])))
-        t_exp_phi = self._calc_ndim_quant(ref_td, sam_td, ref_fd, sam_fd, op=self._calc_phi, out_like=ref_fd)
-        t_exp = self._calc_ndim_quant(t_exp_amp, t_exp_phi, op=lambda a, b: a[:, 1] * np.exp(-1j*b[:, 1]))
-
-        meas_quants["t_exp_amp"], meas_quants["t_exp_amp_std"] = arr_statistics(t_exp_amp)
-        meas_quants["t_exp_phi"], meas_quants["t_exp_phi_std"] = arr_statistics(t_exp_phi)
-        meas_quants["t_exp"], meas_quants["t_exp_std"] = arr_statistics(t_exp)
-
-        return meas_quants
+        return data_arr
 
     def windowing_eval(self, meas_):
-        d = self.settings.eval_opt.d.magnitude
 
-        og_pp_opt_state = {name: trait.get(self.settings.pp_opt)
-                           for name, trait in self.settings.pp_opt.traits().items()}
+        ref_meas = self.measurement_selector.get_matching_ref(meas_)
 
-        self.settings.pp_opt.enabled = True
-        self.settings.pp_opt.win_width = 10
-        self.settings.pp_opt.win_start = None
-        self.settings.pp_opt.en_plot = False
+        with self.settings.pp_opt.override(window_enabled=True, win_width=10, win_start=None):
+            ref_fd = self.get_multi_data(ref_meas, Domain.Frequency)
+            sam_fd = self.get_multi_data(meas_, Domain.Frequency)
 
-        ref_td, ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Both)
-        sam_td, sam_fd = self.get_multi_data(meas_, Domain.Both)
-
-        for name, value in og_pp_opt_state.items():
-            setattr(self.settings.pp_opt, name, value)
+            phi_corrected = self.phase_difference(meas_)
 
         freq_axis = self.freq_axis
-
-        phi_ref = np.unwrap(np.angle(ref_fd[:, 1]))
-        phi_sam = np.unwrap(np.angle(sam_fd[:, 1]))
-
-        phi = - (phi_sam - phi_ref)
-        phi_corrected = self._calc_phi(ref_td, sam_td, ref_fd, sam_fd)
-        phi_corrected = np.abs(phi_corrected)
-        # phi_corrected = phase_correction(freq_axis, phi, extrapolate=False)
-
         omega = 2 * np.pi * freq_axis
 
-        # phi =  - (phi_sam_corrected[freq_idx, 1] - phi_ref_corrected[freq_idx, 1])
-
+        d = self.settings.eval_opt.d.magnitude
         with np.errstate(divide='ignore', invalid='ignore'):
             n = 1 + phi_corrected * c_thz / (omega * d)
             n = np.nan_to_num(n, nan=1)
 
-            n[0] = n[1]
+            n[:, 0] = n[:, 1]
             n[n < 0] = 1
-            kap = -c_thz * np.log(np.abs(sam_fd[:, 1] / ref_fd[:, 1]) * (1 + n) ** 2 / (4 * n)) / (omega * d)
-            kap = np.nan_to_num(kap, nan=0)
-            alpha = 1e4 * 2 * omega * kap / c_thz
-            refr_idx = n + 1j * kap
+            ext_coe = -c_thz * np.log(np.abs(sam_fd[:, :, 1] / ref_fd[:, :, 1]) * (1 + n) ** 2 / (4 * n)) / (omega * d)
+            ext_coe = np.nan_to_num(ext_coe, nan=0)
+            abs_coe = 1e4 * 2 * omega * ext_coe / c_thz
+            refr_idx = n + 1j * ext_coe
 
-        ret = {"freq_axis": freq_axis,"refr_idx": refr_idx, "alpha": alpha,
-               "phi_ref": phi_ref, "phi_sam": phi_sam, "phi": phi, "phi_corrected": phi_corrected,
+        ret = {"freq_axis": freq_axis,
+               "refr_idx": refr_idx,
+               "abs_coe": abs_coe,
+               "phi_corrected": phi_corrected,
                }
 
-        return ret
+        return WindowEvalResult(**ret)
 
     def refractive_idx(self, meas_):
         return np.real(self.windowing_eval(meas_)["refr_idx"])
 
-    def _extinction_coe(self, meas_):
-        return np.imag(self.windowing_eval(meas_)["refr_idx"])
-
     def absorption_coef(self, meas_):
-        n_cmplx_res = self.windowing_eval(meas_)
-        freq_axis = n_cmplx_res["freq_axis"]
-        kap = n_cmplx_res["refr_idx"].imag
+        return self.windowing_eval(meas_)["abs_coe"]
 
-        omega = 2 * np.pi * freq_axis
-        alph = (1 / 1e-4) * 2 * kap * omega / c_thz # 1/cm
-
-        return alph
+    def extinction_coe(self, meas_):
+        return np.imag(self.windowing_eval(meas_)["refr_idx"])
 
     def get_single_layer_properties(self):
         sub_pnt = self.settings.eval_opt.sub_pnt
         if self.settings.eval_opt.use_sub_dataset:
             meas = self.sub_dataset.get_measurement(*sub_pnt)
-            single_layer_approx = self.sub_dataset.single_layer_eval(meas)
+            window_eval_res = self.sub_dataset.windowing_eval(meas)
             t = self.sub_dataset.transmission(meas)
         else:
             meas = self.get_measurements_from_point(*sub_pnt)
-            single_layer_approx = self.windowing_eval(meas)
+            window_eval_res = self.windowing_eval(meas)
             t = self.transmission(meas)
 
-        ret = {"meas": meas, "single_layer_approx": single_layer_approx, "t": t}
+        window_eval_res.meas = meas
+        window_eval_res.t = t
 
-        return ret
+        return window_eval_res
 
+    def get_ref_abs_argmax(self, measurement_):
+        ref_meas = self.measurement_selector.get_matching_ref(meas_)
+        ref_td = self.get_multi_data(ref_meas)
+        t, y = ref_td[:, :, 0], ref_td[:, :, 1]
 
-    def get_ref_argmax(self, measurement_):
-        ref_td = self.get_multi_data(measurement_)
-        t, y = ref_td[:, 0], ref_td[:, 1]
-
-        return t[np.argmax(y)]
+        return t[np.arange(t.shape[0]), np.argmax(np.abs(y), axis=1)]
 
     def spectral_similarity(self, meas_0, meas_1, freq_min=0.15, freq_max=2.00):
         data_fd_0 = self.get_multi_data(meas_0, domain=Domain.Frequency)
         data_fd_1 = self.get_multi_data(meas_1, domain=Domain.Frequency)
 
         f_idx_range = f_axis_idx_map(self.freq_axis, (freq_min, freq_max))
-        x, y = np.abs(data_fd_0[f_idx_range, 1]), np.abs(data_fd_1[f_idx_range, 1])
+        x, y = np.abs(data_fd_0[:, f_idx_range, 1]), np.abs(data_fd_1[:, f_idx_range, 1])
 
-        return 1+np.log(np.abs(pearsonr(x, y).statistic))
+        return 1+np.log(np.abs(pearsonr(x, y, axis=1).statistic))
 
-    def delay_from_phaseslope(self, meas_0, meas_1, freq_min=0.15, freq_max=0.85):
-        data_td_0 = self.get_multi_data(meas_0)
-        t0, y0 = data_td_0[:, 0], data_td_0[:, 1]
+    def delay_from_phase_slope(self, meas_0, meas_1, freq_min=0.15, freq_max=0.85):
+        phi_diff = self.phase_difference(meas_0, meas_1)
+        mask = (freq_min <= self.freq_axis) & (self.freq_axis <= freq_max)
 
-        data_td_1 = self.get_multi_data(meas_1)
-        t1, y1 = data_td_1[:, 0], data_td_1[:, 1]
+        p = np.polyfit(self.freq_axis[mask], phi_diff[:, mask].T, 1)
 
-        dt = t0[1] - t0[0]
-        N = len(t0)
+        tau = -p[0] / (2*np.pi)
 
-        y0 = y0 - np.mean(y0)
-        y1 = y1 - np.mean(y1)
-
-        Y0 = np.fft.fft(y0)
-        Y1 = np.fft.fft(y1)
-
-        # Y1 = (0.95*np.abs(Y1)) * np.exp(1j*np.angle(Y1))
-
-        freqs = np.fft.fftfreq(N, dt)
-        omega = 2 * np.pi * freqs
-
-        H = Y1 / Y0
-
-        phase = np.unwrap(np.angle(H))
-
-        mask = freqs > 0
-
-        if freq_min is not None:
-            mask &= freqs > freq_min
-
-        if freq_max is not None:
-            mask &= freqs < freq_max
-
-        omega_fit = omega[mask]
-        phase_fit = phase[mask]
-
-        p = np.polyfit(omega_fit, phase_fit, 1)
-
-        slope = p[0]
-
-        tau = -slope
-        # print(tau)
         return tau
-
-    def _get_cross_correlation_delay(self, meas_0, meas_1):
-        upsample = 10
-        data_td_0 = self.get_multi_data(meas_0)
-        t0, y0 = data_td_0[:, 0], data_td_0[:, 1]
-
-        data_td_1 = self.get_multi_data(meas_1)
-        t1, y1 = data_td_1[:, 0], data_td_1[:, 1]
-
-        dt = t0[1] - t0[0]
-
-        y0 = y0 - np.mean(y0)
-        y1 = y1 - np.mean(y1)
-
-        n = len(y0) + len(y1)
-
-        Y0 = np.fft.fft(y0, n * upsample)
-        Y1 = np.fft.fft(y1, n * upsample)
-
-        corr = np.fft.ifft(Y1 * np.conj(Y0))
-        corr = np.abs(np.fft.fftshift(corr))
-
-        lags = np.arange(-len(corr) // 2, len(corr) // 2)
-
-        k = np.argmax(corr)
-
-        lag = lags[k] / upsample
-
-        delay = lag * dt
-        # print(delay)
-        return delay
 
     def get_zero_crossing(self, measurement_):
         data_td = self.get_multi_data(measurement_)
-        t, y = data_td[:, 0], data_td[:, 1]
-        y_abs_max = np.argmax(np.abs(y))
-        # y_abs_max = np.argmax(y)
+        t, y = data_td[:, :, 0], data_td[:, :, 1]
 
-        zero_crossing_idx = 1
-        for i in range(len(y)):
-            if i < y_abs_max or i == len(y) - 1:
-                continue
-            if np.sign(y[i - 1]) * np.sign(y[i]) < 0: # sign change ++=+, --=+, +-=-, -+=-
-            # if y[i - 1] > 0 > y[i]:  # sign change ++=+, --=+, +-=-, -+=-
-                zero_crossing_idx = i
-                break
+        y_abs_max = np.argmax(np.abs(y), axis=1)
 
-        y1, y2 = y[zero_crossing_idx - 1], y[zero_crossing_idx]
-        x1, x2 = t[zero_crossing_idx - 1], t[zero_crossing_idx]
+        sign_changes = (y[:, :-1] * y[:, 1:]) < 0
 
-        if np.isclose(y2-y1, 0):
-            return 0
-        else:
-            zero_crossing_interp = (y1 * x2 - x1 * y2) / (y1 - y2)
-            # print(zero_crossing_interp)
-            return zero_crossing_interp
+        time_indices = np.arange(y.shape[1] - 1)
+        valid_mask = sign_changes & (time_indices >= y_abs_max[:, None])
+
+        first_cross_idx = np.argmax(valid_mask, axis=1)
+
+        meas_idx = np.arange(y.shape[0])
+
+        y1 = y[meas_idx, first_cross_idx]
+        y2 = y[meas_idx, first_cross_idx + 1]
+        x1 = t[meas_idx, first_cross_idx]
+        x2 = t[meas_idx, first_cross_idx + 1]
+
+        dy = y1 - y2
+
+        has_zero_crossing = valid_mask[meas_idx, first_cross_idx] & ~np.isclose(dy, 0)
+
+        zero_crossing_interp = np.zeros(y.shape[0])
+        zero_crossing_interp[has_zero_crossing] = ((y1 * x2 - x1 * y2) / dy)[has_zero_crossing]
+
+        return zero_crossing_interp
 
     def p2p(self, meas_: Measurement):
         y_td = self.get_multi_data(meas_)
-        return np.max(y_td[:, 1]) - np.min(y_td[:, 1])
+        return np.max(y_td[:, :, 1], axis=1) - np.min(y_td[:, :, 1], axis=1)
 
     def phase(self, meas_: Measurement):
         y_fd = self.get_multi_data(meas_, domain=Domain.Frequency)
-        return np.angle(y_fd[:, 1])
+        return np.angle(y_fd[:, :, 1])
 
     def power(self, meas_: Measurement):
-        ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Frequency)
+        ref_meas = self.get_matching_ref(meas_)
+        ref_fd = self.get_multi_data(ref_meas, domain=Domain.Frequency)
         sam_fd = self.get_multi_data(meas_, domain=Domain.Frequency)
 
-        power_val_ref = np.abs(ref_fd[:, 1])
-        power_val_sam = np.abs(sam_fd[:, 1])
+        power_val_ref = np.abs(ref_fd[:, :, 1])
+        power_val_sam = np.abs(sam_fd[:, :, 1])
 
         return (power_val_sam / power_val_ref) ** 2
 
-    def power_int(self, meas_: Measurement, freq_range: tuple):
+    def power_int(self, meas_: Measurement, freq_range):
         freq_slice = (freq_range[0] < self.freq_axis) * (self.freq_axis < freq_range[1])
 
-        ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Frequency)
+        ref_meas = self.get_matching_ref(meas_)
+        ref_fd = self.get_multi_data(ref_meas, domain=Domain.Frequency)
         sam_fd = self.get_multi_data(meas_, domain=Domain.Frequency)
 
-        power_val_ref = np.sum(np.abs(ref_fd[freq_slice, 1]) ** 2)
-        power_val_sam = np.sum(np.abs(sam_fd[freq_slice, 1]) ** 2)
+        power_val_ref = np.sum(np.abs(ref_fd[:, freq_slice, 1]) ** 2, axis=1)
+        power_val_sam = np.sum(np.abs(sam_fd[:, freq_slice, 1]) ** 2, axis=1)
 
         return power_val_sam / power_val_ref
 
@@ -1118,47 +714,87 @@ class DataSet(ComponentBase):
     def ref_max(self, meas_: Measurement):
         y_fd = self._ref_interpolation(meas_)
 
-        return np.abs(y_fd[:, 1])
+        return np.abs(y_fd[:, :, 1])
 
     def ref_phase(self, meas_: Measurement):
         y_fd = self._ref_interpolation(meas_)
 
-        return np.angle(y_fd[:, 1])
+        return np.angle(y_fd[:, :, 1])
 
     def simple_peak_cnt(self, meas_: Measurement, threshold: float):
         data_td = self.get_multi_data(meas_)
-        y_ = data_td[:, 1]
-        y_ -= (np.mean(y_[:10]) + np.mean(y_[-10:])) * 0.5
+        y_ = data_td[:, :, 1]
 
-        y_[y_ < threshold] = 0
-        peaks_idx = []
-        for idx_ in range(1, len(y_) - 1):
-            if (y_[idx_ - 1] < y_[idx_]) * (y_[idx_] > y_[idx_ + 1]):
-                peaks_idx.append(idx_)
+        baseline = 0.5 * (
+                np.mean(y_[:, :10], axis=1, keepdims=True) +
+                np.mean(y_[:, -10:], axis=1, keepdims=True)
+        )
+        y_ -= baseline
 
-        return len(peaks_idx)
+        threshold_slice = y_[:, 1:-1] > threshold
+        peak_idx = (y_[:, :-2] < y_[:, 1:-1]) & (y_[:, 1:-1] > y_[:, 2:])
+        peak_cnt = np.sum(peak_idx & threshold_slice, axis=1)
 
-    def transmission(self, meas_, phase_sign=1):
-        ref_fd = self.get_ref_data(point=meas_.position, domain=Domain.Frequency)
-        sam_fd = self.get_multi_data(meas_, Domain.Frequency)
+        return peak_cnt
 
-        t = sam_fd[:, 1] / ref_fd[:, 1]
+    def phase_difference(self, m0, m1=None):
+        # phase unwrapping Phase Retrieval in Terahertz Time-Domain
+        # Measurements: a how to Tutorial P. Uhd Jepsen https://doi.org/10.1007/s10762-019-00578-0
+        if m1 is None:
+            m1 = self.measurement_selector.get_matching_ref(m0)
 
-        if phase_sign != 1:
-            phi = np.unwrap(np.angle(t))
-            t = np.abs(t) * np.exp(phase_sign * 1j * phi)
+        m1_fd = self.get_multi_data(m1, Domain.Frequency)
+        m0_fd = self.get_multi_data(m0, Domain.Frequency)
+        m1_td = self.get_multi_data(m1, Domain.Time)
+        m0_td = self.get_multi_data(m0, Domain.Time)
 
-        return t
+        phi_fit_range = self.settings.eval_opt.phi_fit_range.magnitude
+
+        f_axis = self.freq_axis
+        w_axis = 2 * np.pi * f_axis
+
+        t0_m1_idx = np.argmax(np.abs(m1_td[:, :, 1]), axis=1)
+        t0_m0_idx = np.argmax(np.abs(m0_td[:, :, 1]), axis=1)
+
+        t0_m1 = m1_td[np.arange(m1_td.shape[0]), t0_m1_idx, 0]
+        t0_m0 = m0_td[np.arange(m0_td.shape[0]), t0_m0_idx, 0]
+        t_offset = m1_td[:, 0, 0] - m0_td[:, 0, 0]
+
+        phi0_m1, phi0_m0 = w_axis * t0_m1[:, None], w_axis * t0_m0[:, None]
+
+        phi_r_m1 = np.angle(m1_fd[:, :, 1] * np.exp(-1j * phi0_m1))
+        phi_r_m0 = np.angle(m0_fd[:, :, 1] * np.exp(-1j * phi0_m0))
+
+        phi0_star = np.unwrap(phi_r_m0 - phi_r_m1, axis=1)
+
+        fit_slice = (f_axis >= phi_fit_range[0]) * (f_axis <= phi_fit_range[1])
+        p = np.polyfit(f_axis[fit_slice], phi0_star[:, fit_slice].T, 1)
+
+        phi0 = phi0_star - 2 * np.pi * np.round(p[1][:, None] / (2 * np.pi))
+
+        if not self.settings.eval_opt.phi_offset_correction:
+            return phi0_star
+
+        phi = phi0 - phi0_m1 + phi0_m0 + t_offset
+
+        return phi
 
     def amplitude_transmission(self, meas_):
-        t = self.transmission(meas_)
+        ref_meas_ = self.measurement_selector.get_matching_ref(meas_)
+        ref_fd = self.get_multi_data(ref_meas_, Domain.Frequency)
+        sam_fd = self.get_multi_data(meas_, Domain.Frequency)
+
+        t = sam_fd[:, :, 1] / ref_fd[:, :, 1]
 
         return np.abs(t)
 
-    def phase_transmission(self, meas_):
-        t = self.transmission(meas_)
+    def transmission(self, meas_):
+        t_abs = self.amplitude_transmission(meas_)
+        phase_difference = self.phase_difference(meas_)
 
-        return np.angle(t)
+        t = t_abs * np.exp(1j * phase_difference)
+
+        return t
 
     def time_of_flight(self, meas_):
         closest_ref = self.get_nearest_ref(meas_)
@@ -1166,48 +802,15 @@ class DataSet(ComponentBase):
         t_zero_ref = self.get_zero_crossing(closest_ref)
         t_zero_sam = self.get_zero_crossing(meas_)
 
-        return np.abs(t_zero_ref - t_zero_sam)
-
-    def _calc_phi(self, ref_td_, sam_td_, ref_fd_, sam_fd_):
-        phi_fit_range = self.settings.eval_opt.phi_fit_range
-        if isinstance(phi_fit_range[0], Q_):
-            phi_fit_range = [phi_fit_range[0].magnitude, phi_fit_range[1].magnitude]
-
-        t_axis, f_axis = ref_td_[:, 0], ref_fd_[:, 0].real
-        w_axis = 2*np.pi*f_axis
-
-        t0_ref_idx = np.argmax(np.abs(ref_td_[:, 1]))
-        t0_sam_idx = np.argmax(np.abs(sam_td_[:, 1]))
-
-        t0_ref, t0_sam = t_axis[t0_ref_idx], t_axis[t0_sam_idx]
-        t_offset = ref_td_[0, 0] - sam_td_[0, 0]
-
-        phi0_ref, phi0_sam = w_axis * t0_ref, w_axis * t0_sam
-
-        phi_r_ref = np.angle(ref_fd_[:, 1] * np.exp(-1j * phi0_ref))
-        phi_r_sam = np.angle(sam_fd_[:, 1] * np.exp(-1j * w_axis * t0_sam))
-
-        phi0_star = np.unwrap(phi_r_sam - phi_r_ref)
-
-        fit_slice = (f_axis >= phi_fit_range[0]) * (f_axis <= phi_fit_range[1])
-        p = np.polyfit(f_axis[fit_slice], phi0_star[fit_slice], 1)
-
-        phi0 = phi0_star - 2*np.pi * int(p[1] / (2*np.pi))
-
-        if not self.settings.eval_opt.phi_offset_correction:
-            return phi0_star
-
-        phi = phi0 - phi0_ref + phi0_sam + t_offset
-
-        return phi
+        return t_zero_ref - t_zero_sam
 
     def conductivity(self, meas_):
         sub_properties = self.get_single_layer_properties()
 
-        t_sam = self.transmission(meas_, 1)
+        t_sam = self.transmission(meas_)
 
-        n_sub = sub_properties["single_layer_approx"]["refr_idx"]
-        t_sub = sub_properties["t"]
+        n_sub = sub_properties.refr_idx
+        t_sub = sub_properties.t
 
         d_film = self.settings.eval_opt.d_film.magnitude
         if np.isclose(d_film, 0):
@@ -1218,77 +821,85 @@ class DataSet(ComponentBase):
         sigma = 1e4 * (1/d_film) * eps0_thz * c_thz * (1 + n_sub) * (t_sub/t_sam - 1)
 
         # phase correction, [dt] = fs
-        dt = self.settings.eval_opt.dt.magnitude
-        dt *= 1e-3
-        sigma *= np.exp(-1j*dt*2*np.pi*self.freq_axis)
-
-        sigma.imag *= 1
+        dt = self.settings.eval_opt.dt.magnitude * 1e-3
+        sigma *= np.exp(-1j*dt*2*np.pi*self.freq_axis[None, :])
 
         return sigma
 
+    def sigma_to_n(self, freq, sigma):
+        w = 2 * np.pi * freq
+
+        sigma *= 1e-4 # S/cm -> S/µm
+        n_ = (1 + 1j) * np.sqrt(sigma/(2*w*eps0_thz))
+
+        return n_
+
     def _ref_interpolation(self, sam_meas):
-        sam_meas_time = sam_meas.meas_time
-        nearest_ref = self.get_nearest_ref(sam_meas, dist_func=Dist.Time.value)
-
-        sam_idx = self.measurements["all"].index(sam_meas)
-        ref_idx = self.measurements["all"].index(nearest_ref)
-
         if len(self.measurements["refs"]) < 2:
-            return self.get_multi_data(self.measurements["refs"][0], domain=Domain.Frequency)
+            single_ref_fd = self.get_multi_data([self.measurements["refs"][0]], domain=Domain.Frequency)
+            return np.repeat(single_ref_fd, len(sam_meas), axis=0)
 
-        ref_list_idx = self.measurements["refs"].index(nearest_ref)
-        if sam_idx < ref_idx:
-            # nearest_ref was measured after sample
-            ref_before = self.measurements["refs"][ref_list_idx - 1]
-            ref_after = self.measurements["refs"][ref_list_idx]
-        else: # nearest_ref was measured before sample
-            ref_before = self.measurements["refs"][ref_list_idx]
-            ref_after = self.measurements["refs"][ref_list_idx + 1]
+        refs_before = []
+        refs_after = []
+        sam_times = []
 
-        ref_before_fd = self.get_multi_data(ref_before, domain=Domain.Frequency)
-        ref_after_fd =  self.get_multi_data(ref_after, domain=Domain.Frequency)
+        for meas in sam_meas:
+            nearest_ref = self.measurement_selector.get_nearest_ref(meas, dist_func=Dist.Time.value)
+            sam_idx = self.measurements["all"].index(meas)
+            ref_idx = self.measurements["all"].index(nearest_ref)
+            ref_list_idx = self.measurements["refs"].index(nearest_ref)
 
-        t0 = self.measurements["refs"][0].meas_time
-        t = [(ref_before.meas_time - t0).total_seconds(), (ref_after.meas_time - t0).total_seconds()]
+            if sam_idx < ref_idx:
+                # nearest_ref was measured after sample
+                refs_before.append(self.measurements["refs"][ref_list_idx - 1])
+                refs_after.append(self.measurements["refs"][ref_list_idx])
+            else:
+                # nearest_ref was measured before sample
+                refs_before.append(self.measurements["refs"][ref_list_idx])
+                refs_after.append(self.measurements["refs"][ref_list_idx + 1])
 
-        y_fd_interpol = np.zeros(len(self.freq_axis), dtype=complex)
-        for f_idx in range(len(self.freq_axis)):
-            y_fd = [ref_before_fd[f_idx, 1], ref_after_fd[f_idx, 1]]
+            sam_times.append(meas.meas_time)
 
-            y_fd_interpol[f_idx] = np.interp((sam_meas_time - t0).total_seconds(), t, y_fd)
+        fd_before = self.get_multi_data(refs_before, domain=Domain.Frequency)[:, :, 1]
+        fd_after = self.get_multi_data(refs_after, domain=Domain.Frequency)[:, :, 1]
 
-        ref_interpol_fd = np.array([self.freq_axis, y_fd_interpol], dtype=complex).T
+        t_before = np.array([(rb.meas_time - st).total_seconds() for rb, st in zip(refs_before, sam_times)])
+        t_span = np.array([(ra.meas_time - rb.meas_time).total_seconds() for ra, rb in zip(refs_after, refs_before)])
 
-        return ref_interpol_fd
+        y_fd_interpol = fd_before -((t_before / t_span)[:, None]) * (fd_after - fd_before)
+
+        freq_grid = np.tile(self.freq_axis, (len(sam_meas), 1))
+        std_grid = np.tile(np.zeros_like(self.freq_axis), (len(sam_meas), 1))
+
+        return np.stack((freq_grid, y_fd_interpol, std_grid), axis=-1)
 
     def meas_time_diff(self, m1, m2):
         val = (m2.meas_time - m1.meas_time).total_seconds()
         return Q_(val, "s")
 
-    @action("Export measurement quantities", group=data_export_grp)
-    def export_meas_quants(self):
-        label = self.data_export_label
-        ref_meas, selected_meas = self.get_selected_measurements()
-        meas_quants = self.calc_meas_quantities(ref_meas, selected_meas)
+    @action("Export measurement data", group=data_export_grp)
+    def export_measurement_data(self):
+        selected_meas = self.measurement_selector.selected_measurements
+        ref_meas = self.measurement_selector.reference_measurements
+        data_arrays = {
+            "ref_td": self.get_multi_data(ref_meas, domain=Domain.Time),
+            "ref_fd": self.get_multi_data(ref_meas, domain=Domain.Frequency),
+            "sam_td": self.get_multi_data(selected_meas, domain=Domain.Time),
+            "sam_fd": self.get_multi_data(selected_meas, domain=Domain.Frequency),
+            "t": self.transmission(selected_meas),
+        }
 
-        self.export_as_csv(meas_quants, file_app=label)
-
-    def export_as_csv(self, dict_, file_app=""):
         save_dir = self.export_csv_dir
+        file_app = self.data_export_label
         if not file_app:
             file_app = datetime.now().isoformat().replace(':', '-')
         save_path = save_dir / f"exported_data_{file_app}.csv"
         logging.info(f"Exporting data to {save_path}")
 
-        exp_dict = {}
-        for k in dict_:
-            if isinstance(dict_[k], np.ndarray):
-                if dict_[k].ndim == 2:
-                    arr = dict_[k][:, 1]
-                else:
-                    arr = dict_[k]
-                if len(dict_[k]) == len(dict_["freq_axis"]):
-                    exp_dict[k] = arr
+        exp_dict = {"freq_axis": self.freq_axis, "time_axis": self.time_axis}
+        for k, data_arr in data_arrays.items():
+            for meas_idx in data_arr.shape[0]:
+                exp_dict[f"{k}_{meas_idx}"] = val[meas_idx, :, 1]
 
         df = pd.DataFrame(exp_dict)
         df = df.astype(str)

@@ -6,7 +6,7 @@ from common.consts import c_thz
 def optimize_transmission(d, shift, config_dict):
     f_idx_range_ = config_dict["f_idx_range_"]
     freq_axis = config_dict["freq_axis"]
-    single_layer_approx = config_dict["single_layer_approx"]
+    n0_ = config_dict["n_guess"]
     t_exp = config_dict["t_exp"]
     transmission_model = config_dict["transmission_model"]
     cost_fun = config_dict["cost_fun"]
@@ -14,12 +14,12 @@ def optimize_transmission(d, shift, config_dict):
     shgo_options = config_dict["shgo_options"]
 
     freq_axis_slice = freq_axis[f_idx_range_]
-    n0_ = single_layer_approx["refr_idx"][f_idx_range_]
+    n0_ = n0_[f_idx_range_]
     t_exp_ = t_exp[f_idx_range_, 1]
 
     time.sleep(1000/(min(500, d)))
 
-    model_kwargs_keys = ["single_layer_approx", "d", "n_sub", "n1", "n4", "h", "nfp"]
+    model_kwargs_keys = ["d", "n_sub", "n1", "n4", "h", "nfp"]
     model_kwargs = {k: config_dict[k] for k in model_kwargs_keys if k in config_dict}
     model_kwargs["shift"] = shift
 

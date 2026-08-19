@@ -166,7 +166,7 @@ class DataSetPlotter(ComponentBase):
         return self.dataset.get_selected_measurements(**kwargs)
 
     def get_selected_quantity(self):
-        self._update_quant_func()
+        self._update_sel_quant_func()
         return self.selected_quantity.value
 
     def _get_empty_grid(self):
@@ -189,10 +189,10 @@ class DataSetPlotter(ComponentBase):
 
         return grid
 
-    def _update_quant_func(self):
+    def _update_sel_quant_func(self):
         func_map = self.dataset.func_map
 
-        freq_range = (self.sel_freq_range[0].magnitude, self.sel_freq_range[1].magnitude)
+        freq_range = self.sel_freq_range.magnitude
         func_map[QuantityEnum.PowerInt] = partial(self.dataset.power_int, freq_range=freq_range)
         func_map[QuantityEnum.PeakCnt] = partial(self.dataset.simple_peak_cnt, threshold=2.5)
 
@@ -202,7 +202,7 @@ class DataSetPlotter(ComponentBase):
     def select_quantity(self, change=None):
         if change is None:
             return
-        self._update_quant_func()
+        self._update_sel_quant_func()
 
     def _coords_to_idx(self, x_, y_):
         shape_properties = self.img_shape
@@ -246,27 +246,6 @@ class DataSetPlotter(ComponentBase):
                     filtered_grid[x_idx, y_idx] = empty_grid[x_idx, y_idx]
 
         return filtered_grid
-
-    def get_meas_quantities(self, only_ret_quants=False):
-        ref_meas, selected_meas = self.get_selected_measurement()
-        meas_quants = self.dataset.calc_meas_quantities(ref_meas, selected_meas)
-
-        logging.info(f"Reference measurement: {ref_meas}")
-        logging.info(f"Sample measurement: {selected_meas}\n")
-
-        if self.plot_settings.shift_sam2ref:
-            t0_sam = np.argmax(meas_quants["sam_td"][:, 1])
-            t0_ref = np.argmax(meas_quants["ref_td"][:, 1])
-            shift_t = np.abs(t0_ref - t0_sam)
-            meas_quants["sam_td"][:, 1] = np.roll(meas_quants["sam_td"][:, 1], -shift_t)
-
-        if self.plot_settings.remove_t_offset:
-            meas_quants["sam_td"][:, 0] -= meas_quants["sam_td"][0, 0]
-
-        if only_ret_quants:
-            return meas_quants
-
-        return ref_meas, selected_meas, meas_quants
 
     @action("Calculate quantity value", priority=1002)
     def calc_quant_value(self):
@@ -333,7 +312,7 @@ class DataSetPlotter(ComponentBase):
 
             ret["meas_times"][i] = self.dataset.meas_time_diff(meas0, meas_)
             ret["zero_crossing"][i] = self.dataset.get_zero_crossing(meas_)
-            ret["relative_delay"][i] = self.dataset.delay_from_phaseslope(meas0, meas_)
+            ret["relative_delay"][i] = self.dataset.delay_from_phase_slope(meas0, meas_)
             ret["ampl_arr"][i] = np.abs(fd_val)
             ret["angle_arr"][i] = -np.angle(fd_val)
             ret["spec_similarity"][i] = self.dataset.spectral_similarity(meas0, meas_)
@@ -553,10 +532,18 @@ class DataSetPlotter(ComponentBase):
         if point is not None:
             sam_meas = self.dataset.get_measurements_from_point(*point)
             ref_meas = self.dataset.get_nearest_ref(sam_meas)
-            meas_quants = self.dataset.calc_meas_quantities(ref_meas, sam_meas)
         else:
             ref_meas, sam_meas, meas_quants = self.get_meas_quantities()
             point = sam_meas.position
+
+        if self.plot_settings.shift_sam2ref:
+            t0_sam = np.argmax(meas_quants["sam_td"][:, 1])
+            t0_ref = np.argmax(meas_quants["ref_td"][:, 1])
+            shift_t = np.abs(t0_ref - t0_sam)
+            meas_quants["sam_td"][:, 1] = np.roll(meas_quants["sam_td"][:, 1], -shift_t)
+
+        if self.plot_settings.remove_t_offset:
+            meas_quants["sam_td"][:, 0] -= meas_quants["sam_td"][0, 0]
 
         if not plt.fignum_exists(self.td_fig_num) or not plt.fignum_exists(self.fd_fig_num):
             self.plot_ref(ref_meas)
@@ -674,8 +661,8 @@ class DataSetPlotter(ComponentBase):
 
         simple_eval_res0 = self.dataset.windowing_eval(sam_meas0)
         simple_eval_res1 = self.dataset.windowing_eval(sam_meas1)
-        phi0 = simple_eval_res0["phi_corrected"]
-        phi1 = simple_eval_res1["phi_corrected"]
+        phi0 = simple_eval_res0.phi_corrected
+        phi1 = simple_eval_res1.phi_corrected
         phi_diff = phi0-phi1
 
         f_idx_range = f_axis_idx_map(self.dataset.freq_axis, plot_range)

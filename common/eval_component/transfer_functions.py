@@ -4,10 +4,17 @@ from common.eval_component.tmm_impl import coh_tmm_wrapper
 
 # n is the free parameter of the unknown layer
 
+def layer_cnt_decorator(layer_cnt=1):
+    def mark_layer_cnt(func):
+        func.layer_cnt = layer_cnt
+        return func
+
+    return mark_layer_cnt
+
 def shift_t(freq, t, shift=0.0):
     return t * np.exp(1j * 2 * np.pi * (shift * 1e-3) * freq)
 
-
+@layer_cnt_decorator(layer_cnt=1)
 def t_tmm_model_1layer(n, freq, **opt_kwargs):
     d = opt_kwargs["d"]
     shift = opt_kwargs["shift"]
@@ -28,6 +35,7 @@ def t_tmm_model_1layer(n, freq, **opt_kwargs):
 
     return np.nan_to_num(t)
 
+@layer_cnt_decorator(layer_cnt=2)
 def t_tmm_model_2layer(n, freq, **opt_kwargs):
     d = opt_kwargs["d"]
     n_sub = opt_kwargs["n_sub"]
@@ -52,6 +60,7 @@ def t_tmm_model_2layer(n, freq, **opt_kwargs):
 
     return np.nan_to_num(t)
 
+@layer_cnt_decorator(layer_cnt=1)
 def model_1layer(n, freq, **opt_kwargs):
     d = opt_kwargs["d"]
     nfp = opt_kwargs["nfp"]
@@ -86,7 +95,7 @@ def model_1layer(n, freq, **opt_kwargs):
 
     return np.nan_to_num(t)
 
-
+@layer_cnt_decorator(layer_cnt=2)
 def model_2layer(n, freq, **opt_kwargs):
     d = opt_kwargs["d"]
     n_sub = opt_kwargs["n_sub"]
@@ -116,6 +125,7 @@ def model_2layer(n, freq, **opt_kwargs):
 
     return np.nan_to_num(t)
 
+@layer_cnt_decorator(layer_cnt=2)
 def _t_model_2layer(n, freq, **opt_kwargs):
     d = opt_kwargs["d"]
     n_sub = opt_kwargs["n_sub"]
