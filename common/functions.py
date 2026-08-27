@@ -53,39 +53,6 @@ def unwrap(data_fd):
     return array([data_fd[:, 0].real, np.unwrap(np.angle(y))]).T
 
 
-def phase_correction(freq_axis_, phi, enable=False, fit_range=None, en_plot=False,
-                     extrapolate=False, rewrap=False):
-    if not enable:
-        return phi
-
-    if fit_range is None:
-        fit_range = [0.25, 1.0]
-
-    fit_slice = (freq_axis_ >= fit_range[0]) * (freq_axis_ <= fit_range[1])
-    p = np.polyfit(freq_axis_[fit_slice], phi[fit_slice], 1)
-
-    if p[0] < 0:
-        phi *= -1
-        p[0] *= -1
-
-    phi_corrected = phi - p[1].real
-
-    if extrapolate:
-        phi_corrected = p[0].real * freq_axis_
-
-    if rewrap:
-        phi_corrected = np.angle(np.exp(1j * phi_corrected))
-
-    if en_plot:
-        plt.figure("phase_correction")
-        plt.plot(freq_axis_, phi, label="Unwrapped phase")
-        plt.plot(freq_axis_, phi_corrected, label="corrected phase")
-        plt.plot(freq_axis_, freq_axis_*p[0]+p[1], label="PolyFit deg=1")
-        plt.xlabel("Frequency (THz)")
-        plt.ylabel("Phase (rad)")
-        plt.legend()
-
-    return phi_corrected
 
 def remove_offset(data_td):
     data_td[:, 1] -= np.mean(data_td[:10, 1])
@@ -186,13 +153,6 @@ def window(data_td, **kwargs):
 
     return np.array([t, y_win]).T
 
-
-def calc_absorption(freqs, k):
-    # Assuming freqs in range (0, 10 THz), returns a in units of 1/cm (1/m * 1/100)
-    omega = 2 * pi * freqs * THz
-    a = (2 * omega * k) / c0
-
-    return a / 100
 
 
 def cauchy_relation(freqs, p):
@@ -305,15 +265,14 @@ def polyfit(x, y, degree, remove_worst_outlier=False):
     return results
 
 
-def to_db(data_fd):
-    if data_fd.ndim == 2:
-        return 20 * np.log10(np.abs(data_fd[:, 1]))
-    else:
-        return 20 * np.log10(np.abs(data_fd))
+def to_db(data_fd, normalize=False):
+    res = np.abs(data_fd).astype(float)
+    if normalize:
+        res[..., 1] = res[..., 1] / np.max(res, axis=-1)
+    res[..., 1] = 20 * np.log10(res[..., 1])
 
+    return res
 
-def get_noise_floor(data_fd, noise_start=6.0):
-    return np.mean(20 * np.log10(np.abs(data_fd[data_fd[:, 0] > noise_start, 1])))
 
 
 def zero_pad_fd(data0_fd, data1_fd):
@@ -370,19 +329,6 @@ def f_axis_idx_map(freqs, freq_range=None):
     return f_idx
 
 
-def remove_spikes(arr):
-    # TODO work in progress don't use, doesn't work
-    diff = np.diff(arr)
-    for i in range(1, len(arr) - 1):
-        if i < 5:
-            avg_diff = np.mean(np.diff(arr[i:i + 3]))
-        else:
-            avg_diff = np.mean(np.diff(arr[i - 3:i]))
-
-        if diff[i] > avg_diff:
-            arr[i + 1] = (arr[i] + arr[i + 2]) / 2
-
-    return arr
 
 def moving_average(a, n=3, iterations=1):
     a = np.array(a)
@@ -491,10 +437,20 @@ def local_minima_1d(arr, en_plot=True):
 
     return minima_idx, mean_period, std_period
 
-def smooth_temp_values(meas_time, temp, humidity):
-    # smooth()
+def calculate_bandwidth(data_fd_1meas, noise_region_fraction = 0.20):
+    freqs = data_fd_1meas[:, 0]
+    data_fd_1meas_db = to_db(data_fd_1meas, normalize=True)
 
-    return meas_time, temp, humidity
+    num_noise_samples = int(len(freqs) * noise_region_fraction)
+    noise_floor_db = np.mean(data_fd_1meas_db[-num_noise_samples:, 1])
+
+    valid_indices = np.where(data_fd_1meas_db[:, 1] < noise_floor_db + 6.0)[0]
+
+    return {
+        "bandwidth": freqs[valid_indices[0]],
+        "snr": np.max(data_fd_1meas_db)-np.min(data_fd_1meas_db),
+    }
+
 
 def avg_data_array(data_arr):
     def _std(data_, **kwargs):
@@ -505,13 +461,16 @@ def avg_data_array(data_arr):
         else:
             return np.std(data_, ddof=1, **kwargs)
 
-    if data_arr.ndim <= 2:
+    if data_arr.ndim < 2:
         return data_arr
+    elif data_arr.ndim == 2:
+        avg_std = np.mean(data_arr, axis=0)
+        avg_std[:, 2] = _std(data_arr[:, 1], axis=0)
+        return avg_std
     elif data_arr.ndim == 3: # [meas0, ..., meas_n][[x0, y0], ..., [xn, yn]]
         avg_std = np.mean(data_arr, axis=0)
         avg_std[:, 2] = _std(data_arr[:, :, 1], axis=0)
         return avg_std
-
     else: # [ref, sam][meas0, ..., meas_n][[x0, y0], ..., [xn, yn]]
         avg_std_ref = np.mean(data_arr[0], axis=0)
         avg_std_ref[:, :, 2] = _std(data_arr[0, :, :, 1], axis=0)
@@ -520,6 +479,31 @@ def avg_data_array(data_arr):
         avg_std_sam[:, :, 2] = _std(data_arr[1, :, :, 1], axis=0)
 
         return np.array([avg_std_ref, avg_std_sam])
+
+
+def get_coordinate_line(measurements, x=None, y=None):
+    if not measurements:
+        return []
+
+    if x is not None:
+        all_x = np.array([m.position[0] for m in measurements])
+        closest_x = all_x[np.argmin(np.abs(all_x - x))]
+
+        line_measurements = [m for m in measurements if m.position[0] == closest_x]
+
+        line_measurements.sort(key=lambda m: m.position[1])
+
+    else:
+        all_y = np.array([m.position[1] for m in measurements])
+        closest_y = all_y[np.argmin(np.abs(all_y - y))]
+
+        line_measurements = [m for m in measurements if m.position[1] == closest_y]
+
+        line_measurements.sort(key=lambda m: m.position[0])
+
+    return line_measurements
+
+
 
 
 if __name__ == '__main__':

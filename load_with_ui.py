@@ -6,8 +6,15 @@ from PySide6 import QtCore, QtWidgets
 from os.path import basename, splitext
 
 
-class QTextBrowserLoggingHandler(QtCore.QObject, logging.Handler):
+class QHTMLTextBrowserLoggingHandler(QtCore.QObject, logging.Handler):
     log_signal = QtCore.Signal(str)
+
+    COLOR_MAP = {
+        'INFO': 'green',
+        'WARNING': '#E6A100',
+        'ERROR': 'red',
+        'CRITICAL': 'darkred',
+    }
 
     def __init__(self, textBrowser):
         QtCore.QObject.__init__(self)
@@ -21,14 +28,32 @@ class QTextBrowserLoggingHandler(QtCore.QObject, logging.Handler):
         self.log_signal.emit(msg)
 
     def append_log_to_ui(self, msg):
-        text = self.textBrowser.toPlainText()
-        lines = text.split('\n')[-100:]
-        lines.append(msg)
+        document = self.textBrowser.document()
+        if document.blockCount() > 100:
+            cursor = self.textBrowser.textCursor()
+            cursor.movePosition(cursor.MoveOperation.Start)
+            cursor.movePosition(cursor.MoveOperation.Down, cursor.MoveMode.KeepAnchor, document.blockCount() - 100)
+            cursor.removeSelectedText()
 
-        self.textBrowser.setPlainText('\n'.join(lines))
+        self.textBrowser.append(msg)
         self.textBrowser.verticalScrollBar().setValue(
             self.textBrowser.verticalScrollBar().maximum()
         )
+
+
+class HTMLFormatter(logging.Formatter):
+    def __init__(self, object_name=""):
+        super().__init__()
+
+    def format(self, record):
+        color = QHTMLTextBrowserLoggingHandler.COLOR_MAP.get(record.levelname, "black")
+        asctime = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
+        obj_name = getattr(record, "object_name", record.name)
+        obj_prefix = f"[{obj_name}] " if obj_name and obj_name != 'root' else ""
+
+        level_html = f'<font color="{color}"><b>{record.levelname}</b></font>'
+
+        return f"{asctime} {level_html} {obj_prefix}: {record.getMessage()}"
 
 def run(globals, filename):
     rootClass = globals["AppRoot"]
@@ -39,9 +64,8 @@ def run(globals, filename):
         w.resize(1410, 792)
 
         logging.captureWarnings(True)
-        handler = QTextBrowserLoggingHandler(msgBrowser)
-        formatter = logging.Formatter('%(asctime)s:%(levelname)s: %(message)s')
-        handler.setFormatter(formatter)
+        handler = QHTMLTextBrowserLoggingHandler(msgBrowser)
+        handler.setFormatter(HTMLFormatter())
         logging.getLogger().addHandler(handler)
         logging.getLogger().setLevel(logging.INFO)
 

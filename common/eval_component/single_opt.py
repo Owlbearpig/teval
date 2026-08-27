@@ -3,19 +3,14 @@ from common.eval_component.shgo import shgo
 import time
 from common.consts import c_thz
 
-def optimize_transmission(d, shift, config_dict):
-    f_idx_range_ = config_dict["f_idx_range_"]
+def optimize_transmission(d, shift, meas_id, config_dict):
     freq_axis = config_dict["freq_axis"]
-    n0_ = config_dict["n_guess"]
-    t_exp = config_dict["t_exp"]
+    n0 = config_dict["n_guess_dict"][meas_id]
+    t_exp = config_dict["t_exp_dict"][meas_id]
     transmission_model = config_dict["transmission_model"]
     cost_fun = config_dict["cost_fun"]
     minimizer_kwargs = config_dict["minimizer_kwargs"]
     shgo_options = config_dict["shgo_options"]
-
-    freq_axis_slice = freq_axis[f_idx_range_]
-    n0_ = n0_[f_idx_range_]
-    t_exp_ = t_exp[f_idx_range_, 1]
 
     time.sleep(1000/(min(500, d)))
 
@@ -24,14 +19,14 @@ def optimize_transmission(d, shift, config_dict):
     model_kwargs["shift"] = shift
 
     gof = 0
-    n_opt_res_ = np.zeros_like(freq_axis_slice, dtype=complex)
-    for f_idx, f_ in enumerate(freq_axis_slice):
+    n_opt_res_ = np.zeros_like(freq_axis, dtype=complex)
+    for f_idx, freq in enumerate(freq_axis):
         def opt_fun(p):
             n = p[0] + 1j * p[1]
-            t_mod = transmission_model(n, f_, **model_kwargs)
-            return cost_fun(t_exp_[f_idx], t_mod)
+            t_mod = transmission_model(n, freq, **model_kwargs)
+            return cost_fun(t_exp[f_idx, 1], t_mod)
 
-        n0_f_idx = n0_[f_idx]
+        n0_f_idx = n0[f_idx, 1]
         n_min, n_max = 0.90 * n0_f_idx.real, 1.10 * n0_f_idx.real
         k_min, k_max = 0.10 * n0_f_idx.imag, 1.10 * n0_f_idx.imag
         bounds = [(n_min, n_max), (k_min, k_max)]
@@ -76,10 +71,10 @@ def optimize_transmission(d, shift, config_dict):
             if i_ > 5:
                 break
 
-    alpha_ = freq_axis_slice * 4 * np.pi * n_opt_res_.imag / (1e-4 * c_thz)
+    alpha_ = freq_axis * 4 * np.pi * n_opt_res_.imag / (1e-4 * c_thz)
 
     return {
-        "d": d, "shift": shift, "freq_axis": freq_axis_slice, "gof": gof / len(freq_axis_slice),
-        "n": n_opt_res_.real, "k": n_opt_res_.imag, "alpha": alpha_, "n0_real": n0_.real, "n0_imag": n0_.imag,
+        "d": d, "shift": shift, "meas_id": meas_id, "freq_axis": freq_axis, "gof": gof / len(freq_axis),
+        "n": n_opt_res_.real, "k": n_opt_res_.imag, "alpha": alpha_, "n0_real": n0.real, "n0_imag": n0.imag,
     }
 

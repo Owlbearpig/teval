@@ -9,16 +9,19 @@ def is_component_trait(x):
     return isinstance(x, Instance) and issubclass(x.klass, ComponentBase)
 
 def _dumb_list_of_actions(inst):
+    cls = type(inst)
     for name in dir(inst):
+        cls_attr = getattr(cls, name, None)
+        if isinstance(cls_attr, property):
+            continue
+
         try:
             attr = getattr(inst, name, None)
-            if not attr._isAction:
+            if not getattr(attr, "_isAction", False):
                 continue
 
             yield name, attr
-        except AttributeError:
-            pass
-        except traitlets.TraitError:
+        except (AttributeError, traitlets.TraitError):
             pass
 
 def action(name=None, help=None, check_init=False, **kwargs):
@@ -70,6 +73,9 @@ class ComponentBase(HasTraits):
         self.__actions = []
         for name, memb in _dumb_list_of_actions(self):
             self.__actions.append((name, memb))
+
+        base_logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.LoggerAdapter(base_logger, {'object_name': self.object_name})
 
     def __enter__(self, *args):
         for name, trait in self.traits().items():

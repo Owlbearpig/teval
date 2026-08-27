@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from functions import WindowTypes, f_axis_idx_map
 from common.settings import Settings
 from traitlets import Instance, Float
-from common.datasetplotter import DataSetPlotter
+from common.dataset_plotter import DataSetPlotter
 from common.consts import c_thz, eps0_thz
 from common.components import action
 

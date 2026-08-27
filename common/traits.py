@@ -85,13 +85,12 @@ class Path(TraitTypePatched):
                 raise TraitError("The path '%s' is not a directory" % value)
         return value
 
-class MultiPathClass():
-    root_path = pathlib.Path()
-    selected_paths = []
+class MultiPathClass:
 
-    def __init__(self, root_path=None, selected_paths=None):
-        self.root_path = root_path if root_path else self.root_path
-        self.selected_paths = selected_paths if selected_paths else self.selected_paths
+    def __init__(self, root_path=None, selected_paths=None, shown_filenames=None):
+        self.root_path = root_path if root_path else pathlib.Path()
+        self.selected_paths = selected_paths if selected_paths else []
+        self.shown_filenames = shown_filenames if shown_filenames else []
 
     def exists(self, obj, value):
         if not isinstance(value.root_path, pathlib.Path):

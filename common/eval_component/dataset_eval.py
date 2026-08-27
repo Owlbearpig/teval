@@ -1,9 +1,9 @@
 import traceback
 from datetime import datetime
-from common.dataset import DataSet, Domain
+from common.dataset import DataSet, Domain, format_meas_dict
 from common.components import ComponentBase, action
-from common.datasetplotter import DataSetPlotter
-from common.functions import f_axis_idx_map, avg_data_array
+from common.dataset_plotter import DataSetPlotter
+from common.functions import f_axis_idx_map
 from common.eval_component.shgo import shgo
 from scipy.optimize import shgo
 from functools import partial
@@ -149,34 +149,20 @@ class DatasetEval(ComponentBase):
 
     @property
     def selected_measurements(self):
-        return self.dataset.measurement_selector.selected_measurements
+        return self.dataset.selected_measurements
 
     @property
     def y_meas_dict(self):
         meas_list = self.selected_measurements
         y_meas = self.meas_quantity.value.func(meas_list)
 
-        f_sub = self.freq_axis
         y_sub = y_meas[:, self.f_idx]
 
-        freq_grid = np.tile(f_sub, (y_sub.shape[0], 1))
-        std_grid = np.zeros_like(y_sub)
+        freq_grid = np.tile(self.freq_axis, (y_sub.shape[0], 1))
 
-        stacked = np.stack((freq_grid, y_sub, std_grid), axis=2)
+        y_meas_stacked = np.stack((freq_grid, y_sub, np.zeros_like(y_sub)), axis=2)
 
-        if len(meas_list) == 1:
-            return {meas_list[0].identifier: stacked[0]}
-
-        result = {"Average": avg_data_array(stacked)}
-
-        if not self.only_eval_avg:
-            individual_y_meas = {
-                meas.identifier: stacked[meas_idx]
-                for meas_idx, meas in enumerate(meas_list)
-            }
-            result.update(individual_y_meas)
-
-        return result
+        return format_meas_dict(meas_list, y_meas_stacked, self.only_eval_avg)
 
     @property
     def set_reg_model_freq(self):
@@ -212,7 +198,7 @@ class DatasetEval(ComponentBase):
     @property
     def _opt_conf(self):
         bounds, bounds_units = self.get_bounds()
-        conf_dict = {"measurements": {meas.identifier: str(meas) for meas in self.selected_measurements},
+        conf_dict = {"measurements": {meas.identifier: meas for meas in self.selected_measurements},
                      "freq_axis": self.freq_axis,
                      "meas_quantity": self.meas_quantity,
                      "y_meas_dict": self.y_meas_dict,
@@ -292,12 +278,7 @@ class DatasetEval(ComponentBase):
         return layer_cnt == 2
 
     def get_t_model_kwargs(self):
-        window_eval_res = self.dataset.get_single_layer_properties()
-        meas = self.dataset.measurement_selector.selected_measurements
-
-        model_kwargs = {"t_exp": self.dataset.transmission(meas),
-                        "n_guess": window_eval_res.refr_idx,
-                        "nfp": self.settings.eval_opt.fp_count,
+        model_kwargs = {"nfp": self.settings.eval_opt.fp_count,
                         "n1": 1,
                         "n4": 1,
                         "shift": 0,
@@ -313,7 +294,7 @@ class DatasetEval(ComponentBase):
             except KeyError:
                 raise Exception("Substrate result required for two layer model optimization")
             model_kwargs["n_sub"] = n_sub
-            if np.isclose(np.sum(n_sub_real_dataset.data.axis[0]-self.freq_axis), 0):
+            if np.array_equal(n_sub_real_dataset.data.axis[0], self.freq_axis):
                 raise Exception("Frequency axis must equal substrate result frequency axis")
 
         return model_kwargs
@@ -323,7 +304,7 @@ class DatasetEval(ComponentBase):
         x = shgo_opt_res.x
 
         opt_res_dict = {
-            "measurement": opt_conf["measurements"].get(meas_id, "Average"),
+            "measurement": str(opt_conf["measurements"].get(meas_id, "Average")),
             "model_name": model_name,
             "result_type": "Regression",
             "sub_dataset_path": opt_conf["sub_dataset_path"],
@@ -393,9 +374,10 @@ class DatasetEval(ComponentBase):
 
             def bg_worker():
                 qs_eval = QSpaceEval(self)
-                qs_res = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
+                qs_res_dict = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
 
-                self.current_result.result_carrier.received_result.emit(qs_res)
+                for res in qs_res_dict.values():
+                    self.current_result.result_carrier.received_result.emit(res)
             executor = ThreadPoolExecutor(max_workers=1)
             executor.submit(bg_worker)
         except Exception as e:

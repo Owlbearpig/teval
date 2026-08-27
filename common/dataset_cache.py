@@ -1,8 +1,6 @@
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
-import logging
-
 
 def _generate_id_map(measurements):
     # measurement index sorted by identifier (Higher identifier = later measurement time)
@@ -23,17 +21,24 @@ def _generate_filepath_map(measurements):
 
 class DatasetCache:
 
-    def __init__(self, measurements, data_dir, signal_carrier=None):
+    def __init__(self, dataset, new_measurements, data_dir, signal_carrier=None):
+        self.dataset = dataset
+        all_measurements = new_measurements["all"]
+
         self.signal_carrier = signal_carrier
         self.coord_map_key_func = lambda position_tuple: "_".join([f"{val:.3f}" for val in position_tuple])
-        self.coord_map = self._generate_coord_map(measurements)
+        self.coord_map = self._generate_coord_map(all_measurements)
 
-        self.id_map = _generate_id_map(measurements)
-        self.filepath_map = _generate_filepath_map(measurements)
+        self.id_map = _generate_id_map(all_measurements)
+        self.filepath_map = _generate_filepath_map(all_measurements)
 
         self.data_dir = data_dir
-        self.raw_data_td, self.raw_data_fd = self._make_cache(measurements)
         self.path = None
+
+        self.sample_data_td = None
+        self.sample_data_fd = None
+
+        self.raw_data_td = self._set_cache_data(all_measurements)
 
     def _generate_coord_map(self, measurements):
         coord_map = {}
@@ -69,45 +74,43 @@ class DatasetCache:
             try:
                 self.path.rmdir()
             except OSError as e:
-                logging.warning(f"Could not remove directory {self.path}: {e}")
+                self.dataset.logger.warning(f"Could not remove directory {self.path}: {e}")
 
             self.raw_data_td = None
-            self.raw_data_fd = None
 
-            logging.info(f"Cleared {self.path}")
+            self.dataset.logger.info(f"Cleared {self.path}")
             if self.signal_carrier is not None:
                 self.signal_carrier.progress_signal.emit(0)
                 self.signal_carrier.initialization_complete_signal.emit("is_initialized", False)
 
-    def _make_cache(self, measurements):
+    def _set_cache_data(self, measurements):
         # make cache (npy) if it does not already exist
         path = self.get_path()
 
-        y_td, y_fd = measurements[0].get_data_td(), measurements[0].get_data_fd()
-        td_cache_shape = (len(measurements), *y_td.shape)
-        fd_cache_shape = (len(measurements), *y_fd.shape)
+        self.sample_data_td = np.insert(measurements[0].get_data_td(), 2, 0, axis=1)
+        self.sample_data_fd = np.insert(measurements[0].get_data_fd(), 2, 0, axis=1)
+
+        td_shape = self.sample_data_td.shape
+        td_cache_shape = (len(measurements), td_shape[0], td_shape[1])
 
         try:
             data_td = np.load(str(path / "_td_cache.npy"))
-            data_fd = np.load(str(path / "_fd_cache.npy"))
-            shape_match = (data_td.shape == td_cache_shape) * (data_fd.shape == fd_cache_shape)
+            shape_match = (data_td.shape == td_cache_shape)
             if not shape_match:
-                logging.error("Data <-> cache shape mismatch. Reloading data:")
+                self.dataset.logger.error(f"Data <-> cache shape mismatch. Reloading data:")
                 raise FileNotFoundError
         except FileNotFoundError:
-            data_td = np.zeros(td_cache_shape, dtype=y_td.dtype)
-            data_fd = np.zeros(fd_cache_shape, dtype=y_fd.dtype)
+            data_td = np.zeros(td_cache_shape, dtype=self.sample_data_td.dtype)
 
-            logging.info(f"Saving {len(measurements)} measurements as npy")
+            self.dataset.logger.info(f"Saving {len(measurements)} measurements as npy")
             for meas_idx, meas in enumerate(measurements):
                 idx = self.id_map[meas.identifier]
-                data_td[idx], data_fd[idx] = meas.get_data_td(), meas.get_data_fd()
+                data_td[idx, :, :2] = meas.get_data_td()
                 if self.signal_carrier is not None:
                     progress = (1 + meas_idx) / len(measurements)
                     self.signal_carrier.progress_signal.emit(progress)
 
             np.save(str(path / "_td_cache.npy"), data_td)
-            np.save(str(path / "_fd_cache.npy"), data_fd)
 
-        return data_td, data_fd
+        return data_td
 

@@ -34,6 +34,7 @@ class EvalResult(ComponentBase):
     eps_s = Float(0, read_only=True, group=reg_result_grp_name).tag(name="ε_s")
     c1 = Float(0, read_only=True, group=reg_result_grp_name).tag(name="c₁")
 
+    measurement = Unicode("", read_only=True).tag(priority=0, name="Measurement")
     result_type = Unicode("None", read_only=True).tag(priority=1, name="Result type")
     model_name = Unicode("", read_only=True).tag(priority=2, name="Model")
     timestamp = Unicode("", read_only=True).tag(priority=3, name="Timestamp")

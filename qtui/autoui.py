@@ -410,7 +410,13 @@ def create_tree_path_selector(component, name, prettyName, trait):
     root_path = getattr(trait.get(component), "root_path", None)
     initial_path = str(root_path) if root_path is not None else QtCore.QDir.homePath()
     model.setRootPath(initial_path)
-    model.setNameFilters(["*.txt"])
+
+    shown_filenames = getattr(trait.get(component), "shown_filenames", None)
+    if shown_filenames:
+        model.setNameFilters(shown_filenames)
+        # model.setNameFilterDisables(False)
+    else:
+        model.setNameFilters(["*.txt"])
 
     tree = QtWidgets.QTreeView()
     tree.setModel(model)
@@ -425,15 +431,21 @@ def create_tree_path_selector(component, name, prettyName, trait):
     def update_trait_selection():
         selected_indexes = tree.selectionModel().selectedRows(column=0)
         paths = [Path(model.filePath(idx)) for idx in selected_indexes]
-        root_path = Path(model.rootPath())
-        multi_path_class = MultiPathClass(root_path, paths)
+        new_root_path = Path(model.rootPath())
+        multi_path_class = MultiPathClass(new_root_path, paths, shown_filenames=shown_filenames)
         setattr(component, name, multi_path_class)
-        tree.setRootIndex(model.index(str(root_path)))
+        tree.setRootIndex(model.index(str(new_root_path)))
 
     tree.selectionModel().selectionChanged.connect(lambda *args: update_trait_selection())
 
     def update_root(change):
-        new_path_str = str(getattr(change["new"], "root_path"))
+        new_val = change["new"]
+        new_path_str = str(getattr(new_val, "root_path"))
+        new_filenames = getattr(new_val, "shown_filenames", None)
+        if new_filenames:
+            model.setNameFilters(new_filenames)
+            # model.setNameFilterDisables(False)
+
         model.setRootPath(new_path_str)
         tree.setRootIndex(model.index(new_path_str))
 
@@ -605,6 +617,7 @@ def generate_component_ui(name, component):
         vSplitter.setStretchFactor(0, 0)
         vSplitter.setStretchFactor(1, 1)
         scrollArea.setWidget(vSplitter)
+        vSplitter.setSizes([0, 10000])
     else:
         scrollArea.setWidget(controlWidget)
 

@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from common.settings import Settings
 from traitlets import Instance, Float
-from common.datasetplotter import DataSetPlotter
+from common.dataset_plotter import DataSetPlotter
 from common.eval_component.dataset_eval import DatasetEval
 from common.consts import c_thz, eps0_thz
 from common.components import action
@@ -29,7 +29,7 @@ class AppRoot(ComponentBase):
     settings = Instance(Settings)
     settings_sub = Instance(Settings)
     dataset = Instance(DataSet)
-    dataset_sub = Instance(DataSet)
+    # dataset_sub = Instance(DataSet)
     dataset_plotter = Instance(DataSetPlotter)
     dataset_eval = Instance(DatasetEval)
 
@@ -40,8 +40,8 @@ class AppRoot(ComponentBase):
         self.settings.plot_opt.redp_sensor_labels = redp_labels
         self.dataset = DataSet(self.settings, object_name="Dataset")
 
-        self.dataset_sub = DataSet(self.settings_sub, object_name="Dataset substrate")
-
+        # self.dataset_sub = DataSet(self.settings_sub, object_name="Dataset substrate")
+        self.dataset_sub = None
         self.dataset_plotter = DataSetPlotter(self.dataset, object_name="Dataset Plotter")
         self.dataset_eval = DatasetEval(self.dataset, self.dataset_sub, object_name="Dataset Evaluation")
         

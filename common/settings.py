@@ -113,7 +113,7 @@ class Settings(AppSettings):
                     instance.set_trait(trait_name, dict_val)
                 elif issubclass(actual_type, Quantity):
                     value = getattr(instance, trait_name)
-                    instance.set_trait(trait_name, dict_val * value.units)
+                    instance.set_trait(trait_name, Q_(dict_val, value.units))
                 elif issubclass(actual_type, TEnum):
                     trait_definition = instance.traits()[trait_name]
                     target_enum_member = None

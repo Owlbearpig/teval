@@ -1,9 +1,10 @@
-from logging import log
-
+import logging
+import numpy as np
 from common.components import ComponentBase
 from common.traits import MultiPathSelection, ValueRange, MultiPathClass
 from common.units import Q_
-from traitlets import Enum as TEnum, Unicode, Bool
+from common.default_appsettings import Dist
+from traitlets import Enum as TEnum, Unicode, Bool, Int
 from enum import Enum
 from common.measurements import timestamp2id
 
@@ -21,9 +22,6 @@ class ReferenceSelection(Enum):
     file_selection = "File selection"
 
 class MeasurementSelection(ComponentBase):
-    average_selection = Bool(False).tag(name="Allow averaging")
-
-
     measurement_selection_grp = "Measurement selection"
     selection_criterion = TEnum(SelectionCriterionEnum,
                                 SelectionCriterionEnum.file_selection).tag(name="Select measurement by",
@@ -39,13 +37,13 @@ class MeasurementSelection(ComponentBase):
                               ReferenceSelection.max_amp_measurement).tag(name="Reference selection criterion",
                                                                      group=reference_selection_grp,
                                                                      priority=-2)
-    ref_pos = ValueRange([0, 0], group=reference_filter_group).tag(name="Reference position")
+    ref_pos = ValueRange([0, 0], group=reference_selection_grp).tag(name="Reference position")
     dist_func = TEnum(Dist, default_value=Dist.Time).tag(priority=1000, name="Measurement distance function",
                                                          group=reference_selection_grp)
     fix_ref_idx = Int(0, min=-1, group=reference_selection_grp).tag(name="Fixed reference index")
 
-    references = MultiPathSelection().tag(fullwidth = False, group="Direct reference selection", combine=True)
-    samples = MultiPathSelection().tag(fullwidth = False, group="Direct sample selection", combine=True)
+    reference_paths = MultiPathSelection().tag(fullwidth = False, group="Direct reference selection", combine=True)
+    sample_paths = MultiPathSelection().tag(fullwidth = False, group="Direct sample selection", combine=True)
 
 
     def __init__(self, dataset, **kwargs):
@@ -53,10 +51,13 @@ class MeasurementSelection(ComponentBase):
 
         self.dataset = dataset
 
-        self.references = MultiPathClass(root_path=self.dataset.data_path)
-        self.samples = MultiPathClass(root_path=self.dataset.data_path)
+        ref_filenames = [f"{meas.filepath.name}" for meas in self.dataset.measurements["refs"]]
+        sam_filenames = [f"{meas.filepath.name}" for meas in self.dataset.measurements["sams"]]
 
-        self.dataset.observe(self.update, "data_path")
+        self.reference_paths = MultiPathClass(root_path=self.dataset.data_path, shown_filenames=ref_filenames)
+        self.sample_paths = MultiPathClass(root_path=self.dataset.data_path, shown_filenames=sam_filenames)
+
+        self.dataset.observe(self.update, "measurements")
 
     @property
     def measurements(self):
@@ -75,23 +76,37 @@ class MeasurementSelection(ComponentBase):
         return self.get_matching_ref(self.selected_measurements)
 
     def update(self, change):
-        new_path = change["new"]
-        self.references = MultiPathClass(root_path=new_path)
-        self.samples = MultiPathClass(root_path=new_path)
+        new_measurements = change["new"]
+        new_path = self.dataset.data_path
+
+        ref_filenames = [f"{meas.filepath.name}" for meas in new_measurements["refs"]]
+        sam_filenames = [f"{meas.filepath.name}" for meas in new_measurements["sams"]]
+
+        self.reference_paths = MultiPathClass(root_path=new_path, shown_filenames=ref_filenames)
+        self.sample_paths = MultiPathClass(root_path=new_path, shown_filenames=sam_filenames)
 
     def get_measurements_from_point(self, x, y):
         if self.cache is None:
             logging.info("Cache not loaded, check dataset path")
             return None
-        meas_list = self.measurements["all"]
+
         if isinstance(x, Q_):
             x = x.magnitude
         if isinstance(y, Q_):
             y = y.magnitude
         pnt = (x, y)
 
-        key = self.cache.coord_map_key_func(pnt)
-        found_meas_list = self.cache.coord_map[key]
+        try:
+            key = self.cache.coord_map_key_func(pnt)
+            found_meas_list = self.cache.coord_map[key]
+        except KeyError:
+            all_points = np.array(self.dataset.shape_properties["all_points"])
+            dist_diff_squared = np.abs(all_points - pnt) ** 2
+
+            closest_pnt_idx = np.argmin(np.sum(dist_diff_squared, axis=1))
+
+            key = self.cache.coord_map_key_func(all_points[closest_pnt_idx])
+            found_meas_list = self.cache.coord_map[key]
 
         return found_meas_list
 
@@ -154,7 +169,7 @@ class MeasurementSelection(ComponentBase):
         return found_meas
 
     def get_meas_from_filenames(self):
-        sam_paths = self.samples.selected_paths
+        sam_paths = self.sample_paths.selected_paths
 
         sam_meas_list = [self.cache.filepath_map[p] for p in sam_paths]
 
@@ -214,35 +229,11 @@ class MeasurementSelection(ComponentBase):
                 err += dx
                 curr_y += sy
 
-        meas_list = [self.get_measurements_from_point(*p) for p in points]
+        meas_list = meas_list = [meas for p in points for meas in self.get_measurements_from_point(*p)]
         meas_list = list(dict.fromkeys(meas_list))
         points = [meas.position for meas in meas_list]
 
         return meas_list, points
-
-    def get_cart_line(self, x=None, y=None, limits=None):
-        shape = self.dataset.shape_properties
-        if x is None and y is None:
-            return None
-
-        x_coords, y_coords = shape["x_coords"], shape["y_coords"]
-
-        # vertical direction / slice
-        if x is not None:
-            ret = [self.get_measurements_from_point(x, y_) for y_ in y_coords], y_coords
-        else:  # horizontal direction / slice
-            ret = [self.get_measurements_from_point(x_, y) for x_ in x_coords], x_coords
-
-        if limits is None:
-            return ret
-        else:
-            measurements, coords = ret
-            meas_in_limit_range = []
-            for i, coord in enumerate(coords):
-                if (limits[0] < coord) and (coord < limits[1]):
-                    meas_in_limit_range.append(measurements[i])
-
-            return meas_in_limit_range, coords
 
     def get_nearest_ref(self, meas_, dist_func=None, excluded_refs=None):
         if not dist_func:
@@ -276,9 +267,9 @@ class MeasurementSelection(ComponentBase):
         ref_getter = None
         match self.ref_sel_criterion:
             case ReferenceSelection.file_selection:
-                ref_list = [self.cache.filepath_map[p] for p in self.references.selected_paths]
+                ref_list = [self.cache.filepath_map[p] for p in self.reference_paths.selected_paths]
                 if len(ref_list) != len(meas_list):
-                    loggging.warning("Reference file selection length != number of selected measurements")
+                    logging.warning("Reference file selection length != number of selected measurements")
                     if len(ref_list) < len(meas_list):
                         ref_list.extend((len(meas_list)-len(ref_list))*[ref_list[-1]])
                     elif len(ref_list) > len(meas_list):
@@ -289,10 +280,10 @@ class MeasurementSelection(ComponentBase):
                 ref_getter = lambda meas: self.get_nearest_ref(meas)
             case ReferenceSelection.point_as_ref:
                 ref_getter = lambda meas: self.get_measurements_from_point(*self.ref_pos)
-                logging.info(f"Using measurement closest to {self.ref_pos} as ref.")
+                logging.debug(f"Using measurement closest to {self.ref_pos} as ref.")
             case ReferenceSelection.max_amp_measurement:
                 ref_getter = lambda meas: self.measurements["max_amp_meas"]
-                logging.info("Using the measurement with the highest amplitude as reference")
+                logging.debug("Using the measurement with the highest amplitude as reference")
             case ReferenceSelection.fix_ref:
                 ref_getter = lambda meas: self.measurements["refs"][self.fix_ref_idx]
 

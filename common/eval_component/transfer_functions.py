@@ -166,7 +166,7 @@ def _t_model_2layer(n, freq, **opt_kwargs):
     return np.nan_to_num(t)
 
 
-def transferfunction_error(sam_fd, ref_fd, ref_fd_std, sam_fd_std, noise_freq=5.0):
+def transferfunction_error(sam_fd, ref_fd, noise_freq=5.0):
     # H=Esam/Eref=(a+ib)/(c+id)
     # f=Re(H)
     # g=Im(H)
@@ -187,10 +187,10 @@ def transferfunction_error(sam_fd, ref_fd, ref_fd_std, sam_fd_std, noise_freq=5.
     cnstd = np.std(cnoise)
     dnstd = np.std(dnoise)
 
-    Astd = sam_fd_std[:, 1].real
-    Bstd = sam_fd_std[:, 1].imag
-    Cstd = ref_fd_std[:, 1].real
-    Dstd = ref_fd_std[:, 1].imag
+    Astd = sam_fd[:, 2].real
+    Bstd = sam_fd[:, 2].imag
+    Cstd = ref_fd[:, 2].real
+    Dstd = ref_fd[:, 2].imag
 
     DeltaA = (Astd * Astd + anstd * anstd) ** 0.5
     DeltaB = (Bstd * Bstd + bnstd * bnstd) ** 0.5

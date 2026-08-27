@@ -336,7 +336,7 @@ class PpOpt(ComponentBase):
 
 
 class SaveSettings(ComponentBase):
-    path = TPath(Path(""), is_file=False).tag(name="Save directory")
+    path = TPath(Path(""), is_file=False).tag(name="Figure save directory")
     filetype = TEnum(Filetype, Filetype.jpg).tag(name="File type")
     suffix = Unicode("").tag(name="Filename suffix")
     bbox_inches = Unicode("tight", help="Should be set to tight").tag(name="Bounding box")
