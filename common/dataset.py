@@ -3,30 +3,25 @@ import traceback
 from common.components import ComponentBase
 from common.default_appsettings import Dist, ReferenceClassification, Domain, QuantityEnum
 from common.settings import Settings
-from common.measurement_selection import MeasurementSelection, SelectionCriterionEnum, ReferenceSelection
+from common.measurement_selection import MeasurementSelection, get_coordinate_line
 from pathlib import Path
 import numpy as np
 from common.functions import (window, butter_filt, do_fft, f_axis_idx_map,
-                              remove_offset, avg_data_array, calculate_bandwidth, get_coordinate_line)
+                              remove_offset, avg_data_array, calculate_bandwidth)
 from common.measurements import Measurement
-from mpl_settings import mpl_style_params
-import matplotlib as mpl
 from common.consts import c_thz, eps0_thz
 import logging
-import colorlog
 from datetime import datetime
 from common.dataset_cache import DatasetCache
 import pandas as pd
-from common.traits import Q_, Path as TPath, ValueRange, Quantity
+from common.traits import Q_, Path as TPath, Quantity
 from scipy.stats import pearsonr
 from common.components import action
-import itertools
 from traitlets import Unicode, observe, Float, Bool, Enum as TEnum, Instance, Int, Dict
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from PySide6.QtCore import QObject, Signal
 from functools import cached_property
-from dataclasses import dataclass
 
 """
 TODOs: 
@@ -134,7 +129,7 @@ class ParsingSignalCarrier(QObject):
     measurements_parsed_signal = Signal(dict)
 
 class DataSet(ComponentBase):
-    data_path = TPath(Path(r"C:\Users\alexj\Data\IPHT2\Filter_coated\img0"), is_file=False).tag(priority=-100, name="Dataset path",
+    data_path = TPath(Path(r""), is_file=False).tag(priority=-100, name="Dataset path",
                                                     fullwidth=True).tag(priority=-2)
     caching_progress = Float(0, min=0, max=1, read_only=True).tag(name="Caching progress", priority=-1)
     is_initialized = Bool(False, read_only=True).tag(name="Cache Initialized")
@@ -145,7 +140,7 @@ class DataSet(ComponentBase):
     ref_classifier = TEnum(ReferenceClassification,
                            default_value=ReferenceClassification.from_file_name,
                            group=reference_filter_group).tag(name="Reference classification criteria", priority=-1)
-    ref_threshold = Float(0.95, group=reference_filter_group, min=0, max=1,
+    ref_threshold = Float(0.999, group=reference_filter_group, min=0, max=1,
                           help="Threshold relative to maximum amplitude measurement").tag(name="Reference threshold")
     horizontal_ref_coord = Quantity(Q_(0.0, "mm")).tag(group=reference_filter_group, name="Horizontal line coordinate")
     vertical_ref_coord = Quantity(Q_(0.0, "mm")).tag(group=reference_filter_group, name="Vertical line coordinate")
@@ -177,7 +172,7 @@ class DataSet(ComponentBase):
 
         self.measurement_selector = MeasurementSelection(self)
 
-        self._parse_measurements()
+        self.freq_axis = None
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.settings.save_configuration(self)
@@ -185,6 +180,8 @@ class DataSet(ComponentBase):
     def __enter__(self):
         self.settings.load_configuration(self)
         self._set_observers()
+        self.measurement_selector.set_observers()
+        self._parse_measurements()
 
         return self
 
@@ -229,24 +226,6 @@ class DataSet(ComponentBase):
     def mean_time_diff(self):
         return np.mean(self.time_diffs)
 
-    @property
-    def sample_data_td(self):
-        sample_data_td = self.cache.sample_data_td
-        return sample_data_td
-
-    @property
-    def sample_data_fd(self):
-        sample_data_fd = self.cache.sample_data_fd
-        return sample_data_fd
-
-    @property
-    def time_axis(self):
-        return self.sample_data_td[:, 0].real
-
-    @property
-    def freq_axis(self):
-        return self.sample_data_fd[:, 0].real
-
     def selected_measurements(self):
         return self.measurement_selector.selected_measurements
 
@@ -279,7 +258,54 @@ class DataSet(ComponentBase):
         self.clear_cache()
         self._parse_measurements()
 
-    def max_amp_meas_filter(self, meas_list, threshold=1):
+    def _pre_process(self, meas_):
+        pp_opt = self.settings.pp_opt
+
+        cache_idx = self.cache.id_map[meas_.identifier]
+        data_td = self.cache.raw_data_td[cache_idx]
+
+        if pp_opt.remove_dc:
+            data_td = remove_offset(data_td)
+
+        if pp_opt.window_enabled:
+            win_kwargs = {k: getattr(pp_opt, k) for k in pp_opt.traits()}
+            data_td = window(data_td, **win_kwargs)
+
+        if pp_opt.filter_enabled:
+            data_td = butter_filt(data_td, pp_opt.f_range.magnitude)
+
+        return data_td
+
+    def _single_meas_data(self, meas, domain=Domain.Time):
+        data_td = self._pre_process(meas)
+
+        if domain == Domain.Time:
+            data = data_td
+        else:
+            data = do_fft(data_td)
+            self.freq_axis = data[:, 0].real
+
+        data = np.insert(data, 2, 0, axis=1)
+
+        return data
+
+    def get_multi_data(self, meas_list, domain=Domain.Time):
+        meas_list = [meas_list] if isinstance(meas_list, Measurement) else meas_list
+
+        sample_data = self._single_meas_data(meas_list[0], domain=domain)
+        shape = sample_data.shape
+
+        data_arr = np.zeros([len(meas_list), *shape], dtype=sample_data.dtype)
+        data_arr[0] = sample_data
+        if len(meas_list) == 1:
+            return data_arr
+        else:
+            for meas_idx, meas in enumerate(meas_list[1:]):
+                data_arr[meas_idx] = self._single_meas_data(meas, domain=domain)
+
+        return data_arr
+
+    def max_amp_meas_filter(self, meas_list, threshold=1.0):
         meas_list = np.array(meas_list, dtype=object)
         data_td = self.get_multi_data(meas_list, domain=Domain.Time)
         max_per_measurement = np.max(np.abs(data_td[:, :, 1]), axis=1)
@@ -295,8 +321,7 @@ class DataSet(ComponentBase):
     def _update_measurement_dict(self, new_measurement_dict):
         new_measurement_dict["max_amp_meas"] = self.max_amp_meas_filter(new_measurement_dict["all"])
 
-        sorted_measurements = self._sort_meas_type(new_measurement_dict)
-        self.set_trait("measurements", sorted_measurements)
+        self._sort_meas_type(new_measurement_dict)
 
         self._set_dataset_info()
         self.refresh_shape_properties()
@@ -325,7 +350,7 @@ class DataSet(ComponentBase):
                     raise ValueError(f"Path {target_path} is empty")
 
                 new_measurements = {"all": self._read_data_dir()}
-                if not new_measurements:
+                if not new_measurements["all"]:
                     return
 
                 self.cache = DatasetCache(self, new_measurements, target_path, signal_carrier)
@@ -342,8 +367,8 @@ class DataSet(ComponentBase):
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(bg_worker, data_path)
 
-    def update_meas_sorting(self, change):
-        self._sort_meas_type(self.measurements)
+    def update_meas_sorting(self, ref_filter_change):
+        self._update_measurement_dict(self.measurements)
 
     def _update_shape_properties(self):
         x_coords, y_coords = [], []
@@ -425,17 +450,12 @@ class DataSet(ComponentBase):
     def _read_data_dir(self):
         glob = self.data_path.glob("**/*.txt")
 
-        file_list = list(glob)
-
         measurements = []
-        for i, file_path in enumerate(file_list):
+        for i, file_path in enumerate(glob):
             if file_path.is_file() and ".txt" in file_path.name:
                 try:
                     measurements.append(Measurement(filepath=file_path))
                 except Exception as err:
-                    if i == len(file_list) - 1:
-                        self.logger.warning(f"No readable files found in {self.data_path}")
-                        raise err
                     self.logger.info(f"Skipping {file_path}. {err}")
 
         if not measurements:
@@ -499,9 +519,9 @@ class DataSet(ComponentBase):
         self.info_pane.set_trait("sampling_window", t_end-t_start)
         self.info_pane.set_trait("sampling_period", (t_end-t_start)/data_td.shape[1])
 
-        self.info_pane.set_trait("frequency_resolution", Q_(np.mean(np.diff(data_fd[0, :, 0])), "THz"))
+        self.info_pane.set_trait("frequency_resolution", Q_(np.mean(np.diff(data_fd[0, :, 0].real)), "THz"))
         self.info_pane.set_trait("spectral_line_cnt", data_fd.shape[1])
-        self.info_pane.set_trait("nyquist_frequency", Q_(data_fd[0, -1, 0], "THz"))
+        self.info_pane.set_trait("nyquist_frequency", Q_(data_fd[0, -1, 0].real, "THz"))
 
         self.info_pane.set_trait("peak2peak", p2p[0])
 
@@ -523,6 +543,8 @@ class DataSet(ComponentBase):
                     self.logger.info(f"No explicit references found in the dataset based on filename ({id_str}).")
             case ReferenceClassification.above_threshold:
                 refs_ = self.max_amp_meas_filter(all_measurements, self.ref_threshold)
+                if isinstance(refs_, Measurement):
+                    refs_ = [refs_]
                 self.logger.info(f"Using measurements near max amplitude as ref. (Threshold: {self.ref_threshold})")
             case ReferenceClassification.horizontal_line_as_ref:
                 y = self.horizontal_ref_coord
@@ -555,7 +577,7 @@ class DataSet(ComponentBase):
 
         self.logger.info(f"Classified {len(measurements['refs'])} measurement(s) as reference\n")
 
-        return measurements
+        self.set_trait("measurements", measurements)
 
     def link_sub_dataset(self, dataset_):
         if dataset_ is None:
@@ -563,45 +585,6 @@ class DataSet(ComponentBase):
 
         self.sub_dataset = dataset_
         self.set_trait("sub_linked", True)
-
-    def _pre_process(self, meas_):
-        pp_opt = self.settings.pp_opt
-
-        cache_idx = self.cache.id_map[meas_.identifier]
-        data_td = self.cache.raw_data_td[cache_idx]
-
-        if pp_opt.remove_dc:
-            data_td = remove_offset(data_td)
-
-        if pp_opt.window_enabled:
-            win_kwargs = {k: getattr(pp_opt, k) for k in pp_opt.traits()}
-            data_td = window(data_td, **win_kwargs)
-
-        if pp_opt.filter_enabled:
-            data_td = butter_filt(data_td, pp_opt.f_range.magnitude)
-
-        return data_td
-
-    def _single_meas_data(self, meas, domain=Domain.Time):
-        data_td = self._pre_process(meas)
-
-        if domain == Domain.Time:
-            data = data_td
-        else:
-            data = np.insert(do_fft(data_td), 2, 0, axis=1)
-
-        return data
-
-    def get_multi_data(self, meas_list, domain=Domain.Time):
-        meas_list = [meas_list] if isinstance(meas_list, Measurement) else meas_list
-        sample_data = self.sample_data_td if domain == Domain.Time else self.sample_data_fd
-        shape = sample_data.shape
-
-        data_arr = np.zeros([len(meas_list), *shape], dtype=sample_data.dtype)
-        for meas_idx, meas in enumerate(meas_list):
-            data_arr[meas_idx] = self._single_meas_data(meas, domain=domain)
-
-        return data_arr
 
     def windowing_eval(self, meas_):
         ref_meas = self.measurement_selector.get_matching_ref(meas_)
@@ -948,7 +931,8 @@ class DataSet(ComponentBase):
         save_path = save_dir / f"exported_data_{file_app}.csv"
         self.logger.info(f"Exporting data to {save_path}")
 
-        exp_dict = {"freq_axis": self.freq_axis, "time_axis": self.time_axis}
+        exp_dict = {"freq_axis": data_arrays["ref_fd"][0, :, 0].real,
+                    "time_axis": data_arrays["ref_td"][0, :, 0].real}
         for k, data_arr in data_arrays.items():
             for meas_idx in data_arr.shape[0]:
                 exp_dict[f"{k}_{meas_idx}"] = data_arr[meas_idx, :, 1]

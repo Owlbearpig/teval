@@ -3,6 +3,7 @@ from traitlets import Integer, Float, Unicode, Bool, Tuple, Enum
 from common.measurement_selection import MeasurementSelection
 from qtui.changeindicatorspinbox import ChangeIndicatorSpinBox
 from qtui.changeindicatorlineedit import ChangeIndicatorLineEdit
+from qtui.fastfilefilterproxy import FastNameFilterProxyModel
 from common.components import ComponentBase
 from traitlets import Instance
 from common.traits import Quantity, Path as PathTrait, ValueRange, MultiPathSelection, MultiPathClass
@@ -411,30 +412,27 @@ def create_tree_path_selector(component, name, prettyName, trait):
     initial_path = str(root_path) if root_path is not None else QtCore.QDir.homePath()
     model.setRootPath(initial_path)
 
+    proxy = FastNameFilterProxyModel()
+    proxy.setSourceModel(model)
+
     shown_filenames = getattr(trait.get(component), "shown_filenames", None)
-    if shown_filenames:
-        model.setNameFilters(shown_filenames)
-        # model.setNameFilterDisables(False)
-    else:
-        model.setNameFilters(["*.txt"])
+    proxy.set_allowed_filenames(shown_filenames)
 
     tree = QtWidgets.QTreeView()
-    tree.setModel(model)
-    tree.hideColumn(1)  # Size
-    tree.hideColumn(2)  # Type
-    tree.hideColumn(3)  # Date Modified
-    tree.setRootIndex(model.index(initial_path))
+    tree.setModel(proxy)
+    tree.hideColumn(1)
+    tree.hideColumn(2)
+    tree.hideColumn(3)
+    tree.setRootIndex(proxy.mapFromSource(model.index(initial_path)))
     tree.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
-
     tree.setMinimumHeight(180)
 
     def update_trait_selection():
-        selected_indexes = tree.selectionModel().selectedRows(column=0)
+        selected_proxy_indexes = tree.selectionModel().selectedRows(column=0)
+        selected_indexes = [proxy.mapToSource(idx) for idx in selected_proxy_indexes]
         paths = [Path(model.filePath(idx)) for idx in selected_indexes]
-        new_root_path = Path(model.rootPath())
-        multi_path_class = MultiPathClass(new_root_path, paths, shown_filenames=shown_filenames)
-        setattr(component, name, multi_path_class)
-        tree.setRootIndex(model.index(str(new_root_path)))
+        multi_path_class = getattr(component, name)
+        multi_path_class.selected_paths = paths
 
     tree.selectionModel().selectionChanged.connect(lambda *args: update_trait_selection())
 
@@ -442,15 +440,11 @@ def create_tree_path_selector(component, name, prettyName, trait):
         new_val = change["new"]
         new_path_str = str(getattr(new_val, "root_path"))
         new_filenames = getattr(new_val, "shown_filenames", None)
-        if new_filenames:
-            model.setNameFilters(new_filenames)
-            # model.setNameFilterDisables(False)
-
+        proxy.set_allowed_filenames(new_filenames)
         model.setRootPath(new_path_str)
-        tree.setRootIndex(model.index(new_path_str))
+        tree.setRootIndex(proxy.mapFromSource(model.index(new_path_str)))
 
     component.observe(update_root, name)
-
     layout.addWidget(tree)
     return container
 

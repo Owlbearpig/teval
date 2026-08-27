@@ -8,6 +8,28 @@ from traitlets import Enum as TEnum, Unicode, Bool, Int
 from enum import Enum
 from common.measurements import timestamp2id
 
+def get_coordinate_line(measurements, x=None, y=None):
+    if not measurements:
+        return []
+
+    if x is not None:
+        all_x = np.array([m.position[0] for m in measurements])
+        closest_x = all_x[np.argmin(np.abs(all_x - x))]
+
+        line_measurements = [m for m in measurements if m.position[0] == closest_x]
+
+        line_measurements.sort(key=lambda m: m.position[1])
+
+    else:
+        all_y = np.array([m.position[1] for m in measurements])
+        closest_y = all_y[np.argmin(np.abs(all_y - y))]
+
+        line_measurements = [m for m in measurements if m.position[1] == closest_y]
+
+        line_measurements.sort(key=lambda m: m.position[0])
+
+    return line_measurements
+
 class SelectionCriterionEnum(Enum):
     file_selection = "File selection"
     selected_timestamp = "Timestamp"
@@ -31,6 +53,8 @@ class MeasurementSelection(ComponentBase):
                                                                              group=measurement_selection_grp)
     sel_timestamp = Unicode("").tag(name="Selected timestamp", group=measurement_selection_grp)
     string_match = Unicode("").tag(name="Filter string", group=measurement_selection_grp)
+    selected_sam_cnt = Unicode("", read_only=True).tag(name="Selected sample measurements", priority=2000,
+                                                       group=measurement_selection_grp)
 
     reference_selection_grp = "Reference selection"
     ref_sel_criterion = TEnum(ReferenceSelection,
@@ -41,6 +65,8 @@ class MeasurementSelection(ComponentBase):
     dist_func = TEnum(Dist, default_value=Dist.Time).tag(priority=1000, name="Measurement distance function",
                                                          group=reference_selection_grp)
     fix_ref_idx = Int(0, min=-1, group=reference_selection_grp).tag(name="Fixed reference index")
+    selected_ref_cnt = Unicode("",read_only=True).tag(name="Selected references", priority=2000,
+                                                      group=reference_selection_grp)
 
     reference_paths = MultiPathSelection().tag(fullwidth = False, group="Direct reference selection", combine=True)
     sample_paths = MultiPathSelection().tag(fullwidth = False, group="Direct sample selection", combine=True)
@@ -57,7 +83,14 @@ class MeasurementSelection(ComponentBase):
         self.reference_paths = MultiPathClass(root_path=self.dataset.data_path, shown_filenames=ref_filenames)
         self.sample_paths = MultiPathClass(root_path=self.dataset.data_path, shown_filenames=sam_filenames)
 
+    def set_observers(self):
         self.dataset.observe(self.update, "measurements")
+
+        reference_sel_names = self.trait_names(group=self.reference_selection_grp)
+        # self.observe(self.update_sel_cnt_info, names=reference_sel_names)
+
+        measurement_sel_names = self.trait_names(group=self.measurement_selection_grp)
+        # self.observe(self.update_sel_cnt_info, names=measurement_sel_names)
 
     @property
     def measurements(self):
@@ -85,10 +118,22 @@ class MeasurementSelection(ComponentBase):
         self.reference_paths = MultiPathClass(root_path=new_path, shown_filenames=ref_filenames)
         self.sample_paths = MultiPathClass(root_path=new_path, shown_filenames=sam_filenames)
 
+    def update_sel_cnt_info(self, change):
+        change_name = change["name"]
+        if change_name in ["selected_ref_cnt", "selected_sam_cnt"]:
+            return
+        if self.selected_measurements is None:
+            return
+        print(change_name)
+        if change_name in self.trait_names(group=self.reference_selection_grp):
+            self.set_trait("selected_ref_cnt", f"{len(self.reference_measurements)}")
+        else:
+            self.set_trait("selected_sam_cnt", f"{len(self.selected_measurements)}")
+
     def get_measurements_from_point(self, x, y):
         if self.cache is None:
             logging.info("Cache not loaded, check dataset path")
-            return None
+            return []
 
         if isinstance(x, Q_):
             x = x.magnitude
@@ -113,7 +158,7 @@ class MeasurementSelection(ComponentBase):
     def get_measurements_from_timestamp(self, timestamp_str=""):
         if not timestamp_str:
             logging.warning("No timestamp set. Returning first measurement")
-            return self.measurements["all"][0]
+            return [self.measurements["all"][0]]
         logging.info("Selecting measurement by timestamp", timestamp_str)
         meas_id_ = timestamp2id(timestamp_str)
 
@@ -130,7 +175,7 @@ class MeasurementSelection(ComponentBase):
     def get_measurements_from_string(self, string=""):
         if not string:
             logging.warning("No filter string set. Returning first measurement")
-            return self.measurements["all"][0]
+            return [self.measurements["all"][0]]
 
         found_meas_list = []
         for meas in self.measurements["all"]:
@@ -264,6 +309,9 @@ class MeasurementSelection(ComponentBase):
         return closest_ref
 
     def get_matching_ref(self, meas_list):
+        if len(self.measurements["refs"]) == 0:
+            return []
+
         ref_getter = None
         match self.ref_sel_criterion:
             case ReferenceSelection.file_selection:
@@ -277,14 +325,19 @@ class MeasurementSelection(ComponentBase):
 
                 return ref_list
             case ReferenceSelection.closest_distance:
-                ref_getter = lambda meas: self.get_nearest_ref(meas)
+                ref_getter = lambda meas: [self.get_nearest_ref(meas)]
             case ReferenceSelection.point_as_ref:
                 ref_getter = lambda meas: self.get_measurements_from_point(*self.ref_pos)
                 logging.debug(f"Using measurement closest to {self.ref_pos} as ref.")
             case ReferenceSelection.max_amp_measurement:
-                ref_getter = lambda meas: self.measurements["max_amp_meas"]
+                ref_getter = lambda meas: [self.measurements["max_amp_meas"]]
                 logging.debug("Using the measurement with the highest amplitude as reference")
             case ReferenceSelection.fix_ref:
-                ref_getter = lambda meas: self.measurements["refs"][self.fix_ref_idx]
+                ref_idx = min(len(self.measurements["refs"]) - 1, self.fix_ref_idx)
+                ref_getter = lambda meas: [self.measurements["refs"][ref_idx]]
 
-        return [ref_getter(meas) for meas in meas_list] if ref_getter else []
+        ref_list = []
+        for meas in meas_list:
+            ref_list.extend(ref_getter(meas))
+
+        return ref_list

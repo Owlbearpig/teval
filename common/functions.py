@@ -438,7 +438,7 @@ def local_minima_1d(arr, en_plot=True):
     return minima_idx, mean_period, std_period
 
 def calculate_bandwidth(data_fd_1meas, noise_region_fraction = 0.20):
-    freqs = data_fd_1meas[:, 0]
+    freqs = data_fd_1meas[:, 0].real
     data_fd_1meas_db = to_db(data_fd_1meas, normalize=True)
 
     num_noise_samples = int(len(freqs) * noise_region_fraction)
@@ -479,29 +479,6 @@ def avg_data_array(data_arr):
         avg_std_sam[:, :, 2] = _std(data_arr[1, :, :, 1], axis=0)
 
         return np.array([avg_std_ref, avg_std_sam])
-
-
-def get_coordinate_line(measurements, x=None, y=None):
-    if not measurements:
-        return []
-
-    if x is not None:
-        all_x = np.array([m.position[0] for m in measurements])
-        closest_x = all_x[np.argmin(np.abs(all_x - x))]
-
-        line_measurements = [m for m in measurements if m.position[0] == closest_x]
-
-        line_measurements.sort(key=lambda m: m.position[1])
-
-    else:
-        all_y = np.array([m.position[1] for m in measurements])
-        closest_y = all_y[np.argmin(np.abs(all_y - y))]
-
-        line_measurements = [m for m in measurements if m.position[1] == closest_y]
-
-        line_measurements.sort(key=lambda m: m.position[0])
-
-    return line_measurements
 
 
 

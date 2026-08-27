@@ -35,9 +35,6 @@ class DatasetCache:
         self.data_dir = data_dir
         self.path = None
 
-        self.sample_data_td = None
-        self.sample_data_fd = None
-
         self.raw_data_td = self._set_cache_data(all_measurements)
 
     def _generate_coord_map(self, measurements):
@@ -87,11 +84,8 @@ class DatasetCache:
         # make cache (npy) if it does not already exist
         path = self.get_path()
 
-        self.sample_data_td = np.insert(measurements[0].get_data_td(), 2, 0, axis=1)
-        self.sample_data_fd = np.insert(measurements[0].get_data_fd(), 2, 0, axis=1)
-
-        td_shape = self.sample_data_td.shape
-        td_cache_shape = (len(measurements), td_shape[0], td_shape[1])
+        sample_data_td = measurements[0].get_data_td()
+        td_cache_shape = (len(measurements), *sample_data_td.shape)
 
         try:
             data_td = np.load(str(path / "_td_cache.npy"))
@@ -100,12 +94,12 @@ class DatasetCache:
                 self.dataset.logger.error(f"Data <-> cache shape mismatch. Reloading data:")
                 raise FileNotFoundError
         except FileNotFoundError:
-            data_td = np.zeros(td_cache_shape, dtype=self.sample_data_td.dtype)
+            data_td = np.zeros(td_cache_shape, dtype=sample_data_td.dtype)
 
             self.dataset.logger.info(f"Saving {len(measurements)} measurements as npy")
             for meas_idx, meas in enumerate(measurements):
                 idx = self.id_map[meas.identifier]
-                data_td[idx, :, :2] = meas.get_data_td()
+                data_td[idx] = meas.get_data_td()
                 if self.signal_carrier is not None:
                     progress = (1 + meas_idx) / len(measurements)
                     self.signal_carrier.progress_signal.emit(progress)

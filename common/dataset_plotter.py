@@ -515,7 +515,7 @@ class DataSetPlotter(ComponentBase):
 
         for ref_meas, y_fd_db in plot_data_fd.items():
             y_td = plot_data_td[ref_meas]
-            label = f"Reference ({getattr(ref_meas, "meas_time", "Average")})"
+            label = f"Reference ({getattr(ref_meas, 'meas_time', 'Average')})"
 
             plt.figure(self.fd_fig_num)
             plt.plot(y_fd_db[:, 0], y_fd_db[:, 1], label=label)
@@ -1277,7 +1277,8 @@ class DataSetPlotter(ComponentBase):
         self.thread.progress_changed.connect(lambda val: self.set_trait("grid_calc_progress", val))
 
         def _on_finish(new_grid_vals):
-            self.grid_vals = new_grid_vals
+            self.grid_vals = np.nan_to_num(new_grid_vals)
+
             if callback:
                 callback(new_grid_vals)
 
@@ -1319,7 +1320,7 @@ class DataSetPlotter(ComponentBase):
         else:
             cbar_min = np.min(shown_grid_vals)
             cbar_max = np.max(shown_grid_vals)
-
+        np.savetxt("grid_values.txt", shown_grid_vals)
         if self.plot_settings.log_scale:
             cbar_min = np.log10(cbar_min)
             cbar_max = np.log10(cbar_max)
