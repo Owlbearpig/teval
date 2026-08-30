@@ -7,14 +7,14 @@ from common.measurement_selection import MeasurementSelection, get_coordinate_li
 from pathlib import Path
 import numpy as np
 from common.functions import (window, butter_filt, do_fft, f_axis_idx_map,
-                              remove_offset, avg_data_array, calculate_bandwidth)
+                              remove_offset, avg_data_array, calculate_bandwidth, window_old)
 from common.measurements import Measurement
 from common.consts import c_thz, eps0_thz
 import logging
 from datetime import datetime
 from common.dataset_cache import DatasetCache
 import pandas as pd
-from common.traits import Q_, Path as TPath, Quantity
+from common.traits import Q_, Path as TPath, Quantity, ValueRange
 from scipy.stats import pearsonr
 from common.components import action
 from traitlets import Unicode, observe, Float, Bool, Enum as TEnum, Instance, Int, Dict
@@ -119,6 +119,9 @@ class DataSetInfoPane(ComponentBase):
     signal_bandwidth = Quantity(Q_(0.0, "THz"), read_only=True).tag(name="Signal bandwidth",
                                                                     group="Maximum amplitude measurement")
 
+    selected_measurement_info = Unicode("", read_only=True).tag(name="Selected measurements",
+                                                                group="Selected measurement")
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -145,6 +148,8 @@ class DataSet(ComponentBase):
     horizontal_ref_coord = Quantity(Q_(0.0, "mm")).tag(group=reference_filter_group, name="Horizontal line coordinate")
     vertical_ref_coord = Quantity(Q_(0.0, "mm")).tag(group=reference_filter_group, name="Vertical line coordinate")
     ref_id_str = Unicode("ref").tag(group=reference_filter_group, name="Filter string")
+    ref_point = ValueRange([Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(group=reference_filter_group,
+                                                               name="Single reference point")
 
     data_export_grp = "Data export"
     export_csv_dir = TPath(Path(""), is_file=False).tag(name="Save directory", group=data_export_grp)
@@ -174,11 +179,13 @@ class DataSet(ComponentBase):
 
         self.freq_axis = None
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, *args):
         self.settings.save_configuration(self)
+        self.settings.save_configuration(self.measurement_selector)
 
-    def __enter__(self):
+    def __enter__(self, *args):
         self.settings.load_configuration(self)
+        self.settings.load_configuration(self.measurement_selector)
         self._set_observers()
         self.measurement_selector.set_observers()
         self._parse_measurements()
@@ -270,6 +277,7 @@ class DataSet(ComponentBase):
         if pp_opt.window_enabled:
             win_kwargs = {k: getattr(pp_opt, k) for k in pp_opt.traits()}
             data_td = window(data_td, **win_kwargs)
+            # data_td = window_old(data_td, **win_kwargs)
 
         if pp_opt.filter_enabled:
             data_td = butter_filt(data_td, pp_opt.f_range.magnitude)
@@ -301,7 +309,7 @@ class DataSet(ComponentBase):
             return data_arr
         else:
             for meas_idx, meas in enumerate(meas_list[1:]):
-                data_arr[meas_idx] = self._single_meas_data(meas, domain=domain)
+                data_arr[meas_idx+1] = self._single_meas_data(meas, domain=domain)
 
         return data_arr
 
@@ -541,6 +549,8 @@ class DataSet(ComponentBase):
                         refs_.append(meas)
                 if not refs_:
                     self.logger.info(f"No explicit references found in the dataset based on filename ({id_str}).")
+            case ReferenceClassification.single_point:
+                refs_ = self.measurement_selector.get_measurements_from_point(*self.ref_point)
             case ReferenceClassification.above_threshold:
                 refs_ = self.max_amp_meas_filter(all_measurements, self.ref_threshold)
                 if isinstance(refs_, Measurement):

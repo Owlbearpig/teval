@@ -1,4 +1,3 @@
-import logging
 import numpy as np
 from common.components import ComponentBase
 from common.traits import MultiPathSelection, ValueRange, MultiPathClass
@@ -37,7 +36,6 @@ class SelectionCriterionEnum(Enum):
     string_search = "String"
 
 class ReferenceSelection(Enum):
-    point_as_ref = "Single point"
     max_amp_measurement = "Maximum amplitude measurement"
     closest_distance = "Closest distance"
     fix_ref = "Use fixed index reference"
@@ -56,20 +54,19 @@ class MeasurementSelection(ComponentBase):
     selected_sam_cnt = Unicode("", read_only=True).tag(name="Selected sample measurements", priority=2000,
                                                        group=measurement_selection_grp)
 
-    reference_selection_grp = "Reference selection"
+    reference_matching_grp = "Reference matching"
     ref_sel_criterion = TEnum(ReferenceSelection,
-                              ReferenceSelection.max_amp_measurement).tag(name="Reference selection criterion",
-                                                                     group=reference_selection_grp,
-                                                                     priority=-2)
-    ref_pos = ValueRange([0, 0], group=reference_selection_grp).tag(name="Reference position")
+                              ReferenceSelection.max_amp_measurement).tag(name="Reference matching criterion",
+                                                                          group=reference_matching_grp,
+                                                                          priority=-2)
     dist_func = TEnum(Dist, default_value=Dist.Time).tag(priority=1000, name="Measurement distance function",
-                                                         group=reference_selection_grp)
-    fix_ref_idx = Int(0, min=-1, group=reference_selection_grp).tag(name="Fixed reference index")
+                                                         group=reference_matching_grp)
+    fix_ref_idx = Int(0, min=-1, group=reference_matching_grp).tag(name="Fixed reference index")
     selected_ref_cnt = Unicode("",read_only=True).tag(name="Selected references", priority=2000,
-                                                      group=reference_selection_grp)
+                                                      group=reference_matching_grp)
 
-    reference_paths = MultiPathSelection().tag(fullwidth = False, group="Direct reference selection", combine=True)
-    sample_paths = MultiPathSelection().tag(fullwidth = False, group="Direct sample selection", combine=True)
+    reference_paths = MultiPathSelection().tag(fullwidth = False, group="Direct reference file selection", combine=True)
+    sample_paths = MultiPathSelection().tag(fullwidth = False, group="Direct sample file selection", combine=True)
 
 
     def __init__(self, dataset, **kwargs):
@@ -84,13 +81,30 @@ class MeasurementSelection(ComponentBase):
         self.sample_paths = MultiPathClass(root_path=self.dataset.data_path, shown_filenames=sam_filenames)
 
     def set_observers(self):
-        self.dataset.observe(self.update, "measurements")
+        self.dataset.observe(self.update_fileselection, "measurements")
+        self.dataset.observe(self.update_sel_cnt_info, "measurements")
 
-        reference_sel_names = self.trait_names(group=self.reference_selection_grp)
-        # self.observe(self.update_sel_cnt_info, names=reference_sel_names)
+        reference_sel_names = self.trait_names(group=self.reference_matching_grp)
+        self.observe(self.update_sel_cnt_info, names=reference_sel_names)
 
         measurement_sel_names = self.trait_names(group=self.measurement_selection_grp)
-        # self.observe(self.update_sel_cnt_info, names=measurement_sel_names)
+        self.observe(self.update_sel_cnt_info, names=measurement_sel_names)
+
+        self.reference_paths.observe(self.ref_file_sel_cnt, names="selected_paths")
+        self.sample_paths.observe(self.sam_file_sel_cnt, names="selected_paths")
+
+    def update_fileselection(self, change):
+        new_measurements = change["new"]
+        root_path = self.dataset.data_path
+
+        ref_filenames = [f"{meas.filepath.name}" for meas in new_measurements["refs"]]
+        sam_filenames = [f"{meas.filepath.name}" for meas in new_measurements["sams"]]
+
+        self.reference_paths = MultiPathClass(root_path=root_path, shown_filenames=ref_filenames)
+        self.sample_paths = MultiPathClass(root_path=root_path, shown_filenames=sam_filenames)
+
+        self.reference_paths.observe(self.update_sel_cnt_info, names="selected_paths")
+        self.sample_paths.observe(self.update_sel_cnt_info, names="selected_paths")
 
     @property
     def measurements(self):
@@ -108,31 +122,31 @@ class MeasurementSelection(ComponentBase):
     def reference_measurements(self):
         return self.get_matching_ref(self.selected_measurements)
 
-    def update(self, change):
-        new_measurements = change["new"]
-        new_path = self.dataset.data_path
-
-        ref_filenames = [f"{meas.filepath.name}" for meas in new_measurements["refs"]]
-        sam_filenames = [f"{meas.filepath.name}" for meas in new_measurements["sams"]]
-
-        self.reference_paths = MultiPathClass(root_path=new_path, shown_filenames=ref_filenames)
-        self.sample_paths = MultiPathClass(root_path=new_path, shown_filenames=sam_filenames)
-
     def update_sel_cnt_info(self, change):
         change_name = change["name"]
         if change_name in ["selected_ref_cnt", "selected_sam_cnt"]:
             return
-        if self.selected_measurements is None:
+        selected_measurements = self.selected_measurements
+        if selected_measurements is None:
             return
-        print(change_name)
-        if change_name in self.trait_names(group=self.reference_selection_grp):
-            self.set_trait("selected_ref_cnt", f"{len(self.reference_measurements)}")
-        else:
-            self.set_trait("selected_sam_cnt", f"{len(self.selected_measurements)}")
+        matching_refs = self.get_matching_ref(selected_measurements)
 
-    def get_measurements_from_point(self, x, y):
+        self.set_trait("selected_ref_cnt", f"{len(matching_refs)}")
+        self.set_trait("selected_sam_cnt", f"{len(selected_measurements)}")
+
+    def ref_file_sel_cnt(self, change=None):
+        if self.ref_sel_criterion != ReferenceSelection.file_selection:
+            return
+        self.set_trait("selected_ref_cnt", f"{len(self.reference_measurements)}")
+
+    def sam_file_sel_cnt(self, change=None):
+        if self.selection_criterion != SelectionCriterionEnum.file_selection:
+            return
+        self.set_trait("selected_sam_cnt", f"{len(self.selected_measurements)}")
+
+    def get_measurements_from_point(self, x, y, return_single=False):
         if self.cache is None:
-            logging.info("Cache not loaded, check dataset path")
+            self.dataset.logger.info("Cache not loaded, check dataset path")
             return []
 
         if isinstance(x, Q_):
@@ -153,13 +167,13 @@ class MeasurementSelection(ComponentBase):
             key = self.cache.coord_map_key_func(all_points[closest_pnt_idx])
             found_meas_list = self.cache.coord_map[key]
 
-        return found_meas_list
+        return found_meas_list[0] if return_single else found_meas_list
 
     def get_measurements_from_timestamp(self, timestamp_str=""):
         if not timestamp_str:
-            logging.warning("No timestamp set. Returning first measurement")
+            self.dataset.logger.warning("No timestamp set. Returning first measurement")
             return [self.measurements["all"][0]]
-        logging.info("Selecting measurement by timestamp", timestamp_str)
+        self.dataset.logger.info(f"Selecting measurement by timestamp {timestamp_str}")
         meas_id_ = timestamp2id(timestamp_str)
 
         found_meas_list = []
@@ -168,13 +182,14 @@ class MeasurementSelection(ComponentBase):
                 found_meas_list.append(meas)
 
         if not found_meas_list:
-            logging.warning(f"No measurement with timestamp: {timestamp_str} (id: {meas_id_}) found in dataset")
+            self.dataset.logger.warning(f"No measurement with timestamp: {timestamp_str} "
+                                        f"(id: {meas_id_}) found in dataset")
 
         return found_meas_list
 
     def get_measurements_from_string(self, string=""):
         if not string:
-            logging.warning("No filter string set. Returning first measurement")
+            self.dataset.logger.warning("No filter string set. Returning first measurement")
             return [self.measurements["all"][0]]
 
         found_meas_list = []
@@ -183,7 +198,7 @@ class MeasurementSelection(ComponentBase):
                 found_meas_list.append(meas)
 
         if not found_meas_list:
-            logging.warning(f"No measurement containing the string {string} in the filename found in dataset")
+            self.dataset.logger.warning(f"No measurement containing the string {string} in the filename found in dataset")
 
         return found_meas_list
 
@@ -216,7 +231,7 @@ class MeasurementSelection(ComponentBase):
     def get_meas_from_filenames(self):
         sam_paths = self.sample_paths.selected_paths
 
-        sam_meas_list = [self.cache.filepath_map[p] for p in sam_paths]
+        sam_meas_list = [self.cache.filepath_map[p] for p in sam_paths if p.is_file()]
 
         return sam_meas_list
 
@@ -237,6 +252,16 @@ class MeasurementSelection(ComponentBase):
         handler = handlers[self.selection_criterion]
         identifier = identifier_map[self.selection_criterion]
         selected_meas = handler() if identifier is None else handler(identifier)
+
+        if not selected_meas:
+            return []
+
+        if len(selected_meas) == 1:
+            s = f"{selected_meas[0].filepath.name}"
+        else:
+            s = f"{selected_meas[0].filepath.name} - {selected_meas[-1].filepath.name}"
+
+        self.dataset.info_pane.set_trait("selected_measurement_info", s)
 
         return selected_meas
 
@@ -296,14 +321,14 @@ class MeasurementSelection(ComponentBase):
         # from random import choice
         # closest_ref = choice(self.measurements["refs"])
 
-        logging.debug(f"Sam: {meas_})")
-        logging.debug(f"Ref: {closest_ref})")
+        self.dataset.logger.debug(f"Sam: {meas_})")
+        self.dataset.logger.debug(f"Ref: {closest_ref})")
         if self.dist_func == Dist.Time:
-            logging.debug(f"Time between ref and sample: {best_fit_val} seconds")
+            self.dataset.logger.debug(f"Time between ref and sample: {best_fit_val} seconds")
         else:
-            logging.debug(f"Distance between ref and sample: {best_fit_val} mm")
+            self.dataset.logger.debug(f"Distance between ref and sample: {best_fit_val} mm")
         if closest_ref is None:
-            logging.warning("No nearest reference found, returning first reference")
+            self.dataset.logger.warning("No nearest reference found, returning first reference")
             return self.measurements["refs"][0]
 
         return closest_ref
@@ -316,28 +341,27 @@ class MeasurementSelection(ComponentBase):
         match self.ref_sel_criterion:
             case ReferenceSelection.file_selection:
                 ref_list = [self.cache.filepath_map[p] for p in self.reference_paths.selected_paths]
-                if len(ref_list) != len(meas_list):
-                    logging.warning("Reference file selection length != number of selected measurements")
-                    if len(ref_list) < len(meas_list):
-                        ref_list.extend((len(meas_list)-len(ref_list))*[ref_list[-1]])
-                    elif len(ref_list) > len(meas_list):
-                        ref_list = ref_list[:len(meas_list)]
+                rl_len, ml_len = len(ref_list), len(meas_list)
+                if rl_len == 0:
+                    return ml_len * [self.measurements["max_amp_meas"]]
+
+                if rl_len != ml_len:
+                    self.dataset.logger.warning(f"Reference file selection length ({rl_len}) != "
+                                    f"number of selected measurements ({ml_len})")
+                    if rl_len < ml_len:
+                        ref_list.extend((ml_len-rl_len)*[ref_list[-1]])
+                    elif rl_len > ml_len:
+                        ref_list = ref_list[:ml_len]
 
                 return ref_list
             case ReferenceSelection.closest_distance:
-                ref_getter = lambda meas: [self.get_nearest_ref(meas)]
-            case ReferenceSelection.point_as_ref:
-                ref_getter = lambda meas: self.get_measurements_from_point(*self.ref_pos)
-                logging.debug(f"Using measurement closest to {self.ref_pos} as ref.")
+                ref_getter = lambda meas: self.get_nearest_ref(meas)
+                self.dataset.logger.debug(f"Using reference measurement closest to {self.dataset.ref_point} as ref.")
             case ReferenceSelection.max_amp_measurement:
-                ref_getter = lambda meas: [self.measurements["max_amp_meas"]]
-                logging.debug("Using the measurement with the highest amplitude as reference")
+                ref_getter = lambda meas: self.measurements["max_amp_meas"]
+                self.dataset.logger.debug("Using the measurement with the highest amplitude as reference")
             case ReferenceSelection.fix_ref:
                 ref_idx = min(len(self.measurements["refs"]) - 1, self.fix_ref_idx)
-                ref_getter = lambda meas: [self.measurements["refs"][ref_idx]]
+                ref_getter = lambda meas: self.measurements["refs"][ref_idx]
 
-        ref_list = []
-        for meas in meas_list:
-            ref_list.extend(ref_getter(meas))
-
-        return ref_list
+        return [ref_getter(meas) for meas in meas_list] if ref_getter else []

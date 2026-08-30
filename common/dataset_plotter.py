@@ -29,24 +29,27 @@ class GridWorker(QThread):
     progress_changed = Signal(float)
     finished = Signal(object)
 
-    def __init__(self, parent_obj, batch_size=1000):
+    def __init__(self, parent_obj, batch_size=2000):
         super().__init__()
         self.p = parent_obj
         self.batch_size = batch_size
 
     def run(self):
-        sam_meas = self.p.measurements["sams"]
+        if self.p.only_use_sample_set:
+            meas_set = self.p.measurements["sams"]
+        else:
+            meas_set = self.p.measurements["all"]
         grid = self.p._get_empty_grid()
         sel_quant = self.p.get_selected_quantity()
 
-        positions = np.array([m.position for m in sam_meas])
+        positions = np.array([m.position for m in meas_set])
         x_idxs = np.argmin(np.abs(positions[:, 0, None] - self.p.img_shape["x_coords"]), axis=1)
         y_idxs = np.argmin(np.abs(positions[:, 1, None] - self.p.img_shape["y_coords"]), axis=1)
 
         logging.info(f"Calculating {self.p.selected_quantity.name} grid values")
-        num_meas = len(sam_meas)
+        num_meas = len(meas_set)
         for i in range(0, num_meas, self.batch_size):
-            batch_meas = sam_meas[i : i + self.batch_size]
+            batch_meas = meas_set[i : i + self.batch_size]
             batch_x = x_idxs[i : i + self.batch_size]
             batch_y = y_idxs[i : i + self.batch_size]
 
@@ -90,13 +93,19 @@ class DataSetPlotter(ComponentBase):
         name="Set image y-range", group=image_grp, priority=1003)
     enable_img_interaction = Bool(True, group=image_grp).tag(name="Enable image interaction")
     grid_calc_progress = Float(0, min=0, max=1, read_only=True,
-                               group=image_grp).tag(name="Grid value calculation progress")
+                               group=image_grp).tag(name="Grid calculation progress")
+    only_use_sample_set = Bool(True, group=image_grp,
+                               help="Will only use measurements classified as a sample measurement "
+                                     "for the image plot, otherwise uses all measurements in the "
+                                     "dataset").tag(name="Only use sample measurements for image")
 
     line_plot_grp = "Image slice plot"
     line_start = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
         name="Line start point", group=line_plot_grp, priority=1001)
     line_end = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
         name="Line end point", group=line_plot_grp, priority=1002)
+
+
 
     def __init__(self, dataset : DataSet, **kwargs):
         super().__init__(**kwargs)
@@ -492,7 +501,7 @@ class DataSetPlotter(ComponentBase):
     @action("Reference measurement", group="Plots")
     def plot_ref(self, ref_list=None):
         if ref_list is None:
-            ref_list = self.dataset.measurement_selector.reference_measurements
+            ref_list = self.dataset.measurement_selector.get_matching_ref(self.selected_measurements)
         if not ref_list:
             return
 

@@ -26,6 +26,7 @@ class ReferenceClassification(Enum):
     horizontal_line_as_ref = "Horizontal line"
     vertical_line_as_ref = "Vertical line"
     above_threshold = "Above threshold"
+    single_point = "Single point"
 
 
 class PixelInterpolation(Enum):
@@ -381,7 +382,7 @@ class PlotOpt(ComponentBase):
     plot_zero_crossing = Bool(False).tag(name="Plot zero crossing")
 
     image_group = "Image"
-    cbar_lim = ValueRange(default_value=[0, 0], group=image_group).tag(name="Custom color bar limits")
+    cbar_lim = ValueRange(default_value=[0.0, 0.0], group=image_group).tag(name="Custom color bar limits")
     log_scale = Bool(False, group=image_group).tag(name="Log scale")
     color_map = traitlets.Enum(ColorMaps, default_value=ColorMaps.autumn).tag(name="Colormaps", group=image_group)
     invert_x = Bool(False, group=image_group).tag(name="Invert x")

@@ -47,7 +47,7 @@ class QSpaceEval:
 
     @property
     def ref_fd_dict(self):
-        ref_list = self.dataset_eval.dataset.measurement_selector.reference_measurements
+        ref_list = self.dataset_eval.dataset.measurement_selector.get_matching_ref(self.selected_measurements)
         ref_fd = self.dataset_eval.dataset.get_multi_data(ref_list)
 
         ref_fd = ref_fd[:, self.freq_idx]

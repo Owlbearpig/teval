@@ -140,7 +140,7 @@ class Settings(AppSettings):
                     value = getattr(instance, trait_name)
                     if isinstance(value[0], Q_):
                         unit = value[0].units
-                        value = [dict_val[0] * unit, dict_val[1] * unit]
+                        value = [Q_(dict_val[0], unit), Q_(dict_val[1], unit)]
                     instance.set_trait(trait_name, value)
 
         with open(config_path, "r") as f:

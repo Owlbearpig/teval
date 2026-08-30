@@ -18,7 +18,7 @@ class FastNameFilterProxyModel(QtCore.QSortFilterProxyModel):
         default_flags = super().flags(index)
 
         if not self._allowed_filenames:
-            return default_flags
+            return default_flags & ~QtCore.Qt.ItemIsSelectable & ~QtCore.Qt.ItemIsEnabled
 
         source_model = self.sourceModel()
         source_index = self.mapToSource(index)

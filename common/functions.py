@@ -101,7 +101,7 @@ def flip_phase(data_fd):
 
 def window(data_td, **kwargs):
     win_width = kwargs.get("win_width")
-    shift = kwargs.get("shift")
+    shift = kwargs.get("shift", 0.0)
     en_plot = kwargs.get("en_plot")
     slope = kwargs.get("slope")
     win_start = kwargs.get("win_start")
@@ -116,17 +116,16 @@ def window(data_td, **kwargs):
         win_width = len(y)
 
     win_center = np.argmax(np.abs(y))
-    if win_start is None:
-        win_start = win_center - int(win_width / 2)
+    win_start = win_center - int(win_width / 2)
 
     if "type" in kwargs:
-        window = kwargs["type"]
-        if window == WindowTypes.tukey:
-            window_arr = get_window(window.name, win_width, slope)
+        window_type = kwargs["type"]
+        if window_type == WindowTypes.tukey:
+            window_arr = get_window((window_type.name, slope), win_width, fftbins=False)
         else:
-            window_arr = get_window(window.name, win_width)
+            window_arr = get_window(window_type.name, win_width)
 
-    window_mask = np.zeros(len(y))
+    window_mask = np.zeros_like(y)
     window_mask[:win_width] = window_arr
 
     window_mask = np.roll(window_mask, win_start)
@@ -152,8 +151,6 @@ def window(data_td, **kwargs):
         plt.legend()
 
     return np.array([t, y_win]).T
-
-
 
 def cauchy_relation(freqs, p):
     lam = (c0 / freqs) * 10 ** -9
@@ -464,28 +461,48 @@ def avg_data_array(data_arr):
     if data_arr.ndim < 2:
         return data_arr
     elif data_arr.ndim == 2:
-        avg_std = np.mean(data_arr, axis=0)
+        avg_std = np.empty_like(data_arr)
+        avg_std[:, 0] = data_arr[:, 0]
+        avg_std[:, 1] = np.mean(data_arr[:, 1], axis=0)
         avg_std[:, 2] = _std(data_arr[:, 1], axis=0)
         return avg_std
     elif data_arr.ndim == 3: # [meas0, ..., meas_n][[x0, y0], ..., [xn, yn]]
-        avg_std = np.mean(data_arr, axis=0)
+        avg_std = np.empty_like(data_arr[0])
+        avg_std[:, 0] = data_arr[0, :, 0]
+        avg_std[:, 1] = np.mean(data_arr[:, :, 1], axis=0)
         avg_std[:, 2] = _std(data_arr[:, :, 1], axis=0)
         return avg_std
     else: # [ref, sam][meas0, ..., meas_n][[x0, y0], ..., [xn, yn]]
-        avg_std_ref = np.mean(data_arr[0], axis=0)
-        avg_std_ref[:, :, 2] = _std(data_arr[0, :, :, 1], axis=0)
+        avg_std_ref = np.empty_like(data_arr[0, 0])
+        avg_std_ref[:, 0] = data_arr[0, :, :, 0]
+        avg_std_ref[:, 1] = np.mean(data_arr[0, :, :, 1], axis=0)
+        avg_std_ref[:, 2] = _std(data_arr[0, :, :, 1], axis=0)
 
-        avg_std_sam = np.mean(data_arr[1], axis=0)
-        avg_std_sam[:, :, 2] = _std(data_arr[1, :, :, 1], axis=0)
+        avg_std_sam = np.empty_like(data_arr[1, 0])
+        avg_std_sam[:, 0] = data_arr[1, :, :, 0]
+        avg_std_sam[:, 1] = np.mean(data_arr[1, :, :, 1], axis=0)
+        avg_std_sam[:, 2] = _std(data_arr[1, :, :, 1], axis=0)
 
         return np.array([avg_std_ref, avg_std_sam])
 
 
 
-
 if __name__ == '__main__':
-    arr = np.random.random((2, 12, 5, 3))
-    barr = avg_data_array(arr)
-    print(barr)
-    print(arr.shape)
-    print(barr.shape)
+    #arr = np.random.random((2, 12, 5, 3))
+    #barr = avg_data_array(arr)
+    #print(barr)
+    #print(arr.shape)
+    #print(barr.shape)
+
+    kwargs = {
+        "win_width": 10,
+        "en_plot": True,
+        "slope": 0.150,
+        "type": WindowTypes.tukey,
+    }
+
+    data_td = np.loadtxt(r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img3\2025-02-26T21-56-51.457191-20avg-sam-X_1.000 mm-Y_-10.000 mm.txt")
+    window(data_td, **kwargs)
+
+    plt.show()
+
