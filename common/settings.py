@@ -141,6 +141,8 @@ class Settings(AppSettings):
                     if isinstance(value[0], Q_):
                         unit = value[0].units
                         value = [Q_(dict_val[0], unit), Q_(dict_val[1], unit)]
+                    else:
+                        value = dict_val
                     instance.set_trait(trait_name, value)
 
         with open(config_path, "r") as f:

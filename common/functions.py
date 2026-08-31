@@ -12,10 +12,6 @@ from enum import Enum
 from matplotlib._pylab_helpers import Gcf
 from scipy.signal import butter, filtfilt, get_window
 
-class WindowTypes(Enum):
-    tukey = "tukey"
-    hannin = "hanning"
-    rectangular = "rectangular"
 
 def do_fft(data_td):
     data_td = nan_to_num(data_td)
@@ -97,60 +93,6 @@ def flip_phase(data_fd):
     y_phi_ = np.unwrap(np.angle(data_fd[:, 1]))
 
     return np.array([freq_axis, y_amp_ * np.exp(-1j*y_phi_)]).T
-
-
-def window(data_td, **kwargs):
-    win_width = kwargs.get("win_width")
-    shift = kwargs.get("shift", 0.0)
-    en_plot = kwargs.get("en_plot")
-    slope = kwargs.get("slope")
-    win_start = kwargs.get("win_start")
-
-    t, y = data_td[:, 0], data_td[:, 1]
-    t -= t[0]
-    dt = np.mean(np.diff(t))
-
-    win_width = int(win_width / dt)
-
-    if win_width > len(y):
-        win_width = len(y)
-
-    win_center = np.argmax(np.abs(y))
-    win_start = win_center - int(win_width / 2)
-
-    if "type" in kwargs:
-        window_type = kwargs["type"]
-        if window_type == WindowTypes.tukey:
-            window_arr = get_window((window_type.name, slope), win_width, fftbins=False)
-        else:
-            window_arr = get_window(window_type.name, win_width)
-
-    window_mask = np.zeros_like(y)
-    window_mask[:win_width] = window_arr
-
-    window_mask = np.roll(window_mask, win_start)
-    if win_start < 0:
-        window_mask[len(y)+win_start:] = 0
-
-    window_mask = np.roll(window_mask, int(shift / dt))
-
-    y_win = y * window_mask
-
-    if en_plot:
-        if "fig_label" in kwargs:
-            fig_label = f"_{kwargs['fig_label']}"
-        else:
-            fig_label = ""
-
-        plt.figure("Window" + fig_label)
-        plt.plot(t, y, label="Before windowing")
-        plt.plot(t, np.max(np.abs(y)) * window_mask, label="Window")
-        plt.plot(t, y_win, label="After windowing")
-        plt.xlabel("Time (ps)")
-        plt.ylabel("Amplitude (nA)")
-        plt.legend()
-
-    return np.array([t, y_win]).T
 
 def cauchy_relation(freqs, p):
     lam = (c0 / freqs) * 10 ** -9
@@ -494,15 +436,7 @@ if __name__ == '__main__':
     #print(arr.shape)
     #print(barr.shape)
 
-    kwargs = {
-        "win_width": 10,
-        "en_plot": True,
-        "slope": 0.150,
-        "type": WindowTypes.tukey,
-    }
-
     data_td = np.loadtxt(r"C:\Users\alexj\Data\Furtwangen\Vanadium Oxide\img3\2025-02-26T21-56-51.457191-20avg-sam-X_1.000 mm-Y_-10.000 mm.txt")
-    window(data_td, **kwargs)
 
     plt.show()
 

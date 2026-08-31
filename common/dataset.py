@@ -1,13 +1,15 @@
 import traceback
 
+import matplotlib.pyplot as plt
+
 from common.components import ComponentBase
-from common.default_appsettings import Dist, ReferenceClassification, Domain, QuantityEnum
+from common.default_appsettings import Dist, ReferenceClassification, Domain, QuantityEnum, WindowTypes
 from common.settings import Settings
 from common.measurement_selection import MeasurementSelection, get_coordinate_line
 from pathlib import Path
 import numpy as np
-from common.functions import (window, butter_filt, do_fft, f_axis_idx_map,
-                              remove_offset, avg_data_array, calculate_bandwidth, window_old)
+from common.functions import (butter_filt, do_fft, f_axis_idx_map,
+                              remove_offset, avg_data_array, calculate_bandwidth)
 from common.measurements import Measurement
 from common.consts import c_thz, eps0_thz
 import logging
@@ -16,6 +18,7 @@ from common.dataset_cache import DatasetCache
 import pandas as pd
 from common.traits import Q_, Path as TPath, Quantity, ValueRange
 from scipy.stats import pearsonr
+from scipy.signal import get_window
 from common.components import action
 from traitlets import Unicode, observe, Float, Bool, Enum as TEnum, Instance, Int, Dict
 from concurrent.futures import ThreadPoolExecutor
@@ -265,19 +268,82 @@ class DataSet(ComponentBase):
         self.clear_cache()
         self._parse_measurements()
 
+    def _apply_window(self, data_td):
+        t, y = data_td[:, 0], data_td[:, 1]
+        dt = np.mean(np.diff(t))
+
+        pp_opt = self.settings.pp_opt
+        win_enum = pp_opt.type
+        sym = pp_opt.symmetric
+        win_width = pp_opt.win_width
+        shift = pp_opt.shift
+        en_plot = pp_opt.en_plot
+
+        HFT90D = [1, 1.942604, 1.340318, 0.440811, 0.043097]
+
+        param_map = {
+            WindowTypes.tukey: (pp_opt.tukey_alpha,),
+            WindowTypes.chebwin: (pp_opt.chebwin_at,),
+            WindowTypes.dpss: (pp_opt.dpss_nw,),
+            WindowTypes.exponential: (pp_opt.exp_center if not sym else None,
+                                      pp_opt.exp_tau,),
+            WindowTypes.gaussian: (pp_opt.gaussian_std,),
+            WindowTypes.general_cosine: (HFT90D,),
+            WindowTypes.general_gaussian: (pp_opt.general_gauss_p, pp_opt.general_gauss_sig,),
+            WindowTypes.general_hamming: (pp_opt.general_hamming_alpha,),
+            WindowTypes.kaiser: (pp_opt.kaiser_beta,),
+            WindowTypes.kaiser_bessel_derived: (pp_opt.kaiser_bessel_beta,),
+            WindowTypes.taylor: (pp_opt.taylor_nbar, pp_opt.taylor_sll, pp_opt.taylor_norm,),
+        }
+        win_param = (win_enum.name, *param_map.get(win_enum, ()))
+
+        win_width = int(win_width / dt)
+
+        if win_width > len(y):
+            win_width = len(y)
+
+        win_arr = get_window(win_param, win_width, fftbins=not sym)
+
+        win_center = np.argmax(np.abs(y))
+        win_start = win_center - int(win_width / 2)
+
+        window_mask = np.zeros_like(y)
+        window_mask[:win_width] = win_arr
+
+        window_mask = np.roll(window_mask, win_start)
+        if win_start < 0:
+            window_mask[len(y) + win_start:] = 0
+
+        window_mask = np.roll(window_mask, int(shift / dt))
+
+        y_win = y * window_mask
+
+        fig_num = "Window"
+        if en_plot and not plt.fignum_exists(fig_num):
+            plt.figure(fig_num)
+            plt.plot(t, y, label="Before windowing")
+            plt.plot(t, np.max(np.abs(y)) * window_mask, label="Window")
+            plt.plot(t, y_win, label="After windowing")
+            plt.xlabel("Time (ps)")
+            plt.ylabel("Amplitude (nA)")
+            plt.legend()
+
+        return np.array([t, y_win]).T
+
     def _pre_process(self, meas_):
         pp_opt = self.settings.pp_opt
 
         cache_idx = self.cache.id_map[meas_.identifier]
         data_td = self.cache.raw_data_td[cache_idx]
 
+        if pp_opt.normalize_data:
+            data_td[:, 1] = data_td[:, 1] / np.max(data_td[:, 1])
+
         if pp_opt.remove_dc:
             data_td = remove_offset(data_td)
 
         if pp_opt.window_enabled:
-            win_kwargs = {k: getattr(pp_opt, k) for k in pp_opt.traits()}
-            data_td = window(data_td, **win_kwargs)
-            # data_td = window_old(data_td, **win_kwargs)
+            data_td = self._apply_window(data_td)
 
         if pp_opt.filter_enabled:
             data_td = butter_filt(data_td, pp_opt.f_range.magnitude)

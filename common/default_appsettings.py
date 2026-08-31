@@ -8,7 +8,6 @@ from traitlets import (Bool, Int, Float, Unicode, Tuple,
 
 from common.components import ComponentBase
 from common.traits import ValueRange, Path as TPath, Q_, Quantity as TQuantity
-from common.functions import WindowTypes
 
 class SimRISelection(Enum):
     const = 0
@@ -28,6 +27,35 @@ class ReferenceClassification(Enum):
     above_threshold = "Above threshold"
     single_point = "Single point"
 
+
+class WindowTypes(Enum):
+    tukey = "tukey"
+    chebwin = "chebwin"
+    dpss = "dpss"
+    gaussian = "gaussian"
+    general_cosine = "general_cosine"
+    general_gaussian = "general_gaussian"
+    general_hamming = "general_hamming"
+    kaiser = "kaiser"
+    kaiser_bessel_derived = "kaiser_bessel_derived"
+    taylor = "taylor"
+    hannin = "hanning"
+    rectangular = "rectangular"
+    barthann = "barthann"
+    bartlett = "bartlett"
+    blackman = "blackman"
+    blackmanharris = "blackmanharris"
+    bohman = "bohman"
+    boxcar = "boxcar"
+    cosine = "cosine"
+    exponential = "exponential"
+    flattop = "flattop"
+    hamming = "hamming"
+    hann = "hann"
+    lanczos = "lanczos"
+    nuttall = "nuttall"
+    parzen = "parzen"
+    triang = "triang"
 
 class PixelInterpolation(Enum):
     none = None
@@ -322,14 +350,32 @@ class EvalOpt(ComponentBase):
 
 class PpOpt(ComponentBase):
     remove_dc = Bool(True).tag(name="Subtract DC")
+    normalize_data = Bool(False).tag(name="Normalize waveform")
 
     window_group = "Window options"
     window_enabled = Bool(False, group=window_group, name="Enabled").tag(name="Enable window")
     win_width = Int(10, group=window_group).tag(name="Window width").tag(name="Window width")
     shift = Float(0, group=window_group).tag(name="Window shift").tag(name="Window shift")
-    slope = Float(0.15, group=window_group).tag(name="Tukey slope")
     en_plot = Bool(False, group=window_group).tag(name="Enable window plot")
     type = TEnum(WindowTypes, default_value=WindowTypes.tukey, group=window_group).tag(name="Window type")
+    symmetric = Bool(True, group=window_group).tag(name="Symmetric window")
+
+    #specific window parameters
+    window_param_group = "Window parameters"
+    tukey_alpha = Float(0.50, group=window_param_group).tag(name="Tukey slope", priority=1999)
+    chebwin_at = Float(100.0, group=window_param_group).tag(name="Chebwin attenuation", priority=2000)
+    dpss_nw = Float(2.50, group=window_param_group).tag(name="Standardized half bandwidth", priority=2000)
+    exp_center = Float(0.0, group=window_param_group).tag(name="Exponential center", priority=2000)
+    exp_tau = Float(1.00, group=window_param_group).tag(name="Exponential decay tau", priority=2000)
+    gaussian_std = Float(0.0, group=window_param_group).tag(name="Gaussian standard deviation", priority=2000)
+    general_gauss_p = Float(1.0, group=window_param_group).tag(name="Gen. Gaussian shape parameter", priority=2000)
+    general_gauss_sig = Float(10.0, group=window_param_group).tag(name="Gen. Gaussian sigma", priority=2000)
+    general_hamming_alpha = Float(0.54, group=window_param_group).tag(name="Gen. Hamming alpha", priority=2000)
+    kaiser_beta = Float(14.0, group=window_param_group).tag(name="Kaiser beta", priority=2000)
+    kaiser_bessel_beta = Float(4.0, group=window_param_group).tag(name="Kaiser-Bessel beta", priority=2000)
+    taylor_nbar = Int(4, group=window_param_group).tag(name="Taylor nbar", priority=2000)
+    taylor_sll = Float(30, group=window_param_group).tag(name="Taylor sll", priority=2000)
+    taylor_norm = Bool(True, group=window_param_group).tag(name="Taylor normalize", priority=2000)
 
     filter_group = "Frequency filter options"
     filter_enabled = Bool(False, group=filter_group, name="Enabled").tag(name="Enable filter")
