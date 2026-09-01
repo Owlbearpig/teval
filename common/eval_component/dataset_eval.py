@@ -376,8 +376,9 @@ class DatasetEval(ComponentBase):
                 qs_eval = QSpaceEval(self)
                 qs_res_dict = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
 
-                for res in qs_res_dict.values():
-                    self.current_result.result_carrier.received_result.emit(res)
+                for meas_res in qs_res_dict.values():
+                    print(meas_res.keys())
+                    self.current_result.result_carrier.received_result.emit(meas_res)
             executor = ThreadPoolExecutor(max_workers=1)
             executor.submit(bg_worker)
         except Exception as e:

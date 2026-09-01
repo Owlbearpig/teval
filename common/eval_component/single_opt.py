@@ -34,7 +34,7 @@ def optimize_transmission(d, shift, meas_id, config_dict):
         conv, i_ = False, 0
         while not conv:
             i_ += 1
-            """
+            #"""
             shgo_opt_res_ = shgo(opt_fun,
                                  bounds=bounds,
                                  minimizer_kwargs=minimizer_kwargs,
@@ -44,8 +44,8 @@ def optimize_transmission(d, shift, meas_id, config_dict):
             
             x = shgo_opt_res_.x
             gof += shgo_opt_res_.fun
-            """
-            x = [1, 1]
+            #"""
+            #x = [1, 1]
             n_opt_res_[f_idx] = x[0] + 1j * x[1]
 
             if f_idx == 0:

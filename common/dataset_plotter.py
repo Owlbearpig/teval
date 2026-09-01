@@ -17,10 +17,9 @@ from traitlets import Float, observe, Bool, Unicode, Enum as TEnum
 from common.traits import Q_, Quantity, ValueRange
 from mpl_settings import mpl_style_params
 from scipy.stats import pearsonr
-from tqdm import tqdm
+import re
 import pandas as pd
 from matplotlib.backend_bases import MouseButton
-import threading
 from PySide6.QtCore import QThread, Signal
 
 action = partial(action, check_init=True, rc_params=mpl_style_params)
@@ -76,6 +75,7 @@ class DataSetPlotter(ComponentBase):
     selected_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(name="Selected quantity", priority=1001)
     quantity_value = Unicode("", read_only=True).tag(name="Quantity value", priority=1003)
     only_plot_avg = Bool(False).tag(name="Only plot average")
+    label = Unicode("").tag(name="Legend label")
 
     rect_sel_grp = "Average value rectangle"
     rect_sel_label = Unicode("").tag(name="Rectangle label", priority=1000, group=rect_sel_grp)
@@ -114,6 +114,7 @@ class DataSetPlotter(ComponentBase):
         self.grid_vals = None
         self.img_ax = None
         self.drawn_elements = {"patches": [], "text_labels": [], "points": []}
+        self.grid_thread = None
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.settings.save_configuration(self)
@@ -196,6 +197,18 @@ class DataSetPlotter(ComponentBase):
     @property
     def selected_measurements(self):
         return self.dataset.measurement_selector.selected_measurements
+
+    def get_legend_label(self, meas_):
+        if len(self.label) < 2 or self.label[:2] != "$$":
+            return self.label
+        if isinstance(meas_, str):
+            return meas_
+
+        match = re.search(self.label[2:], meas_.filepath.name)
+        if match:
+            return match.group(0)  # Output: sample_4_1
+        else:
+            return self.label
 
     def get_selected_quantity(self):
         self._update_sel_quant_func()
@@ -287,6 +300,9 @@ class DataSetPlotter(ComponentBase):
         unit = sel_quant.unit
         if unit:
             s += f" {unit}"
+
+        if value.ndim == 2:
+            s += f" at {self.sel_freq_range[0]}"
 
         self.set_trait("quantity_value", s)
 
@@ -498,10 +514,12 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel(f"Time since first measurement ({dt1.units})")
         plt.ylabel("Phase (rad)")
 
+        self.plt_show()
+
     @action("Reference measurement", group="Plots")
     def plot_ref(self, ref_list=None):
         if ref_list is None:
-            ref_list = self.dataset.measurement_selector.get_matching_ref(self.selected_measurements)
+            ref_list = self.dataset.measurement_selector.get_matching_refs(self.selected_measurements)
         if not ref_list:
             return
 
@@ -544,7 +562,7 @@ class DataSetPlotter(ComponentBase):
         plt.ylabel("Amplitude (Arb. u.)")
         plt.draw()
 
-        logging.info(f"Plotted {len(ref_list)} reference measurement(s)")
+        logging.info(f"Plotted {len(plot_data_fd)} reference measurement(s)")
 
     @action("Waveform", group="Plots")
     def plot_waveform(self, meas_list=None):
@@ -553,7 +571,7 @@ class DataSetPlotter(ComponentBase):
         if not meas_list:
             logging.info("No measurements selected")
             return None
-        ref_list = self.dataset.measurement_selector.get_matching_ref(meas_list)
+        ref_list = self.dataset.measurement_selector.get_matching_refs(meas_list)
 
         sam_td = self.dataset.get_multi_data(meas_list)
         sam_fd = self.dataset.get_multi_data(meas_list, Domain.Frequency)
@@ -587,7 +605,7 @@ class DataSetPlotter(ComponentBase):
         for sam_meas, y_fd_db in plot_data_fd.items():
             y_td = plot_data_td[sam_meas]
             plt.figure(self.td_fig_num)
-            label = self.plot_settings.label
+            label = self.get_legend_label(sam_meas)
 
             if not label:
                 if isinstance(sam_meas, Measurement):
@@ -609,7 +627,7 @@ class DataSetPlotter(ComponentBase):
         plt.figure(self.fd_fig_num)
         plt.draw()
 
-        logging.info(f"Plotted {len(meas_list)} measurement(s)")
+        logging.info(f"Plotted {len(plot_data_fd)} measurement(s)")
         return meas_list
 
     @action("Phase plots", group="Phase plots")
@@ -635,7 +653,7 @@ class DataSetPlotter(ComponentBase):
         fig_num_ext = self.plot_settings.fig_num_ext
         for meas, phi_1meas in plot_data_phi.items():
             phi_cor_1meas = plot_data_phi_corrected[meas]
-            label = self.plot_settings.label
+            label = self.get_legend_label(meas)
             if not label:
                 label = str(meas.filepath.name)
 
@@ -663,7 +681,9 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad/THz)")
 
-        logging.info(f"Plotted {len(meas_list)} measurement(s)")
+        self.plt_show()
+
+        logging.info(f"Plotted {len(plot_data_phi)} measurement(s)")
 
     def plot_scalar_quantity(self, meas_list):
         fig_num_ext = self.plot_settings.fig_num_ext
@@ -674,8 +694,6 @@ class DataSetPlotter(ComponentBase):
         fignum = str(sel_quant) + fig_num_ext
         y_label = f"{sel_quant} ({sel_quant.unit})" if sel_quant.unit else f"{sel_quant}"
 
-        fig_exists = plt.fignum_exists(fignum)
-
         plt.figure(fignum)
         pos_labels = [f"({m.position[0]:.1f}, {m.position[1]:.1f})" for m in meas_list]
         plt.scatter(pos_labels, values)
@@ -683,6 +701,8 @@ class DataSetPlotter(ComponentBase):
         plt.ylabel(y_label)
         plt.tight_layout()
         plt.draw()
+
+        self.plt_show()
 
         logging.info(f"Plotted {sel_quant} for {len(meas_list)} measurement(s)")
 
@@ -718,7 +738,7 @@ class DataSetPlotter(ComponentBase):
         plot_value_dict = format_meas_dict(meas_list, values_stacked, self.only_plot_avg)
 
         for meas, y_values in plot_value_dict.items():
-            label = self.plot_settings.label
+            label = self.get_legend_label(meas)
             if not label:
                 if isinstance(meas, Measurement):
                     point = meas.position
@@ -740,7 +760,7 @@ class DataSetPlotter(ComponentBase):
                 ax1.plot(self.freq_axis, y_values[:, 1].imag, label=label)
 
         if not is_complex:
-            plt.figure(fignum)
+            fig = plt.figure(fignum)
             plt.xlabel("Frequency (THz)")
             plt.ylabel(y_label)
         else:
@@ -751,7 +771,9 @@ class DataSetPlotter(ComponentBase):
             ax1.set_ylabel(f"{y_label} (Imag part)")
 
         plt.draw()
-        logging.info(f"Plotted {sel_quant} for {len(meas_list)} measurement(s)")
+        self.plt_show()
+
+        logging.info(f"Plotted {sel_quant} for {len(plot_value_dict)} measurement(s)")
 
         return meas_list
 
@@ -777,7 +799,7 @@ class DataSetPlotter(ComponentBase):
         plot_meas_dict = format_meas_dict(sam_meas_list0, phi_diff_stacked, self.only_plot_avg)
 
         for meas, phi_diff_1meas in plot_meas_dict.items():
-            label = self.plot_settings.label
+            label = self.get_legend_label(meas)
             if not label:
                 label = str(meas.filepath.name)
             plt.figure("Phi difference")
@@ -787,7 +809,9 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase difference (rad)")
 
-        logging.info(f"Plotted {len(sam_meas_list0)} measurement(s)")
+        self.plt_show()
+
+        logging.info(f"Plotted {len(plot_meas_dict)} measurement(s)")
 
     @action("Reference noise", group="Plots")
     def plot_frequency_noise(self):
@@ -804,6 +828,8 @@ class DataSetPlotter(ComponentBase):
         plt.plot(freq_axis, np.std(to_db(ref_fd[:, :, 1]), axis=0))
         plt.xlabel(f"Frequency (THz)")
         plt.ylabel("Amplitude (dB)")
+
+        self.plt_show()
 
         logging.info(f"Plotted reference noise")
 
@@ -996,6 +1022,8 @@ class DataSetPlotter(ComponentBase):
             plt.scatter(x, relative_delay, label=label)
         plt.ylabel("Pulse shift (fs)")
         plt.xlabel("Temperature (°C)")
+
+        self.plt_show()
 
         return ret
 
@@ -1193,6 +1221,8 @@ class DataSetPlotter(ComponentBase):
             ax1.set_xlabel(f"Measurement time ({mt_unit})")
             ax1.set_ylabel(y_label)
 
+        self.plt_show()
+
         return meas_time, quant_values
 
     @action("Stability difference", group="Stability plots")
@@ -1252,6 +1282,8 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel(f"Measurement time (unit?)")
         plt.ylabel("Time (fs)")
 
+        self.plt_show()
+
     def on_image_click(self, event):
         if not self.enable_img_interaction:
             return
@@ -1277,13 +1309,13 @@ class DataSetPlotter(ComponentBase):
             self.plt_show()
 
     def calculate_grid_vals(self, callback=None):
-        if hasattr(self, "thread") and self.thread.isRunning():
+        if self.grid_thread is not None and self.grid_thread.isRunning():
             logging.warning("Grid calculation already running...")
             return
 
-        self.thread = GridWorker(self)
+        self.grid_thread = GridWorker(self)
 
-        self.thread.progress_changed.connect(lambda val: self.set_trait("grid_calc_progress", val))
+        self.grid_thread.progress_changed.connect(lambda val: self.set_trait("grid_calc_progress", val))
 
         def _on_finish(new_grid_vals):
             self.grid_vals = np.nan_to_num(new_grid_vals)
@@ -1291,8 +1323,8 @@ class DataSetPlotter(ComponentBase):
             if callback:
                 callback(new_grid_vals)
 
-        self.thread.finished.connect(_on_finish)
-        self.thread.start()
+        self.grid_thread.finished.connect(_on_finish)
+        self.grid_thread.start()
 
     @action("Plot image", group=image_grp, priority=1)
     def plot_image(self, grid_vals=None):
@@ -1345,6 +1377,7 @@ class DataSetPlotter(ComponentBase):
                          extent=axes_extent,
                          interpolation=self.plot_settings.pixel_interpolation.value
                          )
+        img_.format_cursor_data = lambda data: f"[{data:.3f}]"
 
         if self.plot_settings.invert_x:
             ax.invert_xaxis()
@@ -1373,6 +1406,8 @@ class DataSetPlotter(ComponentBase):
         plt.connect('button_press_event', self.on_image_click)
 
         self.img_ax = ax
+
+        self.plt_show()
 
     def _plot_meas_on_image(self, measurements):
         if not plt.fignum_exists(self.image_fig_num):
@@ -1580,22 +1615,25 @@ class DataSetPlotter(ComponentBase):
             path = self.save_fig(fig_num)
             logging.info(f"Saved figure {fig_num} to {path}")
 
+    def _redraw_legend(self, fig):
+        axes = fig.get_axes()
+        for ax in axes:
+            leg = ax.get_legend()
+            h, labels = ax.get_legend_handles_labels()
+            if labels:
+                if leg is not None:
+                    ax.legend(h, labels,
+                              loc=leg._loc,
+                              framealpha=leg.get_frame().get_alpha(),
+                              )
+                else:
+                    ax.legend(h, labels)
+
     @action("Show plots", group="Show / close plots")
     def plt_show(self):
         for i, fig_num in enumerate(plt.get_fignums()):
             fig = plt.figure(fig_num)
-            axes = fig.get_axes()
-            for ax in axes:
-                leg = ax.get_legend()
-                h, labels = ax.get_legend_handles_labels()
-                if labels:
-                    if leg is not None:
-                        ax.legend(h, labels,
-                            loc=leg._loc,
-                            framealpha=leg.get_frame().get_alpha(),
-                        )
-                    else:
-                        ax.legend(h, labels)
+            self._redraw_legend(fig)
 
             if self.settings.save_settings.save_plots:
                 self.save_fig(fig_num)

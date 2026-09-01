@@ -47,7 +47,7 @@ class QSpaceEval:
 
     @property
     def ref_fd_dict(self):
-        ref_list = self.dataset_eval.dataset.measurement_selector.get_matching_ref(self.selected_measurements)
+        ref_list = self.dataset_eval.dataset.measurement_selector.get_matching_refs(self.selected_measurements)
         ref_fd = self.dataset_eval.dataset.get_multi_data(ref_list)
 
         ref_fd = ref_fd[:, self.freq_idx]
@@ -83,7 +83,7 @@ class QSpaceEval:
         uncertainties = {**result}
 
         meas_list = self.selected_measurements
-        ref_list = self.dataset_eval.dataset.get_matching_ref(meas_list)
+        ref_list = self.dataset_eval.dataset.measurement_selector.get_matching_refs(meas_list)
 
         sam_fd = self.dataset_eval.dataset.get_multi_data(meas_list, Domain.Frequency)
         ref_fd = self.dataset_eval.dataset.get_multi_data(ref_list, Domain.Frequency)
@@ -91,15 +91,19 @@ class QSpaceEval:
         t_exp_amp = self.dataset_eval.dataset.amplitude_transmission(meas_list)
         t_exp_phi = self.dataset_eval.dataset.phase_difference(meas_list)
 
+        freq_tile = np.tile(self.freq_axis, (len(meas_list), 1))
+        t_exp_amp = np.stack((freq_tile, t_exp_amp[:, self.freq_idx], np.zeros_like(freq_tile)), axis=2)
+        t_exp_phi = np.stack((freq_tile, t_exp_phi[:, self.freq_idx], np.zeros_like(freq_tile)), axis=2)
+
         sam_fd_avg = avg_data_array(sam_fd)
         ref_fd_avg = avg_data_array(ref_fd)
-        t_exp_amp_avg = avg_data_array(t_exp_amp)
+        t_exp_amp_avg = avg_data_array(t_exp_amp, en_print=True)
         phi_avg = avg_data_array(t_exp_phi)
 
-        amp = t_exp_amp_avg[self.freq_idx, 1]
-        phi = phi_avg[self.freq_idx, 1]
-        delta_amp = t_exp_amp_avg[self.freq_idx, 2]
-        delta_phi = phi_avg[self.freq_idx, 2]
+        amp = t_exp_amp_avg[:, 1]
+        phi = phi_avg[:, 1]
+        delta_amp = t_exp_amp_avg[:, 2]
+        delta_phi = phi_avg[:, 2]
 
         f_axis = self.freq_axis
         w = 2 * np.pi * f_axis
@@ -252,14 +256,16 @@ class QSpaceEval:
             if self.dataset_eval.use_custom_d_opt_axis:
                 bnds = self.dataset_eval.d_opt_axis_bounds
                 step = self.dataset_eval.d_opt_axis_step
-                d_axis = np.arange(*bnds.magnitude, step.magnitude)
+                d_axis = np.arange(bnds[0].magnitude, bnds[1].magnitude+step.magnitude, step.magnitude)
 
                 tasks = []
                 for d in d_axis:
                     for shift in shift_axis:
                         tasks.append((d, shift))
-
-                opt_results = process_tasks(tasks, meas_id=meas_id)
+                try:
+                    opt_results = process_tasks(tasks, meas_id=meas_id)
+                except Exception as e:
+                    traceback.print_exc()
             else:
                 opt_results = []
                 for i in range(max(1, iterations)):
@@ -273,40 +279,44 @@ class QSpaceEval:
                             tasks.append((d, shift))
                     opt_results.extend(process_tasks(tasks, iteration=(i, iterations), meas_id=meas_id))
 
-            q_vals = np.array([res["q_val"] for res in opt_results])
-            q_vals = q_vals / np.max(q_vals)
+            try:
+                q_vals = np.array([res["q_val"] for res in opt_results])
+                q_vals = q_vals / np.max(q_vals)
 
-            best_res = opt_results[np.argmin(q_vals)]
-            best_res["d_vals"] = np.array([res["d"] for res in opt_results])
+                best_res = opt_results[np.argmin(q_vals)]
+                best_res["d_vals"] = np.array([res["d"] for res in opt_results])
 
-            if meas_id == "Average":
-                best_res = self.calc_uncertainties(best_res)
+                if meas_id == "Average":
+                    best_res = self.calc_uncertainties(best_res)
 
-            n_opt_res_ = best_res["n"] + 1j * best_res["k"]
-            t_model_kwargs["shift"] = best_res["shift"]
-            t_model_kwargs["d"] = best_res["d"]
+                n_opt_res_ = best_res["n"] + 1j * best_res["k"]
+                t_model_kwargs["shift"] = best_res["shift"]
+                t_model_kwargs["d"] = best_res["d"]
 
-            t_mod_ = self.transmission_model.value(self.freq_axis, n_opt_res_, **t_model_kwargs)
+                t_mod_ = self.transmission_model.value(self.freq_axis, n_opt_res_, **t_model_kwargs)
 
-            best_res["t_mod"] = t_mod_
-            best_res["sam_mod"] = ref_fd_dict[meas_id][:, 1] * t_mod_
+                best_res["t_mod"] = t_mod_
+                best_res["sam_mod"] = ref_fd_dict[meas_id][:, 1] * t_mod_
 
-            if self.dataset_eval.add_sim_to_res:
-                try:
-                    best_res["sim_res"] = self.calc_sim(t_model_kwargs, ref_fd_dict[meas_id])
-                except Exception as e:
-                    traceback.print_exc()
+                if self.dataset_eval.add_sim_to_res:
+                    try:
+                        best_res["sim_res"] = self.calc_sim(t_model_kwargs, ref_fd_dict[meas_id])
+                    except Exception as e:
+                        traceback.print_exc()
 
-            smoothed_quantities = ["n", "k", "alpha"]
-            for q in smoothed_quantities:
-                best_res[q] = moving_average(best_res[q], iterations=sas[0], n=sas[1])
+                smoothed_quantities = ["n", "k", "alpha"]
+                for q in smoothed_quantities:
+                    best_res[q] = moving_average(best_res[q], iterations=sas[0], n=sas[1])
 
-            best_res["measurement_quantity"] = "Transmission"
-            best_res["model_name"] = self.transmission_model.name
-            best_res["measurement"] = best_results["measurements"].get(meas_id, "Average")
+                best_res["measurement_quantity"] = "Transmission"
+                best_res["model_name"] = self.transmission_model.name
+                best_res["measurement"] = best_results["measurements"].get(meas_id, "Average")
 
-            best_results[meas_id] = self.prepare_result(best_res)
-
+                best_results[meas_id] = self.prepare_result(best_res)
+            except Exception as e:
+                traceback.print_exc()
+                print(e)
+        print(best_results)
         return best_results
 
     def calc_sim(self, model_kwargs, ref_fd):
@@ -355,6 +365,7 @@ class QSpaceEval:
     def prepare_result(self, res_dict):
         rd = res_dict
 
+        # freq_axis = np.stack(3*(Q_(rd["freq_axis"], "THz"), ), axis=-1)
         freq_axis = Q_(rd["freq_axis"], "THz")
         parsed_dict = {
             # --- Scalars ---
@@ -369,20 +380,20 @@ class QSpaceEval:
             "measurement": str(rd["measurement"]),
 
             # --- Datasets ( Q_(x) ) ---
-            "n0_real": DataSet(axes=[freq_axis], data=Q_(rd["n0_real"], "T"),
-                               data_label="Simple n", axes_labels=["Frequency"]),
-            "delta_n": DataSet(axes=[freq_axis], data=Q_(rd["delta_n"], "S"),
+            #"n0_real": DataSet(axes=[freq_axis], data=Q_(rd["n0_real"], ""),
+            #                   data_label="Simple n", axes_labels=["Frequency"]),
+            "delta_n": DataSet(axes=[freq_axis], data=Q_(rd["delta_n"], ""),
                                data_label="delta_n", axes_labels=["Frequency"]),
-            "delta_alpha": DataSet(axes=[freq_axis], data=Q_(rd["delta_alpha"], "m"), axes_labels=["Frequency"]),
-            "n": DataSet(axes=[freq_axis], data=Q_(rd["n"], "nm"), axes_labels=["Frequency"]),
-            "k": DataSet(axes=[freq_axis], data=Q_(rd["k"], "W"), axes_labels=["Frequency"]),
+            "delta_alpha": DataSet(axes=[freq_axis], data=Q_(rd["delta_alpha"], "1/cm"), axes_labels=["Frequency"]),
+            "n": DataSet(axes=[freq_axis], data=Q_(rd["n"], ""), axes_labels=["Frequency"]),
+            "k": DataSet(axes=[freq_axis], data=Q_(rd["k"], ""), axes_labels=["Frequency"]),
             "alpha": DataSet(axes=[freq_axis], data=Q_(rd["alpha"], "1/cm"), axes_labels=["Frequency"]),
-            "t_mod": DataSet(axes=[freq_axis], data=Q_(rd["t_mod"], "V"), axes_labels=["ABE"]),
+            "t_mod": DataSet(axes=[freq_axis], data=Q_(rd["t_mod"], ""), axes_labels=["ABE"]),
             "sam_mod": DataSet(axes=[freq_axis], data=Q_(to_db(rd["sam_mod"]), "dB")),
         }
         if "sim_res" in rd:
             parsed_dict.update({k: v for k, v in rd["sim_res"].items()})
-
+        print(parsed_dict)
         parsed_dict["result_type"] = "Transmission fit"
         parsed_dict["model_name"] = self.transmission_model.name
 

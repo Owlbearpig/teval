@@ -391,7 +391,7 @@ def calculate_bandwidth(data_fd_1meas, noise_region_fraction = 0.20):
     }
 
 
-def avg_data_array(data_arr):
+def avg_data_array(data_arr, en_print=False):
     def _std(data_, **kwargs):
         if np.iscomplex(data_).any():
             a = np.std(data_.real, ddof=1, **kwargs)
@@ -400,14 +400,11 @@ def avg_data_array(data_arr):
         else:
             return np.std(data_, ddof=1, **kwargs)
 
-    if data_arr.ndim < 2:
+    if en_print:
+        print(data_arr.shape, data_arr)
+
+    if data_arr.ndim < 3:
         return data_arr
-    elif data_arr.ndim == 2:
-        avg_std = np.empty_like(data_arr)
-        avg_std[:, 0] = data_arr[:, 0]
-        avg_std[:, 1] = np.mean(data_arr[:, 1], axis=0)
-        avg_std[:, 2] = _std(data_arr[:, 1], axis=0)
-        return avg_std
     elif data_arr.ndim == 3: # [meas0, ..., meas_n][[x0, y0], ..., [xn, yn]]
         avg_std = np.empty_like(data_arr[0])
         avg_std[:, 0] = data_arr[0, :, 0]

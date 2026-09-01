@@ -300,6 +300,7 @@ class QuantityEnum(Enum):
     P2P = QuantityFunc("Peak to peak", domain=Domain.Time)
     PowerInt = QuantityFunc("Integrated power", domain=Domain.Frequency)
     Power = QuantityFunc("Power", domain=Domain.Frequency)
+    Absorbance = QuantityFunc("Absorbance", domain=Domain.Frequency, unit="dB")
     Phase = QuantityFunc("Phase", domain=Domain.Frequency, unit="rad")
     MeasTimeDeltaRef2Sam = QuantityFunc("Time delta Ref. to Sam.", domain=Domain.Time)
     RefAmp = QuantityFunc("Ref. Amp", domain=Domain.Frequency)
@@ -419,7 +420,6 @@ class PlotOpt(ComponentBase):
     )
 
     shift_sam2ref = Bool(False).tag(name="Shift sample pulse to ref")
-    label = Unicode("").tag(name="Legend label")
     sub_noise_floor = Bool(False).tag(name="Subtract spectrum noise floor")
     td_scale = Float(1.0).tag(name="Scale waveform")
     remove_t_offset = Bool(False).tag(name="Start t-axis at 0 ps")

@@ -11,6 +11,11 @@ def get_coordinate_line(measurements, x=None, y=None):
     if not measurements:
         return []
 
+    if isinstance(x, Q_):
+        x = x.magnitude
+    if isinstance(y, Q_):
+        y = y.magnitude
+
     if x is not None:
         all_x = np.array([m.position[0] for m in measurements])
         closest_x = all_x[np.argmin(np.abs(all_x - x))]
@@ -62,8 +67,12 @@ class MeasurementSelection(ComponentBase):
     dist_func = TEnum(Dist, default_value=Dist.Time).tag(priority=1000, name="Measurement distance function",
                                                          group=reference_matching_grp)
     fix_ref_idx = Int(0, min=-1, group=reference_matching_grp).tag(name="Fixed reference index")
-    selected_ref_cnt = Unicode("",read_only=True).tag(name="Selected references", priority=2000,
+    selected_ref_cnt = Unicode("",read_only=True).tag(name="Selected references", priority=2001,
                                                       group=reference_matching_grp)
+    direct_match = Bool(False, read_only=True,
+                        help="Appends or slices reference file selection if the count is "
+                             "different from the measurement file selection"
+                        ).tag(name="Direct file match", priority=2000, group=reference_matching_grp)
 
     reference_paths = MultiPathSelection().tag(fullwidth = False, group="Direct reference file selection", combine=True)
     sample_paths = MultiPathSelection().tag(fullwidth = False, group="Direct sample file selection", combine=True)
@@ -118,10 +127,6 @@ class MeasurementSelection(ComponentBase):
     def selected_measurements(self):
         return self.get_selected_measurements()
 
-    @property
-    def reference_measurements(self):
-        return self.get_matching_ref(self.selected_measurements)
-
     def update_sel_cnt_info(self, change):
         change_name = change["name"]
         if change_name in ["selected_ref_cnt", "selected_sam_cnt"]:
@@ -129,7 +134,7 @@ class MeasurementSelection(ComponentBase):
         selected_measurements = self.selected_measurements
         if selected_measurements is None:
             return
-        matching_refs = self.get_matching_ref(selected_measurements)
+        matching_refs = self.get_matching_refs(selected_measurements)
 
         self.set_trait("selected_ref_cnt", f"{len(matching_refs)}")
         self.set_trait("selected_sam_cnt", f"{len(selected_measurements)}")
@@ -137,7 +142,8 @@ class MeasurementSelection(ComponentBase):
     def ref_file_sel_cnt(self, change=None):
         if self.ref_sel_criterion != ReferenceSelection.file_selection:
             return
-        self.set_trait("selected_ref_cnt", f"{len(self.reference_measurements)}")
+        rm_len = len(self.get_matching_refs(self.selected_measurements))
+        self.set_trait("selected_ref_cnt", f"{rm_len}")
 
     def sam_file_sel_cnt(self, change=None):
         if self.selection_criterion != SelectionCriterionEnum.file_selection:
@@ -259,7 +265,7 @@ class MeasurementSelection(ComponentBase):
         if len(selected_meas) == 1:
             s = f"{selected_meas[0].filepath.name}"
         else:
-            s = f"{selected_meas[0].filepath.name} - {selected_meas[-1].filepath.name}"
+            s = f"{selected_meas[0].filepath.name} -\n{selected_meas[-1].filepath.name}"
 
         self.dataset.info_pane.set_trait("selected_measurement_info", s)
 
@@ -305,15 +311,14 @@ class MeasurementSelection(ComponentBase):
 
         return meas_list, points
 
-    def get_nearest_ref(self, meas_, dist_func=None, excluded_refs=None):
+    def get_nearest_ref(self, meas_, dist_func=None, meas_set=None):
         if not dist_func:
             dist_func = self.dist_func.value
-        if not excluded_refs:
-            excluded_refs = []
+        if meas_set is None:
+            meas_set = self.measurements["refs"]
+
         closest_ref, best_fit_val = None, np.inf
-        for ref_meas in self.measurements["refs"]:
-            if ref_meas in excluded_refs:
-                continue
+        for ref_meas in meas_set:
             dist_val = dist_func(ref_meas, meas_)
             if np.abs(dist_val) < np.abs(best_fit_val):
                 best_fit_val = dist_val
@@ -333,27 +338,33 @@ class MeasurementSelection(ComponentBase):
 
         return closest_ref
 
-    def get_matching_ref(self, meas_list):
+    def _ref_file_selection(self, meas_list):
+        ref_list = [self.cache.filepath_map[p] for p in self.reference_paths.selected_paths if p.is_file()]
+        rl_len, ml_len = len(ref_list), len(meas_list)
+        if rl_len != ml_len:
+            self.set_trait("direct_match", False)
+        else:
+            self.set_trait("direct_match", True)
+        if rl_len == 0:
+            ref_list = ml_len * [self.measurements["max_amp_meas"]]
+        elif rl_len != ml_len:
+            if rl_len < ml_len:
+                ref_list.extend((ml_len - rl_len) * [ref_list[-1]])
+            elif rl_len > ml_len:
+                ref_list = ref_list[:ml_len]
+
+        ref_list = [self.get_nearest_ref(meas, meas_set=ref_list) for meas in meas_list]
+
+        return ref_list
+
+    def get_matching_refs(self, meas_list):
         if len(self.measurements["refs"]) == 0:
             return []
 
         ref_getter = None
         match self.ref_sel_criterion:
             case ReferenceSelection.file_selection:
-                ref_list = [self.cache.filepath_map[p] for p in self.reference_paths.selected_paths]
-                rl_len, ml_len = len(ref_list), len(meas_list)
-                if rl_len == 0:
-                    return ml_len * [self.measurements["max_amp_meas"]]
-
-                if rl_len != ml_len:
-                    self.dataset.logger.warning(f"Reference file selection length ({rl_len}) != "
-                                    f"number of selected measurements ({ml_len})")
-                    if rl_len < ml_len:
-                        ref_list.extend((ml_len-rl_len)*[ref_list[-1]])
-                    elif rl_len > ml_len:
-                        ref_list = ref_list[:ml_len]
-
-                return ref_list
+                return self._ref_file_selection(meas_list)
             case ReferenceSelection.closest_distance:
                 ref_getter = lambda meas: self.get_nearest_ref(meas)
                 self.dataset.logger.debug(f"Using reference measurement closest to {self.dataset.ref_point} as ref.")

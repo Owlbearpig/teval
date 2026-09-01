@@ -27,7 +27,7 @@ sub_settings_file = "18_05_2026_sub"
 class AppRoot(ComponentBase):
 
     settings = Instance(Settings)
-    settings_sub = Instance(Settings)
+    # settings_sub = Instance(Settings)
     dataset = Instance(DataSet)
     # dataset_sub = Instance(DataSet)
     dataset_plotter = Instance(DataSetPlotter)
@@ -36,7 +36,7 @@ class AppRoot(ComponentBase):
     def __init__(self):
         super().__init__()
         self.settings = Settings(settings_file, object_name="Settings")
-        self.settings_sub = Settings(sub_settings_file, object_name="Sub settings")
+        # self.settings_sub = Settings(sub_settings_file, object_name="Sub settings")
         self.settings.plot_opt.redp_sensor_labels = redp_labels
         self.dataset = DataSet(self.settings, object_name="Dataset")
 

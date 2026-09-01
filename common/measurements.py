@@ -1,7 +1,6 @@
 import re
 import numpy as np
 from datetime import datetime
-from numpy.fft import rfft, rfftfreq
 from pathlib import Path
 
 meas_id_func = lambda meas_datetime: int((meas_datetime - datetime.min).total_seconds() * 1e6)
@@ -52,25 +51,8 @@ class Measurement:
 
         self.identifier = meas_id_func(self.meas_time)
 
-    def get_data_td(self):
+    def get_data(self):
         if self._data_td is None:
             self._data_td = np.loadtxt(self.filepath)
 
         return self._data_td
-
-    def get_data_fd(self, reversed_time=True):
-        if self._data_fd is not None:
-            return self._data_fd
-
-        data_td = self.get_data_td()
-        t, y = data_td[:, 0], data_td[:, 1]
-
-        if reversed_time:
-            y = np.flip(y)
-
-        dt = float(np.mean(np.diff(t)))
-        freqs, data_fd = rfftfreq(n=len(t), d=dt), rfft(y)
-
-        self._data_fd = np.array([freqs, data_fd]).T
-
-        return self._data_fd

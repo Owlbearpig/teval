@@ -9,7 +9,7 @@ from common.measurement_selection import MeasurementSelection, get_coordinate_li
 from pathlib import Path
 import numpy as np
 from common.functions import (butter_filt, do_fft, f_axis_idx_map,
-                              remove_offset, avg_data_array, calculate_bandwidth)
+                              remove_offset, avg_data_array, calculate_bandwidth, to_db)
 from common.measurements import Measurement
 from common.consts import c_thz, eps0_thz
 import logging
@@ -201,6 +201,7 @@ class DataSet(ComponentBase):
                     QuantityEnum.Phase: self.phase, # 2D (N_meas, Freq_slice)
                     QuantityEnum.MeasTimeDeltaRef2Sam: self.meas_time_delta, # 0D scalar
                     QuantityEnum.Power: self.power, # 2D (N_meas, Freq_slice)
+                    QuantityEnum.Absorbance: self.absorbance, # 2D (N_meas, Freq_slice)
                     QuantityEnum.RefAmp: self.ref_max, # 2D (N_meas, Freq_slice)
                     QuantityEnum.RefArgmax: self.get_ref_abs_argmax, # 1D (N_meas)
                     QuantityEnum.RefPhase: self.ref_phase, # 2D (N_meas, Freq_slice)
@@ -212,6 +213,7 @@ class DataSet(ComponentBase):
                     QuantityEnum.RefractiveIdx: self.refractive_idx, # 2D (N_meas, Freq_slice)
                     QuantityEnum.AbsorptionCoe: self.absorption_coef, # 2D (N_meas, Freq_slice)
                     QuantityEnum.Conductivity: self.conductivity, # 2D (N_meas, Freq_slice)
+
                     }
         return func_map
 
@@ -334,7 +336,8 @@ class DataSet(ComponentBase):
         pp_opt = self.settings.pp_opt
 
         cache_idx = self.cache.id_map[meas_.identifier]
-        data_td = self.cache.raw_data_td[cache_idx]
+        data_td = np.array([self.cache.time_axis,
+                            self.cache.raw_data_td[cache_idx]], dtype=float).T
 
         if pp_opt.normalize_data:
             data_td[:, 1] = data_td[:, 1] / np.max(data_td[:, 1])
@@ -663,13 +666,13 @@ class DataSet(ComponentBase):
         self.set_trait("sub_linked", True)
 
     def windowing_eval(self, meas_):
-        ref_meas = self.measurement_selector.get_matching_ref(meas_)
+        ref_meas = self.measurement_selector.get_matching_refs(meas_)
 
-        with self.settings.pp_opt.override(window_enabled=True, win_width=10, win_start=None):
+        with self.settings.pp_opt.override(window_enabled=True, win_width=10):
             ref_fd = self.get_multi_data(ref_meas, Domain.Frequency)
             sam_fd = self.get_multi_data(meas_, Domain.Frequency)
 
-            phi_corrected = self.phase_difference(meas_)
+            phi_corrected = np.abs(self.phase_difference(meas_))
 
         freq_axis = self.freq_axis
         omega = 2 * np.pi * freq_axis
@@ -720,7 +723,7 @@ class DataSet(ComponentBase):
         return window_eval_res
 
     def get_ref_abs_argmax(self, meas_):
-        ref_meas = self.measurement_selector.get_matching_ref(meas_)
+        ref_meas = self.measurement_selector.get_matching_refs(meas_)
         ref_td = self.get_multi_data(ref_meas)
         t, y = ref_td[:, :, 0], ref_td[:, :, 1]
 
@@ -769,7 +772,7 @@ class DataSet(ComponentBase):
 
         has_zero_crossing = valid_mask[meas_idx, first_cross_idx] & ~np.isclose(dy, 0)
 
-        zero_crossing_interp = np.zeros(y.shape[0])
+        zero_crossing_interp = np.zeros(y.shape[0], dtype=float)
         zero_crossing_interp[has_zero_crossing] = ((y1 * x2 - x1 * y2) / dy)[has_zero_crossing]
 
         return zero_crossing_interp
@@ -782,8 +785,11 @@ class DataSet(ComponentBase):
         y_fd = self.get_multi_data(meas_, domain=Domain.Frequency)
         return np.angle(y_fd[:, :, 1])
 
+    def absorbance(self, meas_: Measurement):
+        return -to_db(self.power(meas_)) / 20
+
     def power(self, meas_: Measurement):
-        ref_meas = self.measurement_selector.get_matching_ref(meas_)
+        ref_meas = self.measurement_selector.get_matching_refs(meas_)
         ref_fd = self.get_multi_data(ref_meas, domain=Domain.Frequency)
         sam_fd = self.get_multi_data(meas_, domain=Domain.Frequency)
 
@@ -795,7 +801,7 @@ class DataSet(ComponentBase):
     def power_int(self, meas_: Measurement, freq_range):
         freq_slice = (freq_range[0] < self.freq_axis) * (self.freq_axis < freq_range[1])
 
-        ref_meas = self.measurement_selector.get_matching_ref(meas_)
+        ref_meas = self.measurement_selector.get_matching_refs(meas_)
         ref_fd = self.get_multi_data(ref_meas, domain=Domain.Frequency)
         sam_fd = self.get_multi_data(meas_, domain=Domain.Frequency)
 
@@ -837,7 +843,7 @@ class DataSet(ComponentBase):
 
     def simple_phase_difference(self, m0, m1=None):
         if m1 is None:
-            m1 = self.measurement_selector.get_matching_ref(m0)
+            m1 = self.measurement_selector.get_matching_refs(m0)
 
         m1_fd = self.get_multi_data(m1, Domain.Frequency)
         m0_fd = self.get_multi_data(m0, Domain.Frequency)
@@ -852,7 +858,7 @@ class DataSet(ComponentBase):
         # phase unwrapping Phase Retrieval in Terahertz Time-Domain
         # Measurements: a how to Tutorial P. Uhd Jepsen https://doi.org/10.1007/s10762-019-00578-0
         if m1 is None:
-            m1 = self.measurement_selector.get_matching_ref(m0)
+            m1 = self.measurement_selector.get_matching_refs(m0)
 
         m1_fd = self.get_multi_data(m1, Domain.Frequency)
         m0_fd = self.get_multi_data(m0, Domain.Frequency)
@@ -891,7 +897,7 @@ class DataSet(ComponentBase):
         return phi
 
     def amplitude_transmission(self, meas_):
-        ref_meas_ = self.measurement_selector.get_matching_ref(meas_)
+        ref_meas_ = self.measurement_selector.get_matching_refs(meas_)
         ref_fd = self.get_multi_data(ref_meas_, Domain.Frequency)
         sam_fd = self.get_multi_data(meas_, Domain.Frequency)
 
@@ -908,7 +914,7 @@ class DataSet(ComponentBase):
         return t
 
     def time_of_flight(self, meas_):
-        closest_ref = self.measurement_selector.get_nearest_ref(meas_)
+        closest_ref = [self.measurement_selector.get_nearest_ref(m) for m in meas_]
 
         t_zero_ref = self.get_zero_crossing(closest_ref)
         t_zero_sam = self.get_zero_crossing(meas_)
@@ -991,7 +997,7 @@ class DataSet(ComponentBase):
     @action("Export measurement data", group=data_export_grp)
     def export_measurement_data(self):
         selected_meas = self.selected_measurements
-        ref_meas = self.measurement_selector.get_matching_ref(selected_meas)
+        ref_meas = self.measurement_selector.get_matching_refs(selected_meas)
         data_arrays = {
             "ref_td": self.get_multi_data(ref_meas, domain=Domain.Time),
             "ref_fd": self.get_multi_data(ref_meas, domain=Domain.Frequency),

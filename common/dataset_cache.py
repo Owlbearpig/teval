@@ -34,8 +34,10 @@ class DatasetCache:
 
         self.data_dir = data_dir
         self.path = None
+        self.time_axis = None
 
         self.raw_data_td = self._set_cache_data(all_measurements)
+
 
     def _generate_coord_map(self, measurements):
         coord_map = {}
@@ -74,6 +76,7 @@ class DatasetCache:
                 self.dataset.logger.warning(f"Could not remove directory {self.path}: {e}")
 
             self.raw_data_td = None
+            self.time_axis = None
 
             self.dataset.logger.info(f"Cleared {self.path}")
             if self.signal_carrier is not None:
@@ -84,8 +87,9 @@ class DatasetCache:
         # make cache (npy) if it does not already exist
         path = self.get_path()
 
-        sample_data_td = measurements[0].get_data_td()
-        td_cache_shape = (len(measurements), *sample_data_td.shape)
+        sample_data_td = measurements[0].get_data()
+        self.time_axis = sample_data_td[:, 0].real
+        td_cache_shape = (len(measurements), len(sample_data_td[:, 1]))
 
         try:
             data_td = np.load(str(path / "_td_cache.npy"))
@@ -99,7 +103,7 @@ class DatasetCache:
             self.dataset.logger.info(f"Saving {len(measurements)} measurements as npy")
             for meas_idx, meas in enumerate(measurements):
                 idx = self.id_map[meas.identifier]
-                data_td[idx] = meas.get_data_td()
+                data_td[idx] = meas.get_data()[:, 1]
                 if self.signal_carrier is not None:
                     progress = (1 + meas_idx) / len(measurements)
                     self.signal_carrier.progress_signal.emit(progress)
