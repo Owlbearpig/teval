@@ -186,6 +186,10 @@ class MPLCanvas(QtWidgets.QGroupBox):
         self.canvas.draw()
         self.backgrounds = [self.fig.canvas.copy_from_bbox(self.axes.bbox)]
 
+    def _redraw(self):
+        self.fig.tight_layout()
+        self.canvas.draw()
+
     def showEvent(self, e):
         super().showEvent(e)
         self._redrawTimer.start()
@@ -201,10 +205,6 @@ class MPLCanvas(QtWidgets.QGroupBox):
 
         # data.data -= np.mean(data.data)
         line.set_data(data.axes[0].magnitude, data.data.magnitude)
-
-    def _redraw(self):
-        self.fig.tight_layout()
-        self.canvas.draw()
 
     def _autoscale(self, *, redraw=True):
         prev_xlim = self.axes.get_xlim()

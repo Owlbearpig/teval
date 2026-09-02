@@ -1,21 +1,28 @@
+from enum import Enum
 from PySide6.QtCore import QObject, Signal
-from common.components import ComponentBase
+from common.components import ComponentBase, action
 from common.eval_component.conductivity_models import model_params
-from common.traits import QuantityDict, Path as TPath
+from common.traits import QuantityDict, Path as TPath, Quantity, Q_
 from common.eval_component.quantity_set import DataSetDict as QuantityDictClass, DataSet
-from traitlets import Bool, Float, Int, Unicode, Integer
-from common.traits import Quantity, Q_
+from traitlets import Bool, Float, Int, Unicode, Integer, Enum as TEnum
 import numpy as np
 from common.eval_component.quantity_set import DataSet as SingleQuantityDataSet
 import h5py
 from pathlib import Path
 
+
 class ResultSignal(QObject):
     received_result = Signal(dict)
     result_ready = Signal(object)
 
-class EvalResult(ComponentBase):
+class MeasEnum(Enum):
+    pass
 
+class MeasEnum2(Enum):
+    meas1 = "Meas12"
+    meas2 = "Meas22"
+
+class EvalResult(ComponentBase):
     quantity_dict = QuantityDict()
 
     t_fit_res_grp_name = "Transmission fit result values"
@@ -41,6 +48,16 @@ class EvalResult(ComponentBase):
     dataset_path = TPath(Path("."), read_only=True).tag(priority=4, name="Dataset path")
     sub_dataset_path = TPath(Path("."), read_only=True).tag(priority=5, name="Sub. dataset path")
     converged = Bool(False, read_only=True).tag(priority=6, name="Converged")
+
+    selected_measurement = TEnum(MeasEnum)
+
+
+    @action(name="test")
+    def test(self):
+        # self.selected_measurement = MeasEnum2.meas1
+        trait_obj = self.traits()['selected_measurement']
+        trait_obj.values = tuple(MeasEnum2)
+        self.selected_measurement = MeasEnum2.meas1
 
     def __init__(self, opt_res_dict=None, **kwargs):
         super().__init__(**kwargs)

@@ -277,7 +277,7 @@ def moving_average(a, n=3, iterations=1):
 
     for _ in range(iterations):
         a_padded = np.pad(a, (el, el), mode='reflect')
-        ret = np.cumsum(a_padded, dtype=float)
+        ret = np.cumsum(a_padded, dtype=complex)
         ret[n:] = ret[n:] - ret[:-n]
         # a = np.concatenate((a[:el], ret[n - 1:] / n, a[-el:]))
         a = ret[n - 1:] / n
@@ -391,7 +391,7 @@ def calculate_bandwidth(data_fd_1meas, noise_region_fraction = 0.20):
     }
 
 
-def avg_data_array(data_arr, en_print=False):
+def avg_data_array(data_arr):
     def _std(data_, **kwargs):
         if np.iscomplex(data_).any():
             a = np.std(data_.real, ddof=1, **kwargs)
@@ -400,11 +400,13 @@ def avg_data_array(data_arr, en_print=False):
         else:
             return np.std(data_, ddof=1, **kwargs)
 
-    if en_print:
-        print(data_arr.shape, data_arr)
-
-    if data_arr.ndim < 3:
+    if data_arr.ndim < 2:
         return data_arr
+    elif data_td.ndim == 2: # [m0,...,mn][y0,...,ym] -> [[y0,mean0,std0]...[ym,mean_m,std_m]]
+        avg_std = np.stack(3*(data_arr[0], ), axis=1)
+        avg_std[:, 1] = np.mean(data_arr[:, 1], axis=0)
+        avg_std[:, 2] = _std(data_arr[:, 1], axis=0)
+        return avg_std
     elif data_arr.ndim == 3: # [meas0, ..., meas_n][[x0, y0], ..., [xn, yn]]
         avg_std = np.empty_like(data_arr[0])
         avg_std[:, 0] = data_arr[0, :, 0]

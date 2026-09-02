@@ -99,6 +99,7 @@ class DatasetEval(ComponentBase):
     use_custom_d_opt_axis = Bool(True, group=t_fit_grp_name).tag(name="Use custom thickness axis")
     number_of_workers = Integer(8, group=t_fit_grp_name).tag(name="Number of cpu cores to assign")
     add_sim_to_res = Bool(False, group=t_fit_grp_name).tag(name="Add simulated t to result")
+    normalize_q_vals = Bool(True, group=t_fit_grp_name).tag(name="Normalize q-vals")
 
     current_result = Instance(EvalResult)
     selected_substrate_result = Instance(EvalResult)
@@ -376,9 +377,8 @@ class DatasetEval(ComponentBase):
                 qs_eval = QSpaceEval(self)
                 qs_res_dict = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
 
-                for meas_res in qs_res_dict.values():
-                    print(meas_res.keys())
-                    self.current_result.result_carrier.received_result.emit(meas_res)
+                print(qs_res_dict.keys())
+                self.current_result.result_carrier.received_result.emit(qs_res_dict)
             executor = ThreadPoolExecutor(max_workers=1)
             executor.submit(bg_worker)
         except Exception as e:

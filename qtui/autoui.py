@@ -271,14 +271,31 @@ def create_action(component, action):
 
 def create_combobox(component, name, trait):
     combobox = QtWidgets.QComboBox()
-    for item in trait.values:
-        combobox.addItem(item.name, item)
 
-    combobox.setCurrentText(trait.get(component).name)
-    combobox.setToolTip(trait.help)
+    def populate_items():
+        combobox.blockSignals(True)
+        combobox.clear()
 
-    component.observe(lambda change:
-                      combobox.setCurrentText(change['new'].name), name)
+        # Always pull the current allowed values directly from the component's trait instance
+        current_trait = component.traits()[name]
+        for item in current_trait.values:
+            item_name = item.name if hasattr(item, "name") else str(item)
+            combobox.addItem(item_name, item)
+
+        current_val = current_trait.get(component)
+        if hasattr(current_val, "name"):
+            combobox.setCurrentText(current_val.name)
+
+        combobox.blockSignals(False)
+
+    # Initial UI setup
+    populate_items()
+
+    def update_combobox(change):
+        # Re-populate dropdown items to reflect any updated trait values
+        populate_items()
+
+    component.observe(update_combobox, name)
 
     combobox.currentIndexChanged.connect(
         lambda: setattr(component, name, combobox.currentData())
@@ -655,8 +672,10 @@ def generate_component_ui(name, component):
     hSplitter = QtWidgets.QSplitter()
     hSplitter.addWidget(plotWidget)
     hSplitter.addWidget(scrollArea)
-    hSplitter.setStretchFactor(1, 0)
+    scrollArea.setMinimumWidth(0)
     hSplitter.setStretchFactor(0, 1)
+    hSplitter.setStretchFactor(1, 1)
+    hSplitter.setSizes([1, 1])
     hSplitter.setChildrenCollapsible(False)
 
     return hSplitter
@@ -669,6 +688,8 @@ def generate_ui(component):
         newItem = QtWidgets.QTreeWidgetItem(treeitem)
         newItem.setText(0, prettyName)
         if "AppRoot" in prettyName:
+            newItem.setExpanded(True)
+        else:
             newItem.setExpanded(True)
 
         widget = generate_component_ui(prettyName, component)
