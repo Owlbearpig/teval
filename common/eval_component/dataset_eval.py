@@ -2,13 +2,11 @@ import traceback
 from datetime import datetime
 from common.dataset import DataSet, Domain, format_meas_dict
 from common.components import ComponentBase, action
-from common.dataset_plotter import DataSetPlotter
 from common.functions import f_axis_idx_map
 from common.eval_component.shgo import shgo
 from scipy.optimize import shgo
 from functools import partial
 import numpy as np
-import matplotlib.pyplot as plt
 import logging
 from common.consts import eps0_thz
 from common.eval_component.q_space_eval import QSpaceEval
@@ -21,7 +19,7 @@ from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance
 from common.default_appsettings import QuantityEnum
 from common.eval_component.transfer_functions import (t_tmm_model_1layer, model_1layer, t_tmm_model_2layer,
                                                       model_2layer, _t_model_2layer)
-from common.eval_component.shgo_settings import SHGOOptions, MinimizerOptions
+from common.eval_component.shgo_settings import MinimizerOptions
 from common.save import ResultSaver
 from common.eval_component.eval_result import EvalResult
 from concurrent.futures import ThreadPoolExecutor
@@ -66,8 +64,6 @@ class DataSetType(Enum):
 
 class DatasetEval(ComponentBase):
 
-    shgo_options = Instance(SHGOOptions)
-
     selected_cost_fun = TEnum(CostFunctions, default_value=CostFunctions.abs_cost,
                               help="Model to experimental data metric").tag(name="Selected cost function")
     selected_result_path = TPath(Path("")).tag(name="Load result")
@@ -110,8 +106,6 @@ class DatasetEval(ComponentBase):
         self.dataset = dataset
         self.dataset.link_sub_dataset(dataset_sub)
 
-        self.shgo_options = SHGOOptions()
-
         self.current_result = EvalResult(object_name="Current result")
         self.selected_substrate_result = EvalResult(object_name="Substrate result")
 
@@ -119,11 +113,11 @@ class DatasetEval(ComponentBase):
 
         self.current_result.result_carrier.result_ready.connect(self.result_saver.process)
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, *args):
         if self.settings is not None:
             self.settings.save_configuration(self)
 
-    def __enter__(self):
+    def __enter__(self, *args):
         if self.settings is not None:
             self.settings.load_configuration(self)
         return self
@@ -341,7 +335,7 @@ class DatasetEval(ComponentBase):
     @action("Fit regression model", group=reg_grp_name)
     def perform_regression(self):
         opt_conf = self._opt_conf
-        shgo_options = self.shgo_options
+        shgo_options = self.settings.shgo_options
         def bg_worker(meas_id):
             try:
                 min_kwargs = shgo_options.minimizer_kwargs.traits(group=MinimizerOptions.minimizer_opt_grp)

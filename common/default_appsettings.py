@@ -5,7 +5,7 @@ import traitlets
 from traitlets import (Bool, Int, Float, Unicode, Tuple,
     List as TList, Dict as TDict, Enum as TEnum, Instance, Any as TAny
 )
-
+from common.eval_component.shgo_settings import SHGOOptions
 from common.components import ComponentBase
 from common.traits import ValueRange, Path as TPath, Q_, Quantity as TQuantity
 
@@ -322,12 +322,12 @@ class EvalOpt(ComponentBase):
     fit_range = ValueRange([Q_(0.50, "THz"), Q_(2.20, "THz")]).tag(name="Fit range")
     q_space_range = ValueRange([Q_(0.75, "THz"), Q_(2.00, "THz")]).tag(name="Q-space minimization range")
     phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(name="Phase correction fit range")
-    average = Bool(False,
-                   help="Average over consecutive measurements with same position").tag(name="Average measurements")
+    average = Bool(False, help="Average over consecutive measurements "
+                               "with same position").tag(name="Average measurements")
     delta_d = TQuantity(Q_(2.0, "µm")).tag(name="Thickness uncertainty")
     fp_count = Int(0).tag(name="Number of Fabry-Perots")
     phi_offset_correction = Bool(True).tag(name="Phase offset correction")
-    printed_freqs = TList(trait=Float(), default_value=[1.000, 2.000])
+    printed_freqs = Unicode(default_value="1.0, 2.0").tag(name="Printed frequencies (THz)")
 
     d = TQuantity(Q_(0.0, "µm")).tag(name="Sample thickness")
     d_film = TQuantity(Q_(0.0, "µm")).tag(name="Film thickness")
@@ -390,7 +390,8 @@ class SaveSettings(ComponentBase):
     bbox_inches = Unicode("tight", help="Should be set to tight").tag(name="Bounding box")
     dpi = Int(300).tag(name="DPI")
     pad_inches = Int(0).tag(name="Pad inches")
-    set_size_inches = TList([12.0, 9.0]).tag(name="Set size inches")
+    set_width_size_inches = Float(12.0).tag(name="Set width size inches")
+    set_height_size_inches = Float(9.0).tag(name="Set height size inches")
     save_plots = Bool(False).tag(name="Enable saving of plots")
     only_save_plots = Bool(False).tag(name="Hide plots (only save if enabled)")
 
@@ -447,6 +448,12 @@ class AppSettings(ComponentBase):
     pp_opt = Instance(PpOpt, args=())
     eval_opt = Instance(EvalOpt, args=())
     plot_opt = Instance(PlotOpt, args=())
+    shgo_options = Instance(SHGOOptions, args=())
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+        self.shgo_options = SHGOOptions()
 
 if __name__ == '__main__':
     settings = AppSettings()

@@ -13,7 +13,7 @@ from common.measurements import Measurement
 from scipy.special import erfc
 from scipy.optimize import curve_fit
 from common.eval_component.shgo import shgo
-from traitlets import Float, observe, Bool, Unicode, Enum as TEnum
+from traitlets import Float, Bool, Unicode, Enum as TEnum
 from common.traits import Q_, Quantity, ValueRange
 from mpl_settings import mpl_style_params
 from scipy.stats import pearsonr
@@ -1597,8 +1597,9 @@ class DataSetPlotter(ComponentBase):
         filename_s.replace(" ", "_")
         full_path = save_dir / (filename_s + str(filetype.value))
 
-        w = self.settings.save_settings.set_size_inches
-        fig.set_size_inches(w=w, forward=False)
+        w = self.settings.save_settings.set_width_size_inches
+        h = self.settings.save_settings.set_height_size_inches
+        fig.set_size_inches(w=w, h=h, forward=False)
         plt.subplots_adjust(wspace=0.3)
         plt.savefig(full_path, **kwargs)
 

@@ -21,7 +21,7 @@ import typing as t
 
 import traitlets
 from common.eval_component.quantity_set import DataSetDict as DataSetDictClass
-from traitlets import TraitError, Undefined, TraitType, List as TList, Float, Integer, Instance, HasTraits
+from traitlets import TraitError, Undefined, TraitType, List, Float, Integer, Instance, HasTraits
 
 if float(traitlets.__version__[0]) <= 4:
     from traitlets import class_of
@@ -58,6 +58,18 @@ class QuantityDict(TraitTypePatched):
             return value
         self.error(obj, value)
 
+class TList(TraitTypePatched):
+    default_value = []
+    info_text = 'a list'
+
+    def __init__(self, default_value=Undefined,
+                 allow_none=None, **kwargs):
+        super().__init__(default_value=default_value,
+                         allow_none=allow_none,
+                         **kwargs)
+        self.selected_element = None
+
+
 
 class Path(TraitTypePatched):
 
@@ -86,7 +98,7 @@ class Path(TraitTypePatched):
         return value
 
 class MultiPathClass(HasTraits):
-    selected_paths = TList()
+    selected_paths = List()
 
     def __init__(self, root_path=None, selected_paths=None, shown_filenames=None, **kwargs):
         super().__init__(**kwargs)

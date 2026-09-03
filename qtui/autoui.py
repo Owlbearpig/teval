@@ -6,7 +6,7 @@ from qtui.changeindicatorlineedit import ChangeIndicatorLineEdit
 from qtui.fastfilefilterproxy import FastNameFilterProxyModel
 from common.components import ComponentBase
 from traitlets import Instance
-from common.traits import Quantity, Path as PathTrait, ValueRange, MultiPathSelection, MultiPathClass
+from common.traits import Quantity, Path as PathTrait, ValueRange, MultiPathSelection, TList as ListTrait
 from pathlib import Path
 import types
 import logging
@@ -465,6 +465,46 @@ def create_tree_path_selector(component, name, prettyName, trait):
     layout.addWidget(tree)
     return container
 
+def create_list_view(component, name, trait):
+    container = QtWidgets.QWidget()
+    layout = QtWidgets.QVBoxLayout(container)
+    layout.setContentsMargins(0, 0, 0, 0)
+
+    model = QtCore.QStringListModel()
+
+    list_view = QtWidgets.QListView()
+    list_view.setModel(model)
+    if trait.read_only:
+        list_view.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+
+    layout.addWidget(list_view)
+
+    def update_list(change):
+        string_list = [str(s) for s in change["new"]]
+        model.setStringList(string_list)
+
+    component.observe(update_list, name)
+
+    def update_trait_selection():
+        selected_indexes = list_view.selectionModel().selectedRows(column=0)
+        if not selected_indexes:
+            return
+
+        selected_str = selected_indexes[0].data()
+        print(selected_str)
+        trait.selected_element = selected_str
+        component.notify_change({
+            'name': name,
+            'old': 0,
+            'new': selected_str,
+            'type': "abe"
+        })
+
+    list_view.selectionModel().selectionChanged.connect(lambda *args: update_trait_selection())
+
+
+    return container
+
 def create_plot_area(component, name, prettyName, trait):
     def draw(change):
         canvas.set_canvas_values(change["new"],
@@ -559,11 +599,11 @@ def generate_component_ui(name, component):
         groups[group].combine = trait.metadata.get("combine", False)
 
         field_widget = None
-        if (isinstance(trait, ValueRange)):
+        if isinstance(trait, ValueRange):
             field_widget = create_range_entry(component, name, trait)
-        elif (isinstance(trait, Quantity)):
+        elif isinstance(trait, Quantity):
             field_widget = create_spinbox_entry(component, name, trait)
-        elif (isinstance(trait, Integer)):
+        elif isinstance(trait, Integer):
             field_widget = create_spinbox_entry(component, name, trait)
         elif isinstance(trait, Enum) and not trait.read_only:
             field_widget = create_combobox(component, name, trait)
@@ -579,13 +619,15 @@ def generate_component_ui(name, component):
                 field_widget = create_label(component, name, trait)
             else:
                 field_widget = create_lineedit(component, name, trait)
+        elif isinstance(trait, ListTrait):
+            field_widget = create_list_view(component, name, trait)
         elif isinstance(trait, PathTrait):
                 field_widget = create_path_selector(component, name, prettyName, trait)
         elif isinstance(trait, MultiPathSelection):
             field_widget = create_tree_path_selector(component, name, prettyName, trait)
 
         if field_widget:
-            if isinstance(trait, MultiPathSelection):
+            if isinstance(trait, (MultiPathSelection, ListTrait)):
                 label_widget = None
                 layout.addRow(field_widget)
             else:

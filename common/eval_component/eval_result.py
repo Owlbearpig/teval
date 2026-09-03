@@ -1,26 +1,27 @@
-from enum import Enum
+from pathlib import Path
+
+import h5py
+import numpy as np
 from PySide6.QtCore import QObject, Signal
 from common.components import ComponentBase, action
 from common.eval_component.conductivity_models import model_params
-from common.traits import QuantityDict, Path as TPath, Quantity, Q_
-from common.eval_component.quantity_set import DataSetDict as QuantityDictClass, DataSet
-from traitlets import Bool, Float, Int, Unicode, Integer, Enum as TEnum
-import numpy as np
 from common.eval_component.quantity_set import DataSet as SingleQuantityDataSet
-import h5py
-from pathlib import Path
+from common.eval_component.quantity_set import DataSetDict as QuantityDictClass, DataSet
+from common.measurements import Measurement
+from common.traits import QuantityDict, Path as TPath, Quantity, Q_, TList
+from traitlets import Bool, Float, Unicode, Integer, observe, Dict
 
+# testing
+p = Path(r"/media/storage/ArchivedData/Conductivity/Furtwangen/Vanadium Oxide/img0")
+p = p / r"2025-01-30T18-06-22.711457-20avg-ref-X_15.000 mm-Y_-10.000 mm.txt"
+from itertools import product
+from datetime import datetime
+# testing
 
 class ResultSignal(QObject):
     received_result = Signal(dict)
     result_ready = Signal(object)
 
-class MeasEnum(Enum):
-    pass
-
-class MeasEnum2(Enum):
-    meas1 = "Meas12"
-    meas2 = "Meas22"
 
 class EvalResult(ComponentBase):
     quantity_dict = QuantityDict()
@@ -49,25 +50,74 @@ class EvalResult(ComponentBase):
     sub_dataset_path = TPath(Path("."), read_only=True).tag(priority=5, name="Sub. dataset path")
     converged = Bool(False, read_only=True).tag(priority=6, name="Converged")
 
-    selected_measurement = TEnum(MeasEnum)
+    measurement_list = TList(group="test", read_only=True)
+    thicknesses = TList(group="thicknesses", read_only=True)
+    shifts = TList(group="shifts", read_only=True)
 
+    opt_res_dict = Dict()
 
     @action(name="test")
     def test(self):
-        # self.selected_measurement = MeasEnum2.meas1
-        trait_obj = self.traits()['selected_measurement']
-        trait_obj.values = tuple(MeasEnum2)
-        self.selected_measurement = MeasEnum2.meas1
 
-    def __init__(self, opt_res_dict=None, **kwargs):
+        def opt_res(task, m):
+            d, shift = task
+            freq_axis = Q_(np.linspace(0.5, 2, 4000), "THz")
+            ret = {"d": Q_(d, "µm"),
+                   "shift": Q_(shift, "fs"),
+                   "q_val": Q_(np.random.random(), ""),
+                   "gof": Q_(np.random.random(), ""),
+                   "converged": True,
+
+                   # Strings
+                   "timestamp": str(datetime.now().isoformat()),
+                   "measurement": str(m),
+
+                   # Datasets ( Q_(x) )
+                   "n0": DataSet(axes=[freq_axis],
+                                 data=Q_(np.random.random(freq_axis.shape[0]), ""),
+                                 data_label="Simple n",
+                                 axes_labels=["Frequency"]),
+                   }
+            return ret
+
+        thicknesses = [100, 200, 300, 400, 500, 600]
+        shifts = [-0.5, 0, 1.5]
+        meas_list = ["Average", Measurement(p)]
+        all_measurement_results = {
+            "result_type": "Transmission fit",
+            "measurements": meas_list,
+            "model_name": "tmm_1layer",
+            "measurement_quantity": "Transmission",
+            "optimization_results": {},
+        }
+        for meas in meas_list:
+            tasks = product(thicknesses, shifts)
+            parsed_opt_res_dict = {task: opt_res(task, meas) for task in tasks}
+            all_measurement_results["optimization_results"][meas] = parsed_opt_res_dict
+
+        self.parse_opt_res_dict(all_measurement_results, is_loading=True)
+
+    @action(name="Show Q-space plot")
+    def plot_q_space(self):
+        pass
+
+    """
+    @observe("measurement_list", "thicknesses", "shifts")
+    def on_selection_change(self, change): 
+        print(change)
+    """
+
+    @observe("measurement_list")
+    def on_selection_change(self, change):
+        print(change)
+        meas_opt_results = self.opt_res_dict["optimization_results"][change["new"]]
+
+        self.set_trait("thicknesses", )
+
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.result_carrier = ResultSignal()
-        self.result_carrier.received_result.connect(self.set_traits_from_dict)
-
-        if opt_res_dict is None:
-            return
-
-        self.set_traits_from_dict(opt_res_dict)
+        self.result_carrier.received_result.connect(self.parse_opt_res_dict)
 
     def load_result(self, res_path):
         res_dict = {}
@@ -76,7 +126,7 @@ class EvalResult(ComponentBase):
         elif res_path.suffix == ".hdf5":
             res_dict = self.parse_hdf5(res_path)
 
-        self.set_traits_from_dict(res_dict, is_loading=True)
+        self.parse_opt_res_dict(res_dict, is_loading=True)
 
     def parse_hdf5(self, res_path):
         with h5py.File(res_path, "r") as f:
@@ -171,22 +221,30 @@ class EvalResult(ComponentBase):
 
         return parsed_result_dict
 
-    def set_traits_from_dict(self, trait_value_dict, is_loading=False):
-        if not trait_value_dict:
+    def parse_opt_res_dict(self, opt_res_dict, is_loading=False):
+        if not opt_res_dict:
             return
+        self.opt_res_dict = opt_res_dict
+        self.set_trait("measurement_list", opt_res_dict["measurements"])
 
-        for k, v in trait_value_dict.items():
+        self.set_trait("thicknesses", )
+        thicknesses = TList(group="thicknesses", read_only=True)
+        shifts = TList(group="shifts", read_only=True)
+
+        # print(opt_res_dict)
+        return
+        for k, v in opt_res_dict.items():
             if isinstance(v, (int, str, float, Q_, Path)):
                 self.set_trait(k, v)
 
-        dataset_dict = {k: v for k, v in trait_value_dict.items() if isinstance(v, DataSet)}
+        dataset_dict = {k: v for k, v in opt_res_dict.items() if isinstance(v, DataSet)}
         self.quantity_dict = QuantityDictClass(dataset_dict)
 
-        if trait_value_dict["result_type"] == "Regression":
-            active_parameters = model_params(trait_value_dict["model_name"])
+        if opt_res_dict["result_type"] == "Regression":
+            active_parameters = model_params(opt_res_dict["model_name"])
             self.toggle_traits(active_parameters, group_filter=self.reg_result_grp_name)
             self.toggle_traits([], group_filter=self.t_fit_res_grp_name)
-        elif trait_value_dict["result_type"] == "Transmission fit":
+        elif opt_res_dict["result_type"] == "Transmission fit":
             self.toggle_traits([], group_filter=self.reg_result_grp_name)
             self.toggle_traits(self.traits(group=self.t_fit_res_grp_name), group_filter=self.t_fit_res_grp_name)
 

@@ -11,21 +11,18 @@ from traitlets.traitlets import TraitError
 
 class Settings(AppSettings):
 
-    def __init__(self, settings_file: Path | str = None, **kwargs):
+    def __init__(self, settings_file: Path | str = "", **kwargs):
         super().__init__(**kwargs)
 
-        if settings_file is not None:
-            self._settings_file = Path(settings_file).stem
-        else:
-            self._settings_file = Path(self.script_name).stem
+        self._settings_file = Path(settings_file).stem if settings_file else Path(self.script_name).stem
+
         self.config_path = Path(f"config/{self._settings_file}.json")
 
         self.load_configuration(self)
 
         self._set_component_names()
 
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, *args):
         self.save_configuration(self)
 
         return False
@@ -94,10 +91,6 @@ class Settings(AppSettings):
         component_class_name = component_instance.__class__.__name__
         config_path = self.config_path
         print(f"Loading settings from {config_path} for component {component_class_name}")
-
-        if self._settings_file is None:
-            print(f"No config file path set. Using default values.")
-            return
 
         if not config_path.exists():
             print(f"No custom config found at {config_path}. Using default values.")

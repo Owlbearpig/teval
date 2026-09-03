@@ -191,7 +191,6 @@ class QSpaceEval:
         step_size = [20, 5, 1]
         sas = (5, 20) # smoothing avg settings
         is_iterative = not self.dataset_eval.use_custom_d_opt_axis
-        norm_q_vals = self.dataset_eval.normalize_q_vals
         ref_fd_dict = self.ref_fd_dict
 
         t_exp_dict = self.t_exp_dict
@@ -272,7 +271,7 @@ class QSpaceEval:
             "measurements": meas_list,
             "model_name": self.transmission_model.name,
             "measurement_quantity": "Transmission",
-            "optimization_results": {meas: None for meas in meas_list},
+            "optimization_results": {},
         }
         for meas in meas_list:
             self.reset_opt_state()
@@ -285,11 +284,6 @@ class QSpaceEval:
                 opt_results.extend(task_results)
                 if not is_iterative:
                     break
-
-            q_vals = np.array([res["q_val"] for res in opt_results])
-            meas_opt_res = {"q_vals": q_vals / np.max(q_vals) if norm_q_vals else q_vals,
-                            "d_vals": np.array([res["d"] for res in opt_results]),
-                            "shift_axis": shift_axis}
 
             for opt_res in opt_results:
                 opt_res["measurement"] = meas
@@ -359,6 +353,9 @@ class QSpaceEval:
         return sim_res
 
     def prepare_results(self, opt_results):
+        norm_q_vals = self.dataset_eval.normalize_q_vals
+        q_vals = np.array([res["q_val"] for res in opt_results])
+
         parsed_opt_results = {}
         for opt_res in opt_results:
             rd = opt_res
@@ -368,7 +365,7 @@ class QSpaceEval:
                 # Scalars
                 "d": Q_(rd["d"], "µm"),
                 "shift": Q_(rd["shift"], "fs"),
-                "q_val": Q_(rd["q_val"], ""),
+                "q_val": Q_(rd["q_val"] / np.max(q_vals), "") if norm_q_vals else Q_(rd["q_val"], ""),
                 "gof": Q_(rd["gof"], ""),
                 "converged": True,
 

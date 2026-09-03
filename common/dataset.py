@@ -1029,8 +1029,11 @@ class DataSet(ComponentBase):
             self.logger.info(label)
         freq_axis = ret_["freq_axis"].real
 
-        printed_freq_list = self.settings.eval_opt.printed_freqs
-        f_idx_list = np.array([np.argmin(np.abs(f-freq_axis)) for f in printed_freq_list])
+        f_str = self.settings.eval_opt.printed_freqs
+        f_str_split = f_str.replace(" ", "").split(",")
+        f_list = [float(s) for s in f_str_split]
+
+        f_idx_list = np.array([np.argmin(np.abs(f-freq_axis)) for f in f_list])
         if "k" in ret_:
             ret_["n"] = ret_["n"] + 1j * ret_["k"]
 
