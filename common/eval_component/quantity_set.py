@@ -23,26 +23,20 @@ import numpy as np
 from common.components import ComponentBase
 from common.units import Q_
 
-class DataSetDict(dict):
+class QuantityDataSetDict(dict):
     def __init__(self, dataset_dict=None):
-        super(DataSetDict, self).__init__()
-
-        if dataset_dict is None:
-            self[""] = DataSet()
-        else:
-            self.update(dataset_dict)
+        super().__init__(dataset_dict or {})
 
     def checkConsistency(self):
-        for v in self.values():
+        for k, v in self.items():
             v.checkConsistency()
 
-class DataSet:
+class QuantityDataSet:
     def __init__(self, data=None, uncert=None, axes=None, axes_labels=None, data_label=""):
-        super().__init__()
 
         self.axes = [] if axes is None else axes
         self.data = Q_(np.array(0.0)) if data is None else data
-        self.uncert = np.zeros_like(data) if uncert is None else uncert
+        self.uncert = Q_(np.zeros_like(data)) if uncert is None else uncert
 
         self.axes_labels = [] if axes_labels is None else axes_labels
         self.data_label = data_label
@@ -58,10 +52,10 @@ class DataSet:
     def checkConsistency(self):
         if not self.data_is_consistent:
             raise Exception("Data/uncertainty is inconsistent! "
-                            "Number of axes: %d/%d, data dimension: %d/%d, "
-                            "axes lengths: %s, data shape: %s/%s" %
-                            (len(self.axes), len(self.uncert), self.data.ndim, self.uncert.ndim,
-                             [len(ax) for ax in self.axes], self.uncert.shape, self.data.shape))
+                            "Number of axes: %d, data/uncertainty dimension: %d/%d, "
+                            "axes lengths: %s, data/uncertainty shape: %s/%s" %
+                            (len(self.axes), self.data.ndim, self.uncert.ndim,
+                             [len(ax) for ax in self.axes], self.data.shape, self.uncert.shape))
 
     def __repr__(self):
         return 'DataSet(%s, %s, %s)' % (repr(self.data), repr(self.uncert), repr(self.axes))
@@ -86,20 +80,20 @@ if __name__ == '__main__':
         "t_mod": np.ones(4001)*3.1415,
         "sam_mod": np.ones(4001)*3.1415,
     }
-    ds1 = DataSet(axes=[freq_axis], data=test_dict["delta_n"][:, 1], uncert=test_dict["delta_n"][:, 2],
-                  data_label="Simple n", axes_labels=["Frequency"])
+    ds1 = QuantityDataSet(axes=[freq_axis], data=test_dict["delta_n"][:, 1], uncert=test_dict["delta_n"][:, 2],
+                          data_label="Simple n", axes_labels=["Frequency"])
     print(test_dict["delta_n"].shape)
     result_dict = {"1": ds1, "2": ds1}
     print(ds1)
     # print(result_dict["n0"])
 
-    from common.traits import QuantityDict, DataSetDictClass
+    from common.traits import QuantityDict, QuantityDataSetDict
 
     class Test(ComponentBase):
         quant_dict = QuantityDict()
 
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
-            self.quant_dict = DataSetDictClass(result_dict)
+            self.quant_dict = QuantityDataSetDict(result_dict)
 
     Test()

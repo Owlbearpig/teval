@@ -1,11 +1,15 @@
 import numpy as np
 from common.components import ComponentBase
+from common.settings import Settings
 from common.traits import MultiPathSelection, ValueRange, MultiPathClass
 from common.units import Q_
 from common.default_appsettings import Dist
 from traitlets import Enum as TEnum, Unicode, Bool, Int
 from enum import Enum
-from common.measurements import timestamp2id
+from common.measurements import timestamp2id, Measurement
+
+from types import TracebackType
+
 
 def get_coordinate_line(measurements, x=None, y=None):
     if not measurements:
@@ -74,8 +78,8 @@ class MeasurementSelection(ComponentBase):
                              "different from the measurement file selection"
                         ).tag(name="Direct file match", priority=2000, group=reference_matching_grp)
 
-    reference_paths = MultiPathSelection().tag(fullwidth = False, group="Direct reference file selection", combine=True)
-    sample_paths = MultiPathSelection().tag(fullwidth = False, group="Direct sample file selection", combine=True)
+    reference_paths = MultiPathSelection().tag(fullwidth=False, group="Direct reference file selection", combine=True)
+    sample_paths = MultiPathSelection().tag(fullwidth=False, group="Direct sample file selection", combine=True)
 
 
     def __init__(self, dataset, **kwargs):
@@ -109,8 +113,12 @@ class MeasurementSelection(ComponentBase):
         ref_filenames = [f"{meas.filepath.name}" for meas in new_measurements["refs"]]
         sam_filenames = [f"{meas.filepath.name}" for meas in new_measurements["sams"]]
 
-        self.reference_paths = MultiPathClass(root_path=root_path, shown_filenames=ref_filenames)
-        self.sample_paths = MultiPathClass(root_path=root_path, shown_filenames=sam_filenames)
+        self.reference_paths = MultiPathClass(root_path=root_path,
+                                              selected_paths=self.reference_paths.selected_paths,
+                                              shown_filenames=ref_filenames)
+        self.sample_paths = MultiPathClass(root_path=root_path,
+                                           selected_paths=self.sample_paths.selected_paths,
+                                           shown_filenames=sam_filenames)
 
         self.reference_paths.observe(self.update_sel_cnt_info, names="selected_paths")
         self.sample_paths.observe(self.update_sel_cnt_info, names="selected_paths")
@@ -126,6 +134,14 @@ class MeasurementSelection(ComponentBase):
     @property
     def selected_measurements(self):
         return self.get_selected_measurements()
+
+    @property
+    def sam_ref_meas_map(self):
+        meas_list = self.selected_measurements
+        ref_list = self.get_matching_refs(meas_list)
+
+        dict_map = {meas: ref_list[i] for i, meas in enumerate(meas_list)}
+        return lambda meas: dict_map[meas] if isinstance(meas, Measurement) else meas
 
     def update_sel_cnt_info(self, change):
         change_name = change["name"]

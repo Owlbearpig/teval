@@ -1,12 +1,13 @@
 from PySide6 import QtWidgets, QtCore, QtGui
 from traitlets import Integer, Float, Unicode, Bool, Tuple, Enum
 from common.measurement_selection import MeasurementSelection
+from common.eval_component.eval_result import EvalResult
 from qtui.changeindicatorspinbox import ChangeIndicatorSpinBox
 from qtui.changeindicatorlineedit import ChangeIndicatorLineEdit
 from qtui.fastfilefilterproxy import FastNameFilterProxyModel
 from common.components import ComponentBase
 from traitlets import Instance
-from common.traits import Quantity, Path as PathTrait, ValueRange, MultiPathSelection, TList as ListTrait
+from common.traits import Quantity, Path as PathTrait, ValueRange, MultiPathSelection, StrListSelection
 from pathlib import Path
 import types
 import logging
@@ -276,7 +277,6 @@ def create_combobox(component, name, trait):
         combobox.blockSignals(True)
         combobox.clear()
 
-        # Always pull the current allowed values directly from the component's trait instance
         current_trait = component.traits()[name]
         for item in current_trait.values:
             item_name = item.name if hasattr(item, "name") else str(item)
@@ -288,11 +288,9 @@ def create_combobox(component, name, trait):
 
         combobox.blockSignals(False)
 
-    # Initial UI setup
     populate_items()
 
     def update_combobox(change):
-        # Re-populate dropdown items to reflect any updated trait values
         populate_items()
 
     component.observe(update_combobox, name)
@@ -426,8 +424,8 @@ def create_tree_path_selector(component, name, prettyName, trait):
 
     model = QtWidgets.QFileSystemModel()
     root_path = getattr(trait.get(component), "root_path", None)
-    initial_path = str(root_path) if root_path is not None else QtCore.QDir.homePath()
-    model.setRootPath(initial_path)
+    initial_root_path = str(root_path) if root_path is not None else QtCore.QDir.homePath()
+    model.setRootPath(initial_root_path)
 
     proxy = FastNameFilterProxyModel()
     proxy.setSourceModel(model)
@@ -440,9 +438,35 @@ def create_tree_path_selector(component, name, prettyName, trait):
     tree.hideColumn(1)
     tree.hideColumn(2)
     tree.hideColumn(3)
-    tree.setRootIndex(proxy.mapFromSource(model.index(initial_path)))
+    tree.setRootIndex(proxy.mapFromSource(model.index(initial_root_path)))
     tree.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
     tree.setMinimumHeight(180)
+
+    def apply_initial_selection():
+        initially_selected_paths = [str(p) for p in getattr(component, name).selected_paths]
+        if not initially_selected_paths:
+            return
+
+        selection = QtCore.QItemSelection()
+        for path_str in initially_selected_paths:
+            src_idx = model.index(path_str)
+            if src_idx.isValid():
+                proxy_idx = proxy.mapFromSource(src_idx)
+                if proxy_idx.isValid():
+                    selection.select(proxy_idx, proxy_idx)
+
+        if not selection.isEmpty():
+            sel_model = tree.selectionModel()
+
+            sel_model.blockSignals(True)
+            sel_model.select(
+                selection,
+                QtCore.QItemSelectionModel.ClearAndSelect | QtCore.QItemSelectionModel.Rows
+            )
+
+            sel_model.blockSignals(False)
+
+    model.directoryLoaded.connect(lambda: apply_initial_selection())
 
     def update_trait_selection():
         selected_proxy_indexes = tree.selectionModel().selectedRows(column=0)
@@ -463,6 +487,7 @@ def create_tree_path_selector(component, name, prettyName, trait):
 
     component.observe(update_root, name)
     layout.addWidget(tree)
+
     return container
 
 def create_list_view(component, name, trait):
@@ -476,40 +501,40 @@ def create_list_view(component, name, trait):
     list_view.setModel(model)
     if trait.read_only:
         list_view.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+    if "max_width" in trait.metadata:
+        list_view.setMaximumWidth(trait.metadata["max_width"])
 
     layout.addWidget(list_view)
+    str_list = getattr(component, name)
 
     def update_list(change):
         string_list = [str(s) for s in change["new"]]
         model.setStringList(string_list)
 
-    component.observe(update_list, name)
+        if string_list:
+            first_index = model.index(0, 0)
+            list_view.selectionModel().setCurrentIndex(
+                first_index,
+                QtCore.QItemSelectionModel.ClearAndSelect
+            )
+            str_list.selected_item = string_list[0]
+
+    str_list.observe(update_list, "items")
 
     def update_trait_selection():
         selected_indexes = list_view.selectionModel().selectedRows(column=0)
         if not selected_indexes:
             return
 
-        selected_str = selected_indexes[0].data()
-        print(selected_str)
-        trait.selected_element = selected_str
-        component.notify_change({
-            'name': name,
-            'old': 0,
-            'new': selected_str,
-            'type': "abe"
-        })
+        str_list.selected_item = selected_indexes[0].data()
 
     list_view.selectionModel().selectionChanged.connect(lambda *args: update_trait_selection())
-
 
     return container
 
 def create_plot_area(component, name, prettyName, trait):
     def draw(change):
-        canvas.set_canvas_values(change["new"],
-                                 trait.metadata.get("axes_labels", None),
-                                 trait.metadata.get("data_label", None))
+        canvas.set_dataset_dict(change["new"])
 
     canvas = MPLCanvas()
 
@@ -519,9 +544,7 @@ def create_plot_area(component, name, prettyName, trait):
 
     initial_value = trait.get(component)
     if initial_value:
-        canvas.set_canvas_values(initial_value,
-                                 trait.metadata.get("axes_labels", None),
-                                 trait.metadata.get("data_label", None))
+        canvas.set_dataset_dict(initial_value)
 
     return canvas
 
@@ -619,7 +642,7 @@ def generate_component_ui(name, component):
                 field_widget = create_label(component, name, trait)
             else:
                 field_widget = create_lineedit(component, name, trait)
-        elif isinstance(trait, ListTrait):
+        elif isinstance(trait, StrListSelection):
             field_widget = create_list_view(component, name, trait)
         elif isinstance(trait, PathTrait):
                 field_widget = create_path_selector(component, name, prettyName, trait)
@@ -627,7 +650,7 @@ def generate_component_ui(name, component):
             field_widget = create_tree_path_selector(component, name, prettyName, trait)
 
         if field_widget:
-            if isinstance(trait, (MultiPathSelection, ListTrait)):
+            if isinstance(trait, (MultiPathSelection, StrListSelection)):
                 label_widget = None
                 layout.addRow(field_widget)
             else:
@@ -652,8 +675,26 @@ def generate_component_ui(name, component):
     for group in groups.values():
         if not group.combine:
             controlLayout.addWidget(group)
+    if isinstance(component, EvalResult):
+        vSplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        vSplitter.setChildrenCollapsible(False)
 
-    if isinstance(component, MeasurementSelection):
+        hSplitter = QtWidgets.QSplitter()
+        hSplitter.setStretchFactor(1, 0)
+        hSplitter.setStretchFactor(0, 1)
+        hSplitter.setChildrenCollapsible(False)
+        for group in groups.values():
+            if group.combine:
+                hSplitter.addWidget(group)
+
+        vSplitter.addWidget(hSplitter)
+        vSplitter.addWidget(controlWidget)
+
+        vSplitter.setStretchFactor(0, 0)
+        vSplitter.setStretchFactor(1, 1)
+        scrollArea.setWidget(vSplitter)
+        vSplitter.setSizes([200, 400])
+    elif isinstance(component, MeasurementSelection):
         vSplitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         vSplitter.setChildrenCollapsible(False)
 
@@ -717,7 +758,7 @@ def generate_component_ui(name, component):
     scrollArea.setMinimumWidth(0)
     hSplitter.setStretchFactor(0, 1)
     hSplitter.setStretchFactor(1, 1)
-    hSplitter.setSizes([1, 1])
+    hSplitter.setSizes([1, 100])
     hSplitter.setChildrenCollapsible(False)
 
     return hSplitter

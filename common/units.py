@@ -55,6 +55,8 @@ if pint.__version__ == '0.7.2':
 if __name__ == '__main__':
     import numpy as np
     import matplotlib.pyplot as plt
+    d = Q_(10.1234567, "µm")
+    print(np.round(d, 3))
     q = 3 * np.ones(10) * Q_(np.ones(10), "h").to("s")
     q.to("min")
     print(q)

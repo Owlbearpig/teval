@@ -2,7 +2,7 @@ from enum import Enum
 from pathlib import Path
 import json
 from common.eval_component.eval_result import EvalResult
-from common.traits import ValueRange, Path as TPath, Quantity
+from common.traits import ValueRange, Path as TPath, Quantity, MultiPathClass, MultiPathSelection
 from common.units import Q_
 from traitlets import Instance, Tuple, List, Bool, Integer, Float, Enum as TEnum
 from common.components import is_component_trait
@@ -66,6 +66,8 @@ class Settings(AppSettings):
                             val = [val[0].magnitude, val[1].magnitude]
                         else:
                             val = [val[0], val[1]]
+                    elif isinstance(val, MultiPathClass):
+                        dump_dict[k] = [str(p) for p in val.selected_paths]
                     if isinstance(val, simple_types):
                         dump_dict[k] = val
                 else:
@@ -137,6 +139,9 @@ class Settings(AppSettings):
                     else:
                         value = dict_val
                     instance.set_trait(trait_name, value)
+                elif issubclass(actual_type, MultiPathSelection):
+                    value = getattr(instance, trait_name)
+                    value.selected_paths = [Path(p) for p in dict_val]
 
         with open(config_path, "r") as f:
             json_dict = json.load(f)

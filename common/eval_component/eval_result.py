@@ -1,46 +1,48 @@
 from pathlib import Path
-
+import matplotlib.pyplot as plt
 import h5py
 import numpy as np
 from PySide6.QtCore import QObject, Signal
 from common.components import ComponentBase, action
 from common.eval_component.conductivity_models import model_params
-from common.eval_component.quantity_set import DataSet as SingleQuantityDataSet
-from common.eval_component.quantity_set import DataSetDict as QuantityDictClass, DataSet
-from common.measurements import Measurement
-from common.traits import QuantityDict, Path as TPath, Quantity, Q_, TList
+from common.eval_component.quantity_set import QuantityDataSetDict, QuantityDataSet
+from common.traits import QuantityDict, Path as TPath, Quantity, Q_, StrListSelection, StrList
 from traitlets import Bool, Float, Unicode, Integer, observe, Dict
+from dataclasses import dataclass, field, asdict
+from typing import Any
+from functools import partial
+from mpl_settings import mpl_style_params
 
-# testing
-p = Path(r"/media/storage/ArchivedData/Conductivity/Furtwangen/Vanadium Oxide/img0")
-p = p / r"2025-01-30T18-06-22.711457-20avg-ref-X_15.000 mm-Y_-10.000 mm.txt"
-from itertools import product
-from datetime import datetime
-# testing
+action = partial(action, rc_params=mpl_style_params)
+
+@dataclass
+class SingleResultData:
+    # optimization arguments
+    measurement: str = None
+    d : Q_ = Q_(0, "µm")
+    shift : Q_ = Q_(0, "fs")
+    freq_axis : Q_ = Q_(np.array(0), "THz")
+
+    # result
+    regression_params: dict[str, Any] = field(default_factory=dict)  # regression params,
+    optimization_info:  dict[str, Any] = field(default_factory=dict) # q_val, gof, converged, timestamp, ...
+    datasets: dict[str, "QuantityDataSet"] = field(default_factory=dict) # n0, alpha, t_exp, ...
+
+@dataclass
+class EvalResultData:
+    result_type: str = ""
+    dataset_path: Path = Path(".")
+    model_name: str = ""
+    measurement_quantity: str = ""
+    measurement_names: list[str] = field(default_factory=list)
+    results: list[SingleResultData] = field(default_factory=list)
 
 class ResultSignal(QObject):
-    received_result = Signal(dict)
+    received_result = Signal(EvalResultData)
     result_ready = Signal(object)
 
-
 class EvalResult(ComponentBase):
-    quantity_dict = QuantityDict()
-
-    t_fit_res_grp_name = "Transmission fit result values"
-    d = Quantity(Q_(0, "µm"), read_only=True, group=t_fit_res_grp_name)
-    q_val = Quantity(Q_(0.0, ""), read_only=True, group=t_fit_res_grp_name)
-    gof = Quantity(Q_(0.0, ""), read_only=True, group=t_fit_res_grp_name)
-    shift = Quantity(Q_(0.0, "fs"), read_only=True, group=t_fit_res_grp_name)
-
-    reg_result_grp_name = "Regression result values"
-    fun = Float(0.0, read_only=True, group=reg_result_grp_name)
-    nit = Integer(0, read_only=True, group=reg_result_grp_name)
-    sig0 = Quantity(Q_(0, "S/cm"), read_only=True, group=reg_result_grp_name).tag(name="σ₀")
-    tau = Quantity(Q_(0, "fs"), read_only=True, group=reg_result_grp_name).tag(name="τ")
-    wp = Quantity(Q_(0, "THz"), read_only=True, group=reg_result_grp_name).tag(name="ωₚ")
-    eps_inf = Float(0, read_only=True, group=reg_result_grp_name).tag(name="ε_inf")
-    eps_s = Float(0, read_only=True, group=reg_result_grp_name).tag(name="ε_s")
-    c1 = Float(0, read_only=True, group=reg_result_grp_name).tag(name="c₁")
+    quantity_dict = QuantityDict().tag(name="Quantity plot")
 
     measurement = Unicode("", read_only=True).tag(priority=0, name="Measurement")
     result_type = Unicode("None", read_only=True).tag(priority=1, name="Result type")
@@ -50,83 +52,126 @@ class EvalResult(ComponentBase):
     sub_dataset_path = TPath(Path("."), read_only=True).tag(priority=5, name="Sub. dataset path")
     converged = Bool(False, read_only=True).tag(priority=6, name="Converged")
 
-    measurement_list = TList(group="test", read_only=True)
-    thicknesses = TList(group="thicknesses", read_only=True)
-    shifts = TList(group="shifts", read_only=True)
+    q_val = Quantity(Q_(0.0, ""), read_only=True)
+    gof = Quantity(Q_(0.0, ""), read_only=True)
 
-    opt_res_dict = Dict()
+    reg_result_grp_name = "Regression result values"
+    fun = Float(0.0, read_only=True, group=reg_result_grp_name).tag(priority=-1)
+    nit = Integer(0, read_only=True, group=reg_result_grp_name).tag(priority=0)
+    sig0 = Quantity(Q_(0, "S/cm"), read_only=True, group=reg_result_grp_name).tag(name="σ₀")
+    tau = Quantity(Q_(0, "fs"), read_only=True, group=reg_result_grp_name).tag(name="τ")
+    wp = Quantity(Q_(0, "THz"), read_only=True, group=reg_result_grp_name).tag(name="ωₚ")
+    eps_inf = Float(0, read_only=True, group=reg_result_grp_name).tag(name="ε_inf")
+    eps_s = Float(0, read_only=True, group=reg_result_grp_name).tag(name="ε_s")
+    c1 = Float(0, read_only=True, group=reg_result_grp_name).tag(name="c₁")
 
-    @action(name="test")
-    def test(self):
-
-        def opt_res(task, m):
-            d, shift = task
-            freq_axis = Q_(np.linspace(0.5, 2, 4000), "THz")
-            ret = {"d": Q_(d, "µm"),
-                   "shift": Q_(shift, "fs"),
-                   "q_val": Q_(np.random.random(), ""),
-                   "gof": Q_(np.random.random(), ""),
-                   "converged": True,
-
-                   # Strings
-                   "timestamp": str(datetime.now().isoformat()),
-                   "measurement": str(m),
-
-                   # Datasets ( Q_(x) )
-                   "n0": DataSet(axes=[freq_axis],
-                                 data=Q_(np.random.random(freq_axis.shape[0]), ""),
-                                 data_label="Simple n",
-                                 axes_labels=["Frequency"]),
-                   }
-            return ret
-
-        thicknesses = [100, 200, 300, 400, 500, 600]
-        shifts = [-0.5, 0, 1.5]
-        meas_list = ["Average", Measurement(p)]
-        all_measurement_results = {
-            "result_type": "Transmission fit",
-            "measurements": meas_list,
-            "model_name": "tmm_1layer",
-            "measurement_quantity": "Transmission",
-            "optimization_results": {},
-        }
-        for meas in meas_list:
-            tasks = product(thicknesses, shifts)
-            parsed_opt_res_dict = {task: opt_res(task, meas) for task in tasks}
-            all_measurement_results["optimization_results"][meas] = parsed_opt_res_dict
-
-        self.parse_opt_res_dict(all_measurement_results, is_loading=True)
-
-    @action(name="Show Q-space plot")
-    def plot_q_space(self):
-        pass
-
-    """
-    @observe("measurement_list", "thicknesses", "shifts")
-    def on_selection_change(self, change): 
-        print(change)
-    """
-
-    @observe("measurement_list")
-    def on_selection_change(self, change):
-        print(change)
-        meas_opt_results = self.opt_res_dict["optimization_results"][change["new"]]
-
-        self.set_trait("thicknesses", )
+    measurement_list = StrListSelection(group="Evaluated measurements", read_only=True, combine=True, priority=1)
+    thicknesses = StrListSelection(group="Thicknesses", read_only=True).tag(max_width=70, combine=True, priority=2)
+    shifts = StrListSelection(group="Pulse shifts", read_only=True).tag(max_width=70, combine=True, priority=3)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.eval_result_data: EvalResultData = None
         self.result_carrier = ResultSignal()
-        self.result_carrier.received_result.connect(self.parse_opt_res_dict)
+        self.result_carrier.received_result.connect(self.parse_eval_result_data)
+
+        self.set_trait("measurement_list", StrList())
+        self.set_trait("thicknesses", StrList())
+        self.set_trait("shifts", StrList())
+
+        self.set_observers()
+
+    def select_results(self, meas=None, thickness=None, shift=None):
+        if (thickness == "") or (shift == ""):
+            return None
+
+        d_cond = (lambda res: True) if thickness is None else (
+            lambda res: np.isclose(res.d.magnitude, float(thickness)))
+        shift_cond = (lambda res: True) if shift is None else (
+            lambda res: np.isclose(res.shift.magnitude, float(shift)))
+        meas_cond = (lambda res: True) if meas is None else (lambda res: res.measurement == meas)
+
+        selected_results = (
+            res for res in self.eval_result_data.results
+            if d_cond(res) and shift_cond(res) and meas_cond(res)
+        )
+
+        if meas is not None and thickness is not None and shift is not None:
+            return next(selected_results, None)
+
+        return selected_results
+
+    @action(name="Show Q-space plot")
+    def plot_q_space(self):
+        thicknesses = self.thicknesses.items
+        shifts = self.shifts.items
+        sel_meas = self.measurement_list.selected_item
+        if not thicknesses or not shifts or not sel_meas:
+            return
+
+        plt.figure("Q-space plot")
+        for shift in shifts:
+            results = list(self.select_results(meas=sel_meas, shift=shift))
+            if not results:
+                continue
+
+            x_vals = [res.d.magnitude if hasattr(res.d, "magnitude") else res.d for res in results]
+            y_vals = []
+            for res in results:
+                q_val = res.optimization_info["q_val"]
+                y_vals.append(q_val.magnitude if hasattr(q_val, "magnitude") else q_val)
+
+            plt.plot(x_vals, y_vals, label=f"shift={shift}")
+
+        plt.xlabel("Thickness (µm)")
+        plt.ylabel("Q-value")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+
+    def set_simple_traits(self, trait_values):
+        trait_names = self.trait_names()
+        for k, v in trait_values.items():
+            if isinstance(v, (int, str, float, Q_, Path)) and k in trait_names:
+                self.set_trait(k, v)
+
+    def set_observers(self):
+        def on_measurement_selection(change):
+            selected_meas = change["new"]
+            optimization_results = [res for res in self.eval_result_data.results if res.measurement == selected_meas]
+            self.thicknesses.items = list(set([str(res.d.magnitude) for res in optimization_results]))
+            self.shifts.items = list(set([str(res.shift.magnitude) for res in optimization_results]))
+
+            if self.thicknesses.items and self.shifts.items:
+                self.thicknesses.selected_item = self.thicknesses.items[0]
+                self.shifts.selected_item = self.shifts.items[0]
+
+            select_quantity_dict(None)
+
+        self.measurement_list.observe(on_measurement_selection, "selected_item")
+
+        def select_quantity_dict(change):
+            selected_result = self.select_results(meas=self.measurement_list.selected_item,
+                                                  thickness=self.thicknesses.selected_item,
+                                                  shift=self.shifts.selected_item)
+
+            if isinstance(selected_result, SingleResultData):
+                scalar_values = {
+                    "d": selected_result.d,
+                    "shift": selected_result.shift,
+                    "measurement": selected_result.measurement,
+                    **selected_result.optimization_info
+                }
+                self.set_simple_traits(scalar_values)
+                self.quantity_dict = QuantityDataSetDict(selected_result.datasets)
+
+        self.thicknesses.observe(select_quantity_dict, "selected_item")
+        self.shifts.observe(select_quantity_dict, "selected_item")
 
     def load_result(self, res_path):
-        res_dict = {}
-        if res_path.suffix == ".npz":
-            res_dict = self.parse_npz(res_path)
-        elif res_path.suffix == ".hdf5":
-            res_dict = self.parse_hdf5(res_path)
+        res_dict = self.parse_hdf5(res_path)
 
-        self.parse_opt_res_dict(res_dict, is_loading=True)
+        self.parse_eval_result_data(res_dict, is_loading=True)
 
     def parse_hdf5(self, res_path):
         with h5py.File(res_path, "r") as f:
@@ -176,77 +221,23 @@ class EvalResult(ComponentBase):
                         axes_q.append(Q_(axis_dset[()], ax_unit))
                         i += 1
 
-                    parsed_result_dict[k] = DataSet(data=data_q, axes=axes_q,
-                                                    data_label=data_label, axes_labels=axes_labels)
+                    parsed_result_dict[k] = QuantityDataSet(data=data_q, axes=axes_q,
+                                                            data_label=data_label, axes_labels=axes_labels)
 
         return parsed_result_dict
 
-    def parse_npz(self, path):
-        def assemble_dataset(prefix_, npz_dict_):
-            data_unit, data_magnitude = None, None
-            axes_magnitude_idx_tuples, axes_unit_idx_tuples = [], []
-            for k, v in npz_dict_.items():
-                if f"{prefix_}__DSK__axes_magnitude" == "_".join(k.split("_")[:-1]):
-                    idx_ = int(k.split("_")[-1])
-                    axes_magnitude_idx_tuples.append((v, idx_))
-                elif f"{prefix_}__DSK__axes_units" == "_".join(k.split("_")[:-1]):
-                    idx_ = int(k.split("_")[-1])
-                    axes_unit_idx_tuples.append((v.item(), idx_))
-                elif k == f"{prefix_}__DSK__data_magnitude":
-                    data_magnitude = v
-                elif k == f"{prefix_}__DSK__data_units":
-                    data_unit = v.item()
-
-            axes_magnitudes = [t[0] for t in sorted(axes_magnitude_idx_tuples, key=lambda x: x[1])]
-            axes_units = [t[0] for t in sorted(axes_unit_idx_tuples, key=lambda x: x[1])]
-
-            axes = [Q_(*z) for z in zip(axes_magnitudes, axes_units)]
-            data = Q_(data_magnitude, data_unit)
-
-            return SingleQuantityDataSet(data, axes)
-
-        npz_dict = dict(np.load(path, allow_pickle=False))
-
-        parsed_result_dict = {}
-        for k, v in npz_dict.items():
-            if "__data_magnitude" in k[-len("__data_magnitude"):]:
-                prefix = k.split("__DSK__data_magnitude")[0]
-                parsed_result_dict[prefix] = assemble_dataset(prefix, npz_dict)
-            elif "__QK__quantity_magnitude" in k:
-                prefix = k.split("__QK__quantity_magnitude")[0]
-                unit = npz_dict[f"{prefix}__QK__quantity_units"]
-                parsed_result_dict[prefix] = Q_(v.item(), unit.item())
-            elif ("QK" not in k) and ("DSK" not in k):
-                parsed_result_dict[k] = v.item()
-
-        return parsed_result_dict
-
-    def parse_opt_res_dict(self, opt_res_dict, is_loading=False):
-        if not opt_res_dict:
+    def parse_eval_result_data(self, eval_result_data: EvalResultData, is_loading=False):
+        if not eval_result_data:
             return
-        self.opt_res_dict = opt_res_dict
-        self.set_trait("measurement_list", opt_res_dict["measurements"])
+        self.eval_result_data = eval_result_data
+        self.set_simple_traits(asdict(eval_result_data))
+        self.measurement_list.items = eval_result_data.measurement_names
 
-        self.set_trait("thicknesses", )
-        thicknesses = TList(group="thicknesses", read_only=True)
-        shifts = TList(group="shifts", read_only=True)
-
-        # print(opt_res_dict)
-        return
-        for k, v in opt_res_dict.items():
-            if isinstance(v, (int, str, float, Q_, Path)):
-                self.set_trait(k, v)
-
-        dataset_dict = {k: v for k, v in opt_res_dict.items() if isinstance(v, DataSet)}
-        self.quantity_dict = QuantityDictClass(dataset_dict)
-
-        if opt_res_dict["result_type"] == "Regression":
-            active_parameters = model_params(opt_res_dict["model_name"])
+        if eval_result_data.result_type == "Regression":
+            active_parameters = model_params(eval_result_data.model_name)
             self.toggle_traits(active_parameters, group_filter=self.reg_result_grp_name)
-            self.toggle_traits([], group_filter=self.t_fit_res_grp_name)
-        elif opt_res_dict["result_type"] == "Transmission fit":
+        elif eval_result_data.result_type == "Transmission fit":
             self.toggle_traits([], group_filter=self.reg_result_grp_name)
-            self.toggle_traits(self.traits(group=self.t_fit_res_grp_name), group_filter=self.t_fit_res_grp_name)
 
         if not is_loading:
             self.result_carrier.result_ready.emit(self)

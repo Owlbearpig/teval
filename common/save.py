@@ -18,7 +18,7 @@ You should have received a copy of the GNU General Public License
 along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 """
 from common.components import ComponentBase
-from common.eval_component.quantity_set import DataSetDict as QuantityDictClass, DataSet
+from common.eval_component.quantity_set import QuantityDataSetDict as QuantityDictClass, QuantityDataSet
 from common.units import Q_
 from enum import Enum, unique
 from common.traits import ValueRange
@@ -47,14 +47,14 @@ test_result = {
     "timestamp": str(datetime.now().isoformat()),
 
     # --- Datasets ( Q_(x) ) ---
-    "delta_n": DataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "S"), axes_labels=["Frequency"]),
-    "delta_alpha": DataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "m"), axes_labels=["Frequency"]),
-    "n0": DataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "T"), data_label="Simple n", axes_labels=["Frequency"]),
-    "n": DataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "nm"), axes_labels=["Frequency"]),
-    "k": DataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "W"), axes_labels=["Frequency"]),
-    "alpha": DataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "1/cm"), axes_labels=["Frequency"]),
-    "t_mod": DataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "V"), axes_labels=["ABE"]),
-    "sam_mod": DataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "J")),
+    "delta_n": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "S"), axes_labels=["Frequency"]),
+    "delta_alpha": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "m"), axes_labels=["Frequency"]),
+    "n0": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "T"), data_label="Simple n", axes_labels=["Frequency"]),
+    "n": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "nm"), axes_labels=["Frequency"]),
+    "k": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "W"), axes_labels=["Frequency"]),
+    "alpha": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "1/cm"), axes_labels=["Frequency"]),
+    "t_mod": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "V"), axes_labels=["ABE"]),
+    "sam_mod": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "J")),
 }
 
 
@@ -68,16 +68,9 @@ def _getManipulatorValueInPreferredUnits(m):
     return val
 
 class ResultSaver(ComponentBase):
-    @unique
-    class Formats(Enum):
-        HDF5 = 0
-        Numpy = 1
-
-    extension = {Formats.HDF5: '.hdf5', Formats.Numpy: '.npz'}
 
     # base_path = PathTrait(default_value=result_dir, is_file=False, must_exist=False).tag(name="Path")
     base_path = Path(result_dir)
-    fileFormat = EnumTrait(Formats, Formats.HDF5).tag(name="File format")
 
     textFileWithHeaders = Bool(False).tag(name="Write header to text files")
     fileNameTemplate = Unicode('{date}-{name}-{result_type}',
@@ -143,35 +136,28 @@ class ResultSaver(ComponentBase):
                                                      name=self.mainFileName,
                                                      **manipValues,
                                                      **attributeValues)
-        formattedName += self.extension[self.fileFormat]
+        formattedName += ".hdf5"
         formattedName = formattedName.translate(self._fileNameTranslationTable)
 
         return str(save_path.joinpath(formattedName))
 
-    def _saveNumpy(self, eval_result):
-        fileName = self._getFileName()
-
-        attributes = {}
-        for k, v in eval_result.trait_values().items():
-            if isinstance(v, Q_):
-                attributes[f"{k}__QK__quantity_magnitude"] = v.magnitude
-                attributes[f"{k}__QK__quantity_units"] = '{:C}'.format(v.units)
-            elif isinstance(v, QuantityDictClass):
-                for key, dataset in v.items():
-                    attributes[f"{key}__DSK__data_units"] = '{:C}'.format(dataset.data.units)
-                    attributes[f"{key}__DSK__data_magnitude"] = dataset.data.magnitude
-                    for i, ax in enumerate(dataset.axes):
-                        attributes[f"{key}__DSK__axes_units_{i}"] = '{:C}'.format(ax.units)
-                        attributes[f"{key}__DSK__axes_magnitude_{i}"] = ax.magnitude
-            else:
-                attributes[k] = v
-
-        np.savez_compressed(fileName, **attributes, allow_pickle=False)
-
-        return fileName
-
     def _saveHDF5(self, eval_result):
         fileName = self._getFileName()
+
+        def quantity_dataset_to_hdf5group(q_dataset, hdf5_group):
+            dset = hdf5_group.create_dataset("data", data=q_dataset.data.magnitude)
+            dset.attrs["unit"] = "{:C}".format(q_dataset.data.units)
+            dset.attrs["data_label"] = q_dataset.data_label
+
+            axes_group = hdf5_group.create_group("axes")
+            for i, ax in enumerate(q_dataset.axes):
+                ax_subgroup = axes_group.create_group(f"axis_{i}")
+                dset = ax_subgroup.create_dataset("axis_dset", data=ax.magnitude)
+                dset.attrs["unit"] = "{:C}".format(ax.units)
+                try:
+                    dset.attrs["axis_label"] = q_dataset.axes_labels[i]
+                except IndexError:
+                    dset.attrs["axis_label"] = ""
 
         with h5py.File(fileName, "w") as f:
             scalar_group = f.create_group("scalars")
@@ -186,27 +172,21 @@ class ResultSaver(ComponentBase):
                 elif isinstance(v, Path):
                     dset = scalar_group.create_dataset(k, data=str(v))
                     dset.attrs["path_type"] = type(v).__name__
-                else:
+                elif isinstance(v, (str, float, int, bool)):
                     scalar_group[k] = v
 
-            qd_group = f.create_group("quantity_dict")
-            for key, dataset in eval_result.quantity_dict.items():
-                prefix = str(key)
-                dataset_group = qd_group.create_group(prefix)
-
-                dset = dataset_group.create_dataset("data", data=dataset.data.magnitude)
-                dset.attrs["unit"] = "{:C}".format(dataset.data.units)
-                dset.attrs["data_label"] = dataset.data_label
-
-                axes_group = dataset_group.create_group("axes")
-                for i, ax in enumerate(dataset.axes):
-                    ax_subgroup = axes_group.create_group(f"axis_{i}")
-                    dset = ax_subgroup.create_dataset("axis_dset", data=ax.magnitude)
-                    dset.attrs["unit"] = "{:C}".format(ax.units)
-                    try:
-                        dset.attrs["axis_label"] = dataset.axes_labels[i]
-                    except IndexError:
-                        dset.attrs["axis_label"] = ""
+            all_meas_optimization_results = eval_result.eval_result_data["optimization_results"]
+            for meas in all_meas_optimization_results:
+                opt_results = all_meas_optimization_results[meas]
+                meas_group = f.create_group(meas)
+                for opt_res_name in opt_results:
+                    if not isinstance(opt_results[opt_res_name], dict):
+                        continue
+                    opt_res_group = meas_group.create_group(opt_res_name)
+                    for key, item in opt_results[opt_res_name].items():
+                        quantity_dataset_group = opt_res_group.create_group(str(key))
+                        if isinstance(item, QuantityDataSet):
+                            quantity_dataset_to_hdf5group(item, quantity_dataset_group)
 
         return fileName
 
@@ -215,10 +195,6 @@ class ResultSaver(ComponentBase):
             logging.info("Data storage is disabled, not saving results.")
             return
 
-        filename = None
-        if self.fileFormat == self.Formats.HDF5:
-            filename = self._saveHDF5(eval_result)
-        elif self.fileFormat == self.Formats.Numpy:
-            filename = self._saveNumpy(eval_result)
+        # filename = self._saveHDF5(eval_result)
 
-        logging.info("Saved result as {}".format(filename))
+        # logging.info("Saved result as {}".format(filename))

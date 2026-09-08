@@ -20,8 +20,8 @@ along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 import typing as t
 
 import traitlets
-from common.eval_component.quantity_set import DataSetDict as DataSetDictClass
-from traitlets import TraitError, Undefined, TraitType, List, Float, Integer, Instance, HasTraits
+from common.eval_component.quantity_set import QuantityDataSetDict
+from traitlets import TraitError, Undefined, TraitType, List, Float, Integer, Instance, HasTraits, Unicode
 
 if float(traitlets.__version__[0]) <= 4:
     from traitlets import class_of
@@ -49,27 +49,14 @@ class TraitTypePatched(TraitType):
 
 class QuantityDict(TraitTypePatched):
 
-    default_value = DataSetDictClass()
+    default_value = QuantityDataSetDict()
     info_text = "Dict collection of datasets"
 
     def validate(self, obj, value):
-        if isinstance(value, DataSetDictClass):
+        if isinstance(value, QuantityDataSetDict):
             value.checkConsistency()
             return value
         self.error(obj, value)
-
-class TList(TraitTypePatched):
-    default_value = []
-    info_text = 'a list'
-
-    def __init__(self, default_value=Undefined,
-                 allow_none=None, **kwargs):
-        super().__init__(default_value=default_value,
-                         allow_none=allow_none,
-                         **kwargs)
-        self.selected_element = None
-
-
 
 class Path(TraitTypePatched):
 
@@ -97,14 +84,34 @@ class Path(TraitTypePatched):
                 raise TraitError("The path '%s' is not a directory" % value)
         return value
 
+class StrList(HasTraits):
+    items = List()
+    selected_item = Unicode(allow_none=True)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+class StrListSelection(TraitTypePatched):
+    default_value = StrList()
+    info_text = 'a list of strings'
+
+    def __init__(self, default_value=Undefined, allow_none=None, **kwargs):
+        super().__init__(default_value=default_value, allow_none=allow_none, **kwargs)
+
+
 class MultiPathClass(HasTraits):
     selected_paths = List()
 
     def __init__(self, root_path=None, selected_paths=None, shown_filenames=None, **kwargs):
         super().__init__(**kwargs)
         self.root_path = root_path if root_path else pathlib.Path()
-        self.selected_paths = selected_paths if selected_paths else []
         self.shown_filenames = shown_filenames if shown_filenames else []
+        self.selected_paths = self.filter_selected_paths(selected_paths) if selected_paths else []
+
+    def filter_selected_paths(self, paths):
+        if not self.shown_filenames:
+            return paths
+        return [p for p in paths if p.name in self.shown_filenames]
 
     def exists(self, obj, value):
         if not isinstance(value.root_path, pathlib.Path):

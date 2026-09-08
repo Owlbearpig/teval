@@ -309,6 +309,7 @@ class QuantityEnum(Enum):
     PeakCnt = QuantityFunc("Peak Cnt", domain=Domain.Time)
     ZeroCrossing = QuantityFunc("Zero Crossing", domain=Domain.Time, unit="ps")
     TimeOfFlight = QuantityFunc("Time of Flight", domain=Domain.Time, unit="ps")
+    ToFRefractiveIdx = QuantityFunc("Refractive index from tof", domain=Domain.Time)
     Transmission = QuantityFunc("Transmission", domain=Domain.Frequency)
     TransmissionAmp = QuantityFunc("Amplitude transmission", domain=Domain.Frequency)
     TransmissionPhase = QuantityFunc("Phase transmission", domain=Domain.Frequency, unit="rad")

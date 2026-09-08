@@ -694,13 +694,12 @@ class DataSetPlotter(ComponentBase):
         fignum = str(sel_quant) + fig_num_ext
         y_label = f"{sel_quant} ({sel_quant.unit})" if sel_quant.unit else f"{sel_quant}"
 
-        plt.figure(fignum)
+        fig = plt.figure(fignum)
         pos_labels = [f"({m.position[0]:.1f}, {m.position[1]:.1f})" for m in meas_list]
         plt.scatter(pos_labels, values)
         plt.xticks(rotation=45, ha='right')
         plt.ylabel(y_label)
-        plt.tight_layout()
-        plt.draw()
+        fig.set_tight_layout(True)
 
         self.plt_show()
 
@@ -770,7 +769,6 @@ class DataSetPlotter(ComponentBase):
             ax0.set_ylabel(f"{y_label} (Real part)")
             ax1.set_ylabel(f"{y_label} (Imag part)")
 
-        plt.draw()
         self.plt_show()
 
         logging.info(f"Plotted {sel_quant} for {len(plot_value_dict)} measurement(s)")
@@ -1400,7 +1398,7 @@ class DataSetPlotter(ComponentBase):
 
         if self.plot_settings.en_cbar_label:
             quant = self.selected_quantity.value
-            cbar_label = quant.label + " " + quant.unit
+            cbar_label = quant._label + " " + quant.unit
             cbar.set_label(cbar_label, rotation=270, labelpad=30)
 
         plt.connect('button_press_event', self.on_image_click)

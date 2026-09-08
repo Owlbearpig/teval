@@ -402,7 +402,7 @@ def avg_data_array(data_arr):
 
     if data_arr.ndim < 2:
         return data_arr
-    elif data_td.ndim == 2: # [m0,...,mn][y0,...,ym] -> [[y0,mean0,std0]...[ym,mean_m,std_m]]
+    elif data_arr.ndim == 2: # [m0,...,mn][y0,...,ym] -> [[y0,mean0,std0]...[ym,mean_m,std_m]]
         avg_std = np.stack(3*(data_arr[0], ), axis=1)
         avg_std[:, 1] = np.mean(data_arr[:, 1], axis=0)
         avg_std[:, 2] = _std(data_arr[:, 1], axis=0)

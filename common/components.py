@@ -119,14 +119,43 @@ class ComponentBase(HasTraits):
     def toggle_traits(self, active_traits, group_filter="", endswith_filter=""):
         ui_widget = getattr(self, "_ui_control_widget", None)
         if ui_widget and hasattr(ui_widget, "param_widgets"):
+            touched_boxes = set()
+
             for trait_name, widgets in ui_widget.param_widgets.items():
                 if trait_name.endswith(endswith_filter) and trait_name in self.traits(group=group_filter):
                     is_visible = (trait_name in active_traits)
-                    widgets[0].setVisible(is_visible)
+                    label_widget, field_widget = widgets
 
-                    if isinstance(widgets[1], QtWidgets.QLayout):
-                        for i in range(widgets[1].count()):
-                            w = widgets[1].itemAt(i).widget()
+                    if label_widget is not None:
+                        label_widget.setVisible(is_visible)
+
+                    if isinstance(field_widget, QtWidgets.QLayout):
+                        for i in range(field_widget.count()):
+                            w = field_widget.itemAt(i).widget()
                             if w: w.setVisible(is_visible)
                     else:
-                        widgets[1].setVisible(is_visible)
+                        field_widget.setVisible(is_visible)
+
+                    box = field_widget.parentWidget()
+                    if isinstance(box, QtWidgets.QGroupBox):
+                        touched_boxes.add(box)
+
+            for box in touched_boxes:
+                box.setVisible(self._group_box_has_visible_field(ui_widget, box))
+
+    @staticmethod
+    def _group_box_has_visible_field(ui_widget, box):
+        for trait_name, widgets in ui_widget.param_widgets.items():
+            label_widget, field_widget = widgets
+            if field_widget.parentWidget() is not box:
+                continue
+
+            if isinstance(field_widget, QtWidgets.QLayout):
+                for i in range(field_widget.count()):
+                    w = field_widget.itemAt(i).widget()
+                    if w and w.isVisibleTo(box):
+                        return True
+            elif field_widget.isVisibleTo(box):
+                return True
+
+        return False

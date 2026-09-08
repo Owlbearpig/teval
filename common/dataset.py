@@ -176,7 +176,7 @@ class DataSet(ComponentBase):
         self.cache = None
         self.sub_dataset = None
 
-        self.settings = settings
+        self.settings : Settings = settings
 
         self.measurement_selector = MeasurementSelection(self)
 
@@ -207,6 +207,7 @@ class DataSet(ComponentBase):
                     QuantityEnum.RefPhase: self.ref_phase, # 2D (N_meas, Freq_slice)
                     QuantityEnum.ZeroCrossing: self.get_zero_crossing, # 1D (N_meas)
                     QuantityEnum.TimeOfFlight: self.time_of_flight, # 1D (N_meas)
+                    QuantityEnum.ToFRefractiveIdx: self.tof_refractive_index, # 2D (N_meas, Freq_slice)
                     QuantityEnum.Transmission: self.transmission, # 2D (N_meas, Freq_slice)
                     QuantityEnum.TransmissionAmp: self.amplitude_transmission, # 2D (N_meas, Freq_slice)
                     QuantityEnum.TransmissionPhase: self.phase_difference, # 2D (N_meas, Freq_slice)
@@ -914,12 +915,27 @@ class DataSet(ComponentBase):
         return t
 
     def time_of_flight(self, meas_):
-        closest_ref = [self.measurement_selector.get_nearest_ref(m) for m in meas_]
+        closest_ref = self.measurement_selector.get_matching_refs(meas_)
 
         t_zero_ref = self.get_zero_crossing(closest_ref)
         t_zero_sam = self.get_zero_crossing(meas_)
 
-        return t_zero_ref - t_zero_sam
+        return  t_zero_sam - t_zero_ref
+
+    def tof_refractive_index(self, meas_):
+        ref_list = self.measurement_selector.get_matching_refs(meas_)
+        dt = self.delay_from_phase_slope(meas_, ref_list)
+        d = self.settings.eval_opt.d.magnitude
+        d = 1 if np.isclose(d, 0) else d
+
+        n_real = np.tile((dt * c_thz / d + 1)[:, None], (1, len(self.freq_axis)))
+
+        amp_sam, amp_ref = self.p2p(meas_), self.p2p(ref_list)
+
+        w = 2*np.pi*np.tile(self.freq_axis, (len(meas_), 1))
+        n_imag = (c_thz/(2*w*d)) * np.tile(np.log(amp_ref/amp_sam)[:, None], (1, len(self.freq_axis)))
+
+        return n_real + 1j*n_imag
 
     def conductivity(self, meas_):
         sub_properties = self.get_single_layer_properties()
@@ -1083,7 +1099,7 @@ if __name__ == '__main__':
 
     }
 
-    logging.basicConfig(level=self.logger.INFO)
+    # logging.basicConfig(level=self.logger.INFO)
     # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Thinfilm_solarcell")
     # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Laser_crystallized_Si")
     # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Wood/S1")

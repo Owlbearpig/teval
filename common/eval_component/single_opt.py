@@ -2,8 +2,12 @@ import numpy as np
 from common.eval_component.shgo import shgo
 import time
 from common.consts import c_thz
+from common.eval_component.eval_result import SingleResultData
+from common.units import Q_
+from common.eval_component.quantity_set import QuantityDataSet
+from datetime import datetime
 
-def optimize_transmission(d, shift, config_dict):
+def optimize_transmission(d, shift, config_dict) -> SingleResultData:
     freq_axis = config_dict["freq_axis"]
     n0 = config_dict["n_guess"]
     t_exp = config_dict["t_exp"]
@@ -12,16 +16,15 @@ def optimize_transmission(d, shift, config_dict):
     minimizer_kwargs = config_dict["minimizer_kwargs"]
     shgo_options = config_dict["shgo_options"]
 
-    time.sleep(1000/(min(500, d)))
-    opt_res = {"d": d, "shift": shift, "freq_axis": freq_axis, "n0": n0,}
+    time.sleep(100/(min(50, d)))
 
     model_kwargs_keys = ["d", "n_sub", "n1", "n4", "h", "nfp"]
     model_kwargs = {k: config_dict[k] for k in model_kwargs_keys if k in config_dict}
     model_kwargs["shift"] = shift
 
     gof = 0
-    n_opt_res_ = np.zeros_like((freq_axis, 3), dtype=complex)
-    n_opt_res_[:, 0] = freq_axis
+    convergence_results = np.zeros_like(freq_axis, dtype=bool)
+    n_opt_res_ = np.zeros_like(freq_axis, dtype=complex)
     for f_idx, freq in enumerate(freq_axis):
         def opt_fun(p):
             n = p[0] + 1j * p[1]
@@ -36,7 +39,7 @@ def optimize_transmission(d, shift, config_dict):
         conv, i_ = False, 0
         while not conv:
             i_ += 1
-            #"""
+            """
             shgo_opt_res_ = shgo(opt_fun,
                                  bounds=bounds,
                                  minimizer_kwargs=minimizer_kwargs,
@@ -46,9 +49,10 @@ def optimize_transmission(d, shift, config_dict):
             
             x = shgo_opt_res_.x
             gof += shgo_opt_res_.fun
-            #"""
-            #x = [1, 1]
-            n_opt_res_[f_idx, 1] = x[0] + 1j * x[1]
+            convergence_results[f_idx] = shgo_opt_res_.success
+            """
+            x = np.random.random(2)
+            n_opt_res_[f_idx] = x[0] + 1j * x[1]
 
             if f_idx == 0:
                 break
@@ -64,7 +68,7 @@ def optimize_transmission(d, shift, config_dict):
 
                 bounds = [(min(n_bounds), max(n_bounds)), (min(k_bounds), max(k_bounds))]
             if i_ > 4:
-                n_prev = n_opt_res_[f_idx - 1, 1]
+                n_prev = n_opt_res_[f_idx - 1]
                 c0, c1 = 0.90 + i_ * 0.01, 1.10 - i_ * 0.01
                 n_bounds = (n_prev.real * c0, n_prev.real * c1)
                 k_bounds = (n_prev.imag * c0, n_prev.imag * c1)
@@ -73,10 +77,27 @@ def optimize_transmission(d, shift, config_dict):
             if i_ > 5:
                 break
 
-    alpha_ = freq_axis * 4 * np.pi * n_opt_res_[:, 1].imag / (1e-4 * c_thz)
-    alpha_ = np.stack((freq_axis, alpha_, np.zeros_like(alpha_)), axis=1)
+    alpha_ = freq_axis * 4 * np.pi * n_opt_res_.imag / (1e-4 * c_thz)
 
-    opt_res.update({"gof": gof / len(freq_axis), "n": n_opt_res_, "alpha": alpha_})
+    result_data = SingleResultData()
+    result_data.d = Q_(d, "µm")
+    result_data.shift = Q_(shift, "µm")
+    result_data.freq_axis = Q_(freq_axis, "THz")
+    result_data.optimization_info["gof"] = Q_(gof / len(freq_axis), "")
+    result_data.optimization_info["converged"] = np.all(convergence_results)
+    result_data.optimization_info["timestamp"] = str(datetime.now().isoformat())
+    result_data.datasets["n0"] = QuantityDataSet(axes=[Q_(freq_axis, "THz")],
+                                                 data=Q_(n0[:, 1], ""),
+                                                 axes_labels=["Frequency"],
+                                                 data_label="Refractive index")
+    result_data.datasets["n"] = QuantityDataSet(axes=[Q_(freq_axis, "THz")],
+                                                data=Q_(n_opt_res_, ""),
+                                                axes_labels=["Frequency"],
+                                                data_label="Refractive index")
+    result_data.datasets["alpha"] = QuantityDataSet(axes=[Q_(freq_axis, "THz")],
+                                                data=Q_(alpha_, "1/cm"),
+                                                axes_labels=["Frequency"],
+                                                data_label="Absorption coefficient")
 
-    return opt_res
+    return result_data
 

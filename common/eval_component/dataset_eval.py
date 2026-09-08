@@ -10,7 +10,7 @@ import numpy as np
 import logging
 from common.consts import eps0_thz
 from common.eval_component.q_space_eval import QSpaceEval
-from common.eval_component.quantity_set import DataSet as SingleQuantityDataSet
+from common.eval_component.quantity_set import QuantityDataSet
 from enum import Enum, member
 from common.eval_component.conductivity_models import RegressionModels, model_params
 from common.traits import Quantity, Q_, ValueRange, Path as TPath
@@ -25,10 +25,22 @@ from common.eval_component.eval_result import EvalResult
 from concurrent.futures import ThreadPoolExecutor
 from PySide6.QtCore import QObject, Signal
 
+# testing
+p = Path(r"/media/storage/ArchivedData/Conductivity/Furtwangen/Vanadium Oxide/img0")
+p = p / r"2025-01-30T18-06-22.711457-20avg-ref-X_15.000 mm-Y_-10.000 mm.txt"
+from itertools import product
+from datetime import datetime
+from common.measurements import Measurement
+
+# testing
+
+
 action = partial(action, check_init=True)
+
 
 class ProgressSignalCarrier(QObject):
     progress_changed = Signal(float)
+
 
 def abs_cost_fun(y_meas, y_mod):
     abs_diff = (np.abs(y_meas[:, 1]) - np.abs(y_mod)) ** 2
@@ -45,6 +57,7 @@ def phi_cost_fun(y_meas, y_mod):
 def combined_cost_fun(y_meas, y_mod):
     return abs_cost_fun(y_meas, y_mod) + phi_cost_fun(y_meas, y_mod)
 
+
 class TransmissionModels(Enum):
     tmm_1layer = member(t_tmm_model_1layer)
     tmm_2layer = member(t_tmm_model_2layer)
@@ -52,18 +65,20 @@ class TransmissionModels(Enum):
     model_2layer = member(model_2layer)
     t_model_2layer = member(_t_model_2layer)
 
+
 class CostFunctions(Enum):
     abs_cost = member(abs_cost_fun)
     phi_cost = member(phi_cost_fun)
     combined_cost = member(combined_cost_fun)
+
 
 class DataSetType(Enum):
     Main = "main"
     Sub = "sub"
     Other = "other"
 
-class DatasetEval(ComponentBase):
 
+class DatasetEval(ComponentBase):
     selected_cost_fun = TEnum(CostFunctions, default_value=CostFunctions.abs_cost,
                               help="Model to experimental data metric").tag(name="Selected cost function")
     selected_result_path = TPath(Path("")).tag(name="Load result")
@@ -98,16 +113,69 @@ class DatasetEval(ComponentBase):
     normalize_q_vals = Bool(True, group=t_fit_grp_name).tag(name="Normalize q-vals")
 
     current_result = Instance(EvalResult)
-    selected_substrate_result = Instance(EvalResult)
+    # selected_substrate_result = Instance(EvalResult)
     result_saver = Instance(ResultSaver)
 
-    def __init__(self, dataset: DataSet, dataset_sub: DataSet=None, **kwargs):
+    # testing
+    def test(self):
+        def opt_res(task, m):
+            d, shift = task
+            freq_axis = Q_(np.linspace(0.5, 2, 4000), "THz")
+            ret = {"d": Q_(d, "µm"),
+                   "shift": Q_(shift, "fs"),
+                   "q_val": Q_(np.random.random(), ""),
+                   "gof": Q_(np.random.random(), ""),
+                   "converged": True,
+
+                   # Strings
+                   "timestamp": str(datetime.now().isoformat()),
+                   "measurement": str(m),
+
+                   # Datasets ( Q_(x) )
+                   "n0": QuantityDataSet(axes=[freq_axis],
+                                         data=Q_(np.random.random(freq_axis.shape[0]), ""),
+                                         data_label="Simple n",
+                                         axes_labels=["Frequency"]),
+                   "alpha": QuantityDataSet(axes=[freq_axis],
+                                            data=Q_(np.random.random(freq_axis.shape[0]), "1/cm"),
+                                            data_label="Absorption",
+                                            axes_labels=["Frequency"]),
+                   "t_exp": QuantityDataSet(axes=[freq_axis],
+                                            data=Q_(np.random.random(freq_axis.shape[0]), ""),
+                                            data_label="Measured t",
+                                            axes_labels=["Frequency"]),
+                   }
+            return ret
+
+        thicknesses = [100, 200, 300, 400, 500, 600]
+        shifts = [-0.5, 0, 1.5]
+        meas_list = ["Average", Measurement(p).filepath.name]
+        all_measurement_results = {
+            "result_type": "Transmission fit",
+            "dataset_path": self.dataset.data_path,
+            "measurement_names": meas_list,
+            "model_name": "tmm_1layer",
+            "measurement_quantity": "Transmission",
+            "optimization_results": {},
+        }
+        for i, meas in enumerate(meas_list):
+            thicknesses = [d + i for d in thicknesses]
+            shifts = [s + 10 * i for s in shifts]
+            tasks = product(thicknesses, shifts)
+            parsed_opt_res_dict = {f"({task[0]}, {task[1]})": opt_res(task, meas) for task in tasks}
+            parsed_opt_res_dict["thicknesses"] = thicknesses
+            parsed_opt_res_dict["shifts"] = shifts
+            all_measurement_results["optimization_results"][meas] = parsed_opt_res_dict
+
+        return all_measurement_results
+
+    def __init__(self, dataset: DataSet, dataset_sub: DataSet = None, **kwargs):
         super().__init__(**kwargs)
         self.dataset = dataset
         self.dataset.link_sub_dataset(dataset_sub)
 
         self.current_result = EvalResult(object_name="Current result")
-        self.selected_substrate_result = EvalResult(object_name="Substrate result")
+        # self.selected_substrate_result = EvalResult(object_name="Substrate result")
 
         self.result_saver = self.setup_saver()
 
@@ -121,11 +189,11 @@ class DatasetEval(ComponentBase):
         if self.settings is not None:
             self.settings.load_configuration(self)
         return self
-    
+
     @property
     def settings(self):
         return self.dataset.settings
-    
+
     @property
     def freq_axis(self):
         f_axis = self.dataset.freq_axis[self.f_idx]
@@ -154,9 +222,7 @@ class DatasetEval(ComponentBase):
         y_sub = y_meas[:, self.f_idx]
 
         freq_grid = np.tile(self.freq_axis, (y_sub.shape[0], 1))
-
         y_meas_stacked = np.stack((freq_grid, y_sub, np.zeros_like(y_sub)), axis=2)
-
         return format_meas_dict(meas_list, y_meas_stacked, self.only_eval_avg)
 
     @property
@@ -281,7 +347,7 @@ class DatasetEval(ComponentBase):
 
         if self.is_two_layer_t_model():
             model_kwargs["h"] = self.settings.eval_opt.d_film.magnitude
-            substrate_result = self.selected_substrate_result.quantity_dict
+            substrate_result = self.selected_substrate_result.dataset_dict
             try:
                 n_sub_real_dataset = substrate_result["n"]
                 n_sug_imag_dataset = substrate_result["k"]
@@ -321,33 +387,37 @@ class DatasetEval(ComponentBase):
         unit = opt_conf["meas_quantity"].value.unit
         y_meas_data = opt_conf["y_meas_dict"][meas_id][:, 1]
 
-        opt_res_dict["y_meas"] = SingleQuantityDataSet(axes=[freq_axis],
-                                                       data=Q_(y_meas_data, unit),
-                                                       axes_labels=["Frequency"],
-                                                       data_label=opt_conf["meas_quantity"].name)
-        opt_res_dict["y_mod"] = SingleQuantityDataSet(axes=[freq_axis],
-                                                      data=Q_(opt_conf["model"](*x), unit),
-                                                      axes_labels=["Frequency"],
-                                                      data_label=opt_conf["meas_quantity"].name)
+        opt_res_dict["y_meas"] = QuantityDataSet(axes=[freq_axis],
+                                                 data=Q_(y_meas_data, unit),
+                                                 axes_labels=["Frequency"],
+                                                 data_label=opt_conf["meas_quantity"].name)
+        opt_res_dict["y_mod"] = QuantityDataSet(axes=[freq_axis],
+                                                data=Q_(opt_conf["model"](*x), unit),
+                                                axes_labels=["Frequency"],
+                                                data_label=opt_conf["meas_quantity"].name)
 
         return opt_res_dict
 
     @action("Fit regression model", group=reg_grp_name)
     def perform_regression(self):
+        if self.dataset.measurement_selector.selected_sam_cnt == "0":
+            logging.warning("No measurements selected")
+            return
         opt_conf = self._opt_conf
         shgo_options = self.settings.shgo_options
+
         def bg_worker(meas_id):
             try:
                 min_kwargs = shgo_options.minimizer_kwargs.traits(group=MinimizerOptions.minimizer_opt_grp)
                 min_kwargs["method"] = str(shgo_options.minimizer_kwargs.method.value)
 
                 shgo_opt_res = shgo(func=opt_conf["opt_func_dict"][meas_id],
-                                bounds=opt_conf["bounds"],
-                                n=shgo_options.n,
-                                iters=shgo_options.iters,
-                                minimizer_kwargs=min_kwargs,
-                                options=shgo_options.get_shgo_options(),
-                                )
+                                    bounds=opt_conf["bounds"],
+                                    n=shgo_options.n,
+                                    iters=shgo_options.iters,
+                                    minimizer_kwargs=min_kwargs,
+                                    options=shgo_options.get_shgo_options(),
+                                    )
                 logging.info(f"Fit result {meas_id}: {shgo_opt_res}")
 
                 reg_res = self.prepare_regression_result(shgo_opt_res, opt_conf, meas_id)
@@ -363,23 +433,25 @@ class DatasetEval(ComponentBase):
 
     @action("Fit transmission model", group=t_fit_grp_name)
     def fit_unknown_layer(self):
-        try:
-            progress_carrier = ProgressSignalCarrier()
-            progress_carrier.progress_changed.connect(self.update_progress)
+        if self.dataset.measurement_selector.selected_sam_cnt == "0":
+            logging.warning("No measurements selected")
+            return
+        progress_carrier = ProgressSignalCarrier()
+        progress_carrier.progress_changed.connect(self.update_progress)
 
-            def bg_worker():
+        def bg_worker():
+            try:
                 qs_eval = QSpaceEval(self)
-                qs_res_dict = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
+                qs_eval_data = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
 
-                print(qs_res_dict.keys())
-                self.current_result.result_carrier.received_result.emit(qs_res_dict)
-            executor = ThreadPoolExecutor(max_workers=1)
-            executor.submit(bg_worker)
-        except Exception as e:
-            traceback.print_exc()
+                self.current_result.result_carrier.received_result.emit(qs_eval_data)
+            except Exception as e:
+                traceback.print_exc()
+        executor = ThreadPoolExecutor(max_workers=1)
+        executor.submit(bg_worker)
+
+
 
 if __name__ == "__main__":
 
     print(RegressionModels.drude.name)
-
-

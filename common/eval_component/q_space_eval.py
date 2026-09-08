@@ -2,12 +2,14 @@ import logging
 import traceback
 import numpy as np
 import scipy
-from common.dataset import format_meas_dict
+from common.dataset import format_meas_dict, DataSet
 from common.default_appsettings import SimRISelection, AppSettings, Domain
 from common.functions import f_axis_idx_map, moving_average, do_ifft, to_db, avg_data_array
 from common.eval_component.transfer_functions import model_1layer, transferfunction_error, dtdn, dtdd
-from common.eval_component.quantity_set import DataSet
+from common.eval_component.quantity_set import QuantityDataSet
+from common.eval_component.eval_result import EvalResultData, SingleResultData
 from common.units import Q_
+from common.measurements import Measurement
 from common.consts import c_thz
 from scipy.optimize import shgo
 from scipy.signal import iirnotch, filtfilt, detrend
@@ -15,7 +17,6 @@ from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from common.eval_component.single_opt import optimize_transmission
 from datetime import datetime
-
 
 class QSpaceEval:
 
@@ -29,8 +30,8 @@ class QSpaceEval:
         self.opt_state = {}
 
     def reset_opt_state(self):
-        self.opt_state["d"] = self.settings.eval_opt.d.magnitude
-        self.opt_state["shift"] = 0
+        self.opt_state["d"] = self.settings.eval_opt.d
+        self.opt_state["shift"] = Q_(0, "fs")
         self.opt_state["q_min"] = np.inf
 
     @property
@@ -67,19 +68,18 @@ class QSpaceEval:
         return format_meas_dict(meas_list, t_exp_stacked, self.dataset_eval.only_eval_avg)
 
     @property
-    def n_guess_dict(self):
-        window_eval_res = self.dataset_eval.dataset.get_single_layer_properties()
-        meas_list = window_eval_res.meas_list
-        n_guess = window_eval_res.refr_idx
+    def n_guess(self):
+        meas_list = self.selected_measurements
+        ref_idx = self.dataset_eval.dataset.tof_refractive_index(meas_list)
 
         f_axis_tile = np.tile(self.freq_axis, (len(meas_list), 1))
-        arrays = (f_axis_tile, n_guess[:, self.freq_idx], np.zeros_like(f_axis_tile))
-        n_guess_stacked = np.stack(arrays, axis=2)
+        arrays = (f_axis_tile, ref_idx[:, self.freq_idx], np.zeros_like(f_axis_tile))
+        ref_idx_stacked = np.stack(arrays, axis=2)
 
-        return format_meas_dict(meas_list, n_guess_stacked, self.dataset_eval.only_eval_avg)
+        return format_meas_dict(meas_list, ref_idx_stacked, self.dataset_eval.only_eval_avg)
 
-
-    def calc_uncertainties(self, opt_res, meas_list):
+    def calc_uncertainties(self, opt_res: SingleResultData, meas_list):
+        meas_list = [meas for meas in meas_list if meas != "Average"]
         ref_list = self.dataset_eval.dataset.measurement_selector.get_matching_refs(meas_list)
 
         sam_fd = self.dataset_eval.dataset.get_multi_data(meas_list, Domain.Frequency)
@@ -105,7 +105,7 @@ class QSpaceEval:
         f_axis = self.freq_axis
         w = 2 * np.pi * f_axis
 
-        n, d = opt_res["n"][:, 1], opt_res["d"]
+        n, d = opt_res.datasets["n"].data.magnitude, opt_res.d.magnitude
         """
         dtdn_ = dtdn(n, d, f_axis)
         dtdd_ = dtdd(n, d, f_axis)
@@ -127,27 +127,26 @@ class QSpaceEval:
         delta_n_term1 = delta_phi * c_thz / (w * d)
         delta_n_term2 = delta_d * (-phi * c_thz) / (w * d ** 2)
 
-        opt_res["alpha"][:, 2] = np.abs(4 * np.pi * f_axis * delta_k / (1e-4 * c_thz))
-        opt_res["n"][:, 2] = np.sqrt(np.abs(delta_n_term1) ** 2 + np.abs(delta_n_term2) ** 2) + 1j * delta_k
+        opt_res.datasets["alpha"].uncert = Q_(np.abs(4 * np.pi * f_axis * delta_k / (1e-4 * c_thz)), "1/cm")
+        opt_res.datasets["n"].uncert = Q_(np.sqrt(np.abs(delta_n_term1) ** 2 + np.abs(delta_n_term2) ** 2)
+                                          + 1j * delta_k, "")
 
-        return opt_res
-
-    def calc_q_val(self, opt_res_):
+    def calc_q_val(self, res_data: SingleResultData):
         q_space_range = self.settings.eval_opt.q_space_range
-        q_space_idx_range = f_axis_idx_map(opt_res_["freq_axis"], q_space_range)
+        freq_axis = res_data.freq_axis.magnitude
+        q_space_idx_range = f_axis_idx_map(freq_axis, q_space_range)
 
-        dt = np.mean(np.diff(opt_res_["freq_axis"][q_space_idx_range]))
+        dt = np.mean(np.diff(freq_axis[q_space_idx_range]))
         # y = opt_res_["n"][q_space_idx_range]
-        y = opt_res_["n"][q_space_idx_range, 1].imag
+        y = res_data.datasets["n"].data.magnitude[q_space_idx_range].imag
         y = y - np.mean(y)
 
         y = detrend(y, type="linear")
 
-        y = np.array([opt_res_["freq_axis"][q_space_idx_range], y]).T
+        # y = np.array([freq_axis[q_space_idx_range], y]).T
         # y = window(y, win_width=len(y), win_start=0, shift=40, en_plot=True, type=WindowTypes.hann)
-
-        y = y[:, 1]
-
+        # y = y[:, 1]
+        og_len = len(y)
         y = np.concatenate([np.zeros(3 * len(y)), y, np.zeros(3 * len(y))])
 
         y_ft = np.fft.rfft(y)
@@ -172,18 +171,22 @@ class QSpaceEval:
         # plt.figure("TESTFFT")
         # plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
 
-        fs = 1 / np.mean(np.diff(self.freq_axis))
-        Q = 0.5  # quality factor: higher = narrower
+        fs = 1 / np.mean(np.diff(freq_axis))
+        qual_factor = 0.5  # quality factor: higher = narrower
 
         peak_freq = t_axis[t0:t1][peak_idx]
         # print(peak_freq, fs)
-        b, a = iirnotch(peak_freq / (fs / 2), Q)
+        b, a = iirnotch(peak_freq / (fs / 2), qual_factor)
 
         y_filtered = filtfilt(b, a, y)
+        q_val = Q_(q_val, "")
 
-        return {"q_val": q_val, "q_sum": q_sum, "q_y": y_filtered}
+        res_data.optimization_info["q_val"] = q_val
+        res_data.optimization_info["q_sum"] = Q_(q_sum, "")
 
-    def q_space_eval_mp(self, progress_carrier=None):
+        return q_val
+
+    def q_space_eval_mp(self, progress_carrier=None) -> EvalResultData:
         t_model_kwargs = self.dataset_eval.get_t_model_kwargs()
 
         shift_axis = [*np.arange(-0, 3, 1.0)]
@@ -192,18 +195,19 @@ class QSpaceEval:
         sas = (5, 20) # smoothing avg settings
         is_iterative = not self.dataset_eval.use_custom_d_opt_axis
         ref_fd_dict = self.ref_fd_dict
-
+        ref_sam_map = self.dataset_eval.dataset.measurement_selector.sam_ref_meas_map
         t_exp_dict = self.t_exp_dict
+        n_guess = self.n_guess
         meas_list = list(t_exp_dict.keys())
         opt_config_base = {
             "freq_axis": self.freq_axis,
-            "n_guess": self.n_guess_dict["Average"],
             "transmission_model": self.transmission_model.value,
             "cost_fun": self.cost_fun,
-            "minimizer_kwargs": self.dataset_eval.shgo_options.get_minimizer_kwargs(),
-            "shgo_options": self.dataset_eval.shgo_options.get_shgo_options()
+            "minimizer_kwargs": self.settings.shgo_options.get_minimizer_kwargs(),
+            "shgo_options": self.settings.shgo_options.get_shgo_options()
         }
-        opt_configs = {meas: {**opt_config_base, "t_exp": t_exp_dict[meas]} for meas in meas_list}
+        opt_configs = {meas: {**opt_config_base, "n_guess": n_guess[meas],
+                              "t_exp": t_exp_dict[meas]} for meas in meas_list}
 
         def get_new_tasks():
             tasks = []
@@ -237,77 +241,87 @@ class QSpaceEval:
                 total_tasks = len(futures)
 
                 for fut_idx, future in enumerate(futures):
-                    res = future.result()
+                    res: SingleResultData = future.result()
 
                     completed_tasks = fut_idx + 1
                     percentage = (completed_tasks / total_tasks) * 100
 
                     progress_str = f"Processed task {completed_tasks}/{total_tasks} ({percentage:.1f}%)"
                     logging.info(progress_str)
-                    info_str = f"Finished optimizing thickness {np.round(res['d'], 2)} µm "
-                    info_str += f"with a shift of {res['shift']} fs"
+                    info_str = f"Finished optimizing thickness {np.round(res.d, 2)} "
+                    info_str += f"with a shift of {res.shift}"
                     logging.info(info_str)
 
                     if progress_carrier is not None:
                         progress_carrier.progress_changed.emit(percentage/100)
 
-                    q_val_calc_res = self.calc_q_val(res)
-                    res.update(q_val_calc_res)
-
-                    q_val = q_val_calc_res["q_val"]
+                    q_val = self.calc_q_val(res)
                     if q_val < self.opt_state["q_min"]:
-                        self.opt_state["d"] = res["d"]
-                        self.opt_state["shift"] = res["shift"]
+                        self.opt_state["d"] = res.d
+                        self.opt_state["shift"] = res.shift
                         self.opt_state["q_min"] = q_val
 
                     results.append(res)
 
-            results = sorted(results, key=lambda res_: res_["d"])
+            results = sorted(results, key=lambda res_: res_.d)
 
             return results
 
-        all_measurement_results = {
-            "result_type": "Transmission fit",
-            "measurements": meas_list,
-            "model_name": self.transmission_model.name,
-            "measurement_quantity": "Transmission",
-            "optimization_results": {},
-        }
+        meas_to_str = lambda meas: meas.filepath.name if isinstance(meas, Measurement) else str(meas)
+        meas_names = {meas: meas_to_str(meas) for meas in meas_list}
+
+        eval_result_data = EvalResultData()
+        eval_result_data.result_type = "Transmission fit"
+        eval_result_data.dataset_path = self.dataset_eval.dataset.data_path
+        eval_result_data.measurement_names = list(meas_names.values())
+        eval_result_data.model_name = self.transmission_model.name
+        eval_result_data.measurement_quantity = "Transmission"
+
         for meas in meas_list:
+            ref_meas = ref_sam_map(meas)
             self.reset_opt_state()
 
-            opt_results = []
+            opt_results: list[SingleResultData] = []
             for i in range(max(1, iterations)):
                 it_prog = (i, iterations) if is_iterative else None
                 new_tasks = get_new_tasks()
-                task_results = process_tasks(new_tasks, opt_configs[meas], iteration_progress=it_prog)
-                opt_results.extend(task_results)
+                opt_results.extend(process_tasks(new_tasks, opt_configs[meas], iteration_progress=it_prog))
                 if not is_iterative:
                     break
 
             for opt_res in opt_results:
-                opt_res["measurement"] = meas
+                opt_res.measurement = meas_to_str(meas)
                 if meas == "Average":
-                    opt_res = self.calc_uncertainties(opt_res, meas_list)
+                    self.calc_uncertainties(opt_res, meas_list)
 
-                t_model_kwargs["shift"] = opt_res["shift"]
-                t_model_kwargs["d"] = opt_res["d"]
+                t_model_kwargs["shift"] = opt_res.shift.magnitude
+                t_model_kwargs["d"] = opt_res.d.magnitude
 
-                t_mod_ = self.transmission_model.value(self.freq_axis, opt_res["n"][:, 1], **t_model_kwargs)
-
-                opt_res["t_mod"] = t_mod_
-                opt_res["sam_mod"] = ref_fd_dict[meas][:, 1] * t_mod_
+                t_mod_ = self.transmission_model.value(opt_res.freq_axis.magnitude,
+                                                       opt_res.datasets["n"].data.magnitude,
+                                                       **t_model_kwargs)
+                sam_mod_db = to_db(ref_fd_dict[ref_meas][:, 1] * t_mod_)
+                opt_res.datasets["t_mod"] = QuantityDataSet(axes=[opt_res.freq_axis],
+                                                            data=Q_(t_mod_, ""),
+                                                            axes_labels=["Frequency"],
+                                                            data_label="Transmission coefficient model")
+                opt_res.datasets["sam_mod"] = QuantityDataSet(axes=[opt_res.freq_axis],
+                                                              data=Q_(sam_mod_db, "dB"),
+                                                              axes_labels=["Frequency"],
+                                                              data_label="Sample spectrum")
 
                 if self.dataset_eval.add_sim_to_res:
-                    opt_res["sim_res"] = self.calc_sim(t_model_kwargs, ref_fd_dict[meas])
+                    opt_res.datasets.update(self.calc_sim(t_model_kwargs, ref_fd_dict[ref_meas]))
 
                 smoothed_quantities = ["n", "alpha"]
                 for q in smoothed_quantities:
-                    opt_res[q] = moving_average(opt_res[q], *sas)
+                    if q in opt_res.datasets:
+                        smoothed_data = moving_average(opt_res.datasets[q].data.magnitude, *sas)
+                        opt_res.datasets[q].data = Q_(smoothed_data, opt_res.datasets[q].data.units)
 
-            all_measurement_results["optimization_results"][meas] = self.prepare_results(opt_results)
+            eval_result_data.results.extend(self.prepare_results(opt_results))
 
-        return all_measurement_results
+        return eval_result_data
 
     def calc_sim(self, model_kwargs, ref_fd):
         model = self.transmission_model.value
@@ -345,55 +359,18 @@ class QSpaceEval:
 
         freq_axis_quant = Q_(freq_axis, "THz")
         time_axis_quant = Q_(sam_sim_td[:, 0], "ps")
-        sim_res = {"t_sim": DataSet(axes=[freq_axis_quant], data=Q_(t_sim, "")),
-                   "sam_sim_fd": DataSet(axes=[freq_axis_quant], data=Q_(to_db(sam_sim_fd[:, 1]), "dB")),
-                   "sam_sim_td": DataSet(axes=[time_axis_quant], data=Q_(sam_sim_td[:, 1], ""))
+        sim_res = {"t_sim": QuantityDataSet(axes=[freq_axis_quant], data=Q_(t_sim, "")),
+                   "sam_sim_fd": QuantityDataSet(axes=[freq_axis_quant], data=Q_(to_db(sam_sim_fd[:, 1]), "dB")),
+                   "sam_sim_td": QuantityDataSet(axes=[time_axis_quant], data=Q_(sam_sim_td[:, 1], ""))
                    }
 
         return sim_res
 
-    def prepare_results(self, opt_results):
+    def prepare_results(self, opt_results: list[SingleResultData]):
         norm_q_vals = self.dataset_eval.normalize_q_vals
-        q_vals = np.array([res["q_val"] for res in opt_results])
-
-        parsed_opt_results = {}
+        q_vals = [opt_res.optimization_info["q_val"] for opt_res in opt_results]
         for opt_res in opt_results:
-            rd = opt_res
+            q_val = opt_res.optimization_info["q_val"]
+            opt_res.optimization_info["q_val"] = q_val / np.max(q_vals) if norm_q_vals else q_val
 
-            freq_axis = Q_(rd["freq_axis"], "THz")
-            parsed_opt_res = {
-                # Scalars
-                "d": Q_(rd["d"], "µm"),
-                "shift": Q_(rd["shift"], "fs"),
-                "q_val": Q_(rd["q_val"] / np.max(q_vals), "") if norm_q_vals else Q_(rd["q_val"], ""),
-                "gof": Q_(rd["gof"], ""),
-                "converged": True,
-
-                # Strings
-                "timestamp": str(datetime.now().isoformat()),
-                "measurement": str(rd["measurement"]),
-
-                # Datasets ( Q_(x) )
-                "n0": DataSet(axes=[freq_axis],
-                              data=Q_(rd["n0"][:, 1], ""),
-                              data_label="Simple n",
-                              axes_labels=["Frequency"]),
-                "n": DataSet(axes=[freq_axis], data=Q_(rd["n"][:, 1], ""),
-                             uncert=Q_(rd["n"][:, 2], ""),
-                             axes_labels=["Frequency"]),
-                "alpha": DataSet(axes=[freq_axis],
-                                 data=Q_(rd["alpha"][:, 1], "1/cm"),
-                                 uncert=Q_(rd["alpha"][:, 2], "1/cm"),
-                                 axes_labels=["Frequency"]),
-                "t_mod": DataSet(axes=[freq_axis],
-                                 data=Q_(rd["t_mod"], ""),
-                                 axes_labels=["ABE"]),
-                "sam_mod": DataSet(axes=[freq_axis],
-                                   data=Q_(to_db(rd["sam_mod"]), "dB")),
-            }
-            if "sim_res" in rd:
-                parsed_opt_res.update({k: v for k, v in rd["sim_res"].items()})
-
-            parsed_opt_results[(rd["d"], rd["shift"])] = parsed_opt_res
-
-        return parsed_opt_results
+        return opt_results
