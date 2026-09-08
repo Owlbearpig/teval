@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Any
 from functools import partial
 from mpl_settings import mpl_style_params
+import logging
 
 action = partial(action, rc_params=mpl_style_params)
 
@@ -173,58 +174,75 @@ class EvalResult(ComponentBase):
 
         self.parse_eval_result_data(res_dict, is_loading=True)
 
-    def parse_hdf5(self, res_path):
+        logging.info(f"Loaded {res_path}")
+
+    def parse_hdf5(self, res_path) -> EvalResultData:
+        def read_quantity(group, name):
+            if name in group:
+                dset = group[name]
+                unit = dset.attrs.get("unit", "")
+                return Q_(dset[()], unit)
+            return None
+
+        def hdf5group_to_quantity_dataset(hdf5_group):
+            data_dset = hdf5_group["data"]
+            data_q = Q_(data_dset[()], data_dset.attrs.get("unit", ""))
+            data_label = data_dset.attrs.get("data_label", "")
+
+            axes_q, axes_labels = [], []
+            axes_group = hdf5_group["axes"]
+            i = 0
+            while f"axis_{i}" in axes_group:
+                ax_dset = axes_group[f"axis_{i}"]["axis_dset"]
+                axes_q.append(Q_(ax_dset[()], ax_dset.attrs.get("unit", "")))
+                axes_labels.append(ax_dset.attrs.get("axis_label", ""))
+                i += 1
+
+            return QuantityDataSet(
+                data=data_q,
+                axes=axes_q,
+                data_label=data_label,
+                axes_labels=axes_labels
+            )
+
         with h5py.File(res_path, "r") as f:
-            parsed_result_dict = {}
+            eval_data = EvalResultData(
+                result_type=f.attrs.get("result_type", ""),
+                dataset_path=Path(f.attrs.get("dataset_path", ".")),
+                model_name=f.attrs.get("model_name", ""),
+                measurement_quantity=f.attrs.get("measurement_quantity", ""),
+                measurement_names=list(f.attrs.get("measurement_names", []))
+            )
 
-            if "scalars" in f:
-                for k in f["scalars"].keys():
-                    dset = f["scalars"][k]
-                    val = dset[()]
+            results_grp = f.get("results", {})
+            for res_key in results_grp.keys():
+                res_subgroup = results_grp[res_key]
+                single_res = SingleResultData(
+                    measurement=res_subgroup.attrs.get("measurement", ""),
+                    d=read_quantity(res_subgroup, "d"),
+                    shift=read_quantity(res_subgroup, "shift"),
+                    freq_axis=read_quantity(res_subgroup, "freq_axis")
+                )
 
-                    if isinstance(val, bytes):
-                        val = val.decode("utf-8")
+                reg_grp = res_subgroup.get("regression_params", {})
+                for k in reg_grp.keys():
+                    single_res.regression_params[k] = read_quantity(reg_grp, k)
+                for k, v in reg_grp.attrs.items():
+                    single_res.regression_params[k] = v
 
-                    if "unit" in dset.attrs:
-                        unit_str = dset.attrs["unit"]
-                        if isinstance(unit_str, bytes):
-                            unit_str = unit_str.decode("utf-8")
+                opt_grp = res_subgroup.get("optimization_info", {})
+                for k in opt_grp.keys():
+                    single_res.optimization_info[k] = read_quantity(opt_grp, k)
+                for k, v in opt_grp.attrs.items():
+                    single_res.optimization_info[k] = v
 
-                        val = Q_(val, unit_str)
-                    if "path_type" in dset.attrs:
-                        val = Path(val)
+                ds_grp = res_subgroup.get("datasets", {})
+                for ds_name in ds_grp.keys():
+                    single_res.datasets[ds_name] = hdf5group_to_quantity_dataset(ds_grp[ds_name])
 
-                    parsed_result_dict[k] = val
+                eval_data.results.append(single_res)
 
-            if "quantity_dict" in f:
-                qd_group = f["quantity_dict"]
-
-                for k in qd_group.keys():
-                    dataset_group = qd_group[k]
-
-                    data_dset = dataset_group["data"]
-
-                    d_unit = data_dset.attrs["unit"]
-                    data_label = data_dset.attrs["data_label"]
-                    data_q = Q_(data_dset[()], d_unit)
-
-                    axes_q, axes_labels = [], []
-                    axes_group = dataset_group["axes"]
-
-                    i = 0
-                    while f"axis_{i}" in axes_group:
-                        ax_subgroup = axes_group[f"axis_{i}"]
-                        axis_dset = ax_subgroup["axis_dset"]
-
-                        ax_unit = axis_dset.attrs["unit"]
-                        axes_labels.append(axis_dset.attrs["axis_label"])
-                        axes_q.append(Q_(axis_dset[()], ax_unit))
-                        i += 1
-
-                    parsed_result_dict[k] = QuantityDataSet(data=data_q, axes=axes_q,
-                                                            data_label=data_label, axes_labels=axes_labels)
-
-        return parsed_result_dict
+        return eval_data
 
     def parse_eval_result_data(self, eval_result_data: EvalResultData, is_loading=False):
         if not eval_result_data:

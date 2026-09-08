@@ -116,59 +116,6 @@ class DatasetEval(ComponentBase):
     # selected_substrate_result = Instance(EvalResult)
     result_saver = Instance(ResultSaver)
 
-    # testing
-    def test(self):
-        def opt_res(task, m):
-            d, shift = task
-            freq_axis = Q_(np.linspace(0.5, 2, 4000), "THz")
-            ret = {"d": Q_(d, "µm"),
-                   "shift": Q_(shift, "fs"),
-                   "q_val": Q_(np.random.random(), ""),
-                   "gof": Q_(np.random.random(), ""),
-                   "converged": True,
-
-                   # Strings
-                   "timestamp": str(datetime.now().isoformat()),
-                   "measurement": str(m),
-
-                   # Datasets ( Q_(x) )
-                   "n0": QuantityDataSet(axes=[freq_axis],
-                                         data=Q_(np.random.random(freq_axis.shape[0]), ""),
-                                         data_label="Simple n",
-                                         axes_labels=["Frequency"]),
-                   "alpha": QuantityDataSet(axes=[freq_axis],
-                                            data=Q_(np.random.random(freq_axis.shape[0]), "1/cm"),
-                                            data_label="Absorption",
-                                            axes_labels=["Frequency"]),
-                   "t_exp": QuantityDataSet(axes=[freq_axis],
-                                            data=Q_(np.random.random(freq_axis.shape[0]), ""),
-                                            data_label="Measured t",
-                                            axes_labels=["Frequency"]),
-                   }
-            return ret
-
-        thicknesses = [100, 200, 300, 400, 500, 600]
-        shifts = [-0.5, 0, 1.5]
-        meas_list = ["Average", Measurement(p).filepath.name]
-        all_measurement_results = {
-            "result_type": "Transmission fit",
-            "dataset_path": self.dataset.data_path,
-            "measurement_names": meas_list,
-            "model_name": "tmm_1layer",
-            "measurement_quantity": "Transmission",
-            "optimization_results": {},
-        }
-        for i, meas in enumerate(meas_list):
-            thicknesses = [d + i for d in thicknesses]
-            shifts = [s + 10 * i for s in shifts]
-            tasks = product(thicknesses, shifts)
-            parsed_opt_res_dict = {f"({task[0]}, {task[1]})": opt_res(task, meas) for task in tasks}
-            parsed_opt_res_dict["thicknesses"] = thicknesses
-            parsed_opt_res_dict["shifts"] = shifts
-            all_measurement_results["optimization_results"][meas] = parsed_opt_res_dict
-
-        return all_measurement_results
-
     def __init__(self, dataset: DataSet, dataset_sub: DataSet = None, **kwargs):
         super().__init__(**kwargs)
         self.dataset = dataset
@@ -443,7 +390,6 @@ class DatasetEval(ComponentBase):
             try:
                 qs_eval = QSpaceEval(self)
                 qs_eval_data = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
-
                 self.current_result.result_carrier.received_result.emit(qs_eval_data)
             except Exception as e:
                 traceback.print_exc()

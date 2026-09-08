@@ -933,6 +933,7 @@ class DataSet(ComponentBase):
         amp_sam, amp_ref = self.p2p(meas_), self.p2p(ref_list)
 
         w = 2*np.pi*np.tile(self.freq_axis, (len(meas_), 1))
+        w[:, 0] = w[:, 1]
         n_imag = (c_thz/(2*w*d)) * np.tile(np.log(amp_ref/amp_sam)[:, None], (1, len(self.freq_axis)))
 
         return n_real + 1j*n_imag

@@ -18,6 +18,7 @@ You should have received a copy of the GNU General Public License
 along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 """
 from common.components import ComponentBase
+from common.eval_component.eval_result import EvalResult, EvalResultData
 from common.eval_component.quantity_set import QuantityDataSetDict as QuantityDictClass, QuantityDataSet
 from common.units import Q_
 from enum import Enum, unique
@@ -30,33 +31,6 @@ from copy import deepcopy
 from common.consts import result_dir
 from pathlib import Path
 import h5py
-
-rnd_arr = np.random.random
-
-freq_axis = Q_(np.linspace(1, 10, 4001), "THz")
-test_result = {
-    # --- Scalars ---
-    "d": Q_(10*np.random.random(), "µm"),
-    "q_val": Q_(1e-3*np.random.random(), ""),
-    "gof": Q_(1e-5*np.random.random(), ""),
-    "shift": Q_(1e2*np.random.random(), "fs"),
-    "converged": True,
-
-    # --- Strings ---
-    # "timestamp": "2026-06-29_12:35:00",
-    "timestamp": str(datetime.now().isoformat()),
-
-    # --- Datasets ( Q_(x) ) ---
-    "delta_n": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "S"), axes_labels=["Frequency"]),
-    "delta_alpha": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "m"), axes_labels=["Frequency"]),
-    "n0": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "T"), data_label="Simple n", axes_labels=["Frequency"]),
-    "n": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "nm"), axes_labels=["Frequency"]),
-    "k": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "W"), axes_labels=["Frequency"]),
-    "alpha": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "1/cm"), axes_labels=["Frequency"]),
-    "t_mod": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "V"), axes_labels=["ABE"]),
-    "sam_mod": QuantityDataSet(axes=[freq_axis], data=Q_(rnd_arr(4001), "J")),
-}
-
 
 def _getManipulatorValueInPreferredUnits(m):
     val = m.value
@@ -141,52 +115,67 @@ class ResultSaver(ComponentBase):
 
         return str(save_path.joinpath(formattedName))
 
-    def _saveHDF5(self, eval_result):
+    def _saveHDF5(self, eval_result: EvalResult):
         fileName = self._getFileName()
+        eval_data: EvalResultData = eval_result.eval_result_data
+
+        def write_quantity(group, name, quantity):
+            if hasattr(quantity, "magnitude"):
+                dset = group.create_dataset(name, data=quantity.magnitude)
+                dset.attrs["unit"] = "{:C}".format(quantity.units)
+            else:
+                group.create_dataset(name, data=quantity)
 
         def quantity_dataset_to_hdf5group(q_dataset, hdf5_group):
             dset = hdf5_group.create_dataset("data", data=q_dataset.data.magnitude)
             dset.attrs["unit"] = "{:C}".format(q_dataset.data.units)
-            dset.attrs["data_label"] = q_dataset.data_label
+            dset.attrs["data_label"] = q_dataset.data_label or ""
 
             axes_group = hdf5_group.create_group("axes")
             for i, ax in enumerate(q_dataset.axes):
                 ax_subgroup = axes_group.create_group(f"axis_{i}")
-                dset = ax_subgroup.create_dataset("axis_dset", data=ax.magnitude)
-                dset.attrs["unit"] = "{:C}".format(ax.units)
+                dset_ax = ax_subgroup.create_dataset("axis_dset", data=ax.magnitude)
+                dset_ax.attrs["unit"] = "{:C}".format(ax.units)
                 try:
-                    dset.attrs["axis_label"] = q_dataset.axes_labels[i]
+                    dset_ax.attrs["axis_label"] = q_dataset.axes_labels[i]
                 except IndexError:
-                    dset.attrs["axis_label"] = ""
+                    dset_ax.attrs["axis_label"] = ""
 
         with h5py.File(fileName, "w") as f:
-            scalar_group = f.create_group("scalars")
-            for k in eval_result.traits().keys():
-                v = getattr(eval_result, k)
+            f.attrs["result_type"] = eval_data.result_type
+            f.attrs["dataset_path"] = str(eval_data.dataset_path)
+            f.attrs["model_name"] = eval_data.model_name
+            f.attrs["measurement_quantity"] = eval_data.measurement_quantity
+            f.attrs["measurement_names"] = eval_data.measurement_names
 
-                if isinstance(v, QuantityDictClass):
-                    continue
-                elif isinstance(v, Q_):
-                    dset = scalar_group.create_dataset(k, data=v.magnitude)
-                    dset.attrs["unit"] = "{:C}".format(v.units)
-                elif isinstance(v, Path):
-                    dset = scalar_group.create_dataset(k, data=str(v))
-                    dset.attrs["path_type"] = type(v).__name__
-                elif isinstance(v, (str, float, int, bool)):
-                    scalar_group[k] = v
+            results_group = f.create_group("results")
 
-            all_meas_optimization_results = eval_result.eval_result_data["optimization_results"]
-            for meas in all_meas_optimization_results:
-                opt_results = all_meas_optimization_results[meas]
-                meas_group = f.create_group(meas)
-                for opt_res_name in opt_results:
-                    if not isinstance(opt_results[opt_res_name], dict):
-                        continue
-                    opt_res_group = meas_group.create_group(opt_res_name)
-                    for key, item in opt_results[opt_res_name].items():
-                        quantity_dataset_group = opt_res_group.create_group(str(key))
-                        if isinstance(item, QuantityDataSet):
-                            quantity_dataset_to_hdf5group(item, quantity_dataset_group)
+            for idx, single_res in enumerate(eval_data.results):
+                res_subgroup = results_group.create_group(f"result_{idx}")
+
+                res_subgroup.attrs["measurement"] = single_res.measurement or ""
+                write_quantity(res_subgroup, "d", single_res.d)
+                write_quantity(res_subgroup, "shift", single_res.shift)
+                write_quantity(res_subgroup, "freq_axis", single_res.freq_axis)
+
+                reg_grp = res_subgroup.create_group("regression_params")
+                for k, v in single_res.regression_params.items():
+                    if isinstance(v, Q_):
+                        write_quantity(reg_grp, k, v)
+                    elif isinstance(v, (int, float, str, bool)):
+                        reg_grp.attrs[k] = v
+
+                opt_grp = res_subgroup.create_group("optimization_info")
+                for k, v in single_res.optimization_info.items():
+                    if isinstance(v, Q_):
+                        write_quantity(opt_grp, k, v)
+                    elif isinstance(v, (int, float, str, bool)):
+                        opt_grp.attrs[k] = v
+
+                ds_grp = res_subgroup.create_group("datasets")
+                for ds_name, q_dataset in single_res.datasets.items():
+                    qd_group = ds_grp.create_group(ds_name)
+                    quantity_dataset_to_hdf5group(q_dataset, qd_group)
 
         return fileName
 
@@ -195,6 +184,6 @@ class ResultSaver(ComponentBase):
             logging.info("Data storage is disabled, not saving results.")
             return
 
-        # filename = self._saveHDF5(eval_result)
+        filename = self._saveHDF5(eval_result)
 
-        # logging.info("Saved result as {}".format(filename))
+        logging.info("Saved result as {}".format(filename))
