@@ -199,14 +199,15 @@ class QSpaceEval:
         t_exp_dict = self.t_exp_dict
         n_guess = self.n_guess
         meas_list = list(t_exp_dict.keys())
-        opt_config_base = {
+        common_opt_params = {
             "freq_axis": self.freq_axis,
             "transmission_model": self.transmission_model.value,
             "cost_fun": self.cost_fun,
             "minimizer_kwargs": self.settings.shgo_options.get_minimizer_kwargs(),
-            "shgo_options": self.settings.shgo_options.get_shgo_options()
+            "shgo_options": self.settings.shgo_options.get_shgo_options(),
+            **t_model_kwargs,
         }
-        opt_configs = {meas: {**opt_config_base, "n_guess": n_guess[meas],
+        opt_configs = {meas: {**common_opt_params, "n_guess": n_guess[meas],
                               "t_exp": t_exp_dict[meas]} for meas in meas_list}
 
         def get_new_tasks():

@@ -130,6 +130,7 @@ class ResultSaver(ComponentBase):
             dset = hdf5_group.create_dataset("data", data=q_dataset.data.magnitude)
             dset.attrs["unit"] = "{:C}".format(q_dataset.data.units)
             dset.attrs["data_label"] = q_dataset.data_label or ""
+            hdf5_group.create_dataset("uncert", data=q_dataset.uncert.magnitude)
 
             axes_group = hdf5_group.create_group("axes")
             for i, ax in enumerate(q_dataset.axes):

@@ -179,7 +179,7 @@ class MPLCanvas(QtWidgets.QGroupBox):
         self.fig.tight_layout()
 
         self.axes.clear()
-        self._plot_lines = {}
+        self._plotted_artists = {}
         self._line_cmap = {}
         self._checked_order = []
 
@@ -196,15 +196,32 @@ class MPLCanvas(QtWidgets.QGroupBox):
                 self._checked_order.append(k)
 
         for key in self.dataset_dict:
-            if key in self._plot_lines:
-                self._plot_lines[key].set_visible(key in checked_set)
+            if key in self._plotted_artists:
+                self._plotted_artists[key][0].set_visible(key in checked_set)
+                self._plotted_artists[key][1].set_visible(key in checked_set)
             elif key in checked_set:
                 dataset = self.dataset_dict[key]
                 x_vals = dataset.axes[0].magnitude
                 y_vals = dataset.data.magnitude.real
+                uncert_vals = dataset.uncert.magnitude.real
+
                 color = self._line_cmap.get(key, "black")
-                (line, ) = self.axes.plot(x_vals, y_vals, label=key, color=color)
-                self._plot_lines[key] = line
+
+                (line,) = self.axes.plot(x_vals, y_vals, label=key, color=color)
+
+                y_lower = y_vals - uncert_vals
+                y_upper = y_vals + uncert_vals
+
+                fill = self.axes.fill_between(
+                    x_vals,
+                    y_lower,
+                    y_upper,
+                    color=color,
+                    alpha=0.25,
+                    linewidth=0
+                )
+
+                self._plotted_artists[key] = (line, fill)
 
         if self.autoscaleAction.isChecked():
             self.axes.relim(visible_only=True)
@@ -302,7 +319,7 @@ class MPLCanvas(QtWidgets.QGroupBox):
         self.dataset_dict = new_dataset_dict
 
         self.axes.clear()
-        self._plot_lines = {}
+        self._plotted_artists = {}
 
         if previous_dict is None or (list(map(str, previous_dict)) != list(map(str, new_dataset_dict))):
             self._update_combobox()

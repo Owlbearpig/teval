@@ -16,11 +16,10 @@ def optimize_transmission(d, shift, config_dict) -> SingleResultData:
     minimizer_kwargs = config_dict["minimizer_kwargs"]
     shgo_options = config_dict["shgo_options"]
 
-    time.sleep(100/(min(50, d)))
-
-    model_kwargs_keys = ["d", "n_sub", "n1", "n4", "h", "nfp"]
+    model_kwargs_keys = ["n_sub", "n1", "n4", "h", "nfp"]
     model_kwargs = {k: config_dict[k] for k in model_kwargs_keys if k in config_dict}
     model_kwargs["shift"] = shift
+    model_kwargs["d"] = d
 
     gof = 0
     convergence_results = np.zeros_like(freq_axis, dtype=bool)
@@ -50,15 +49,14 @@ def optimize_transmission(d, shift, config_dict) -> SingleResultData:
             x = shgo_opt_res_.x
             gof += shgo_opt_res_.fun
             convergence_results[f_idx] = shgo_opt_res_.success
-            """
-            x = np.random.random(2)
             n_opt_res_[f_idx] = x[0] + 1j * x[1]
+            """
+            n_opt_res_[f_idx] = n0_f_idx
 
             if f_idx == 0:
                 break
 
-            # diff = (n_opt_res_[f_idx, 1].real - n_opt_res_[f_idx - 1, 1].real)
-            diff = 0
+            diff = (n_opt_res_[f_idx].real - n_opt_res_[f_idx - 1].real)
             if np.abs(diff) < 0.10:
                 conv = True
             else:

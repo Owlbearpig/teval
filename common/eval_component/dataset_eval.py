@@ -43,13 +43,13 @@ class ProgressSignalCarrier(QObject):
 
 
 def abs_cost_fun(y_meas, y_mod):
-    abs_diff = (np.abs(y_meas[:, 1]) - np.abs(y_mod)) ** 2
+    abs_diff = (np.abs(y_meas) - np.abs(y_mod)) ** 2
 
     return np.sum(abs_diff)
 
 
 def phi_cost_fun(y_meas, y_mod):
-    phi_diff = (np.angle(y_meas[:, 1]) - np.angle(y_mod)) ** 2
+    phi_diff = (np.angle(y_meas) - np.angle(y_mod)) ** 2
 
     return np.sum(phi_diff)
 
@@ -133,6 +133,7 @@ class DatasetEval(ComponentBase):
             self.settings.save_configuration(self)
 
     def __enter__(self, *args):
+        return self
         if self.settings is not None:
             self.settings.load_configuration(self)
         return self

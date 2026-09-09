@@ -45,16 +45,23 @@ class ResultSignal(QObject):
 class EvalResult(ComponentBase):
     quantity_dict = QuantityDict().tag(name="Quantity plot")
 
-    measurement = Unicode("", read_only=True).tag(priority=0, name="Measurement")
-    result_type = Unicode("None", read_only=True).tag(priority=1, name="Result type")
-    model_name = Unicode("", read_only=True).tag(priority=2, name="Model")
-    timestamp = Unicode("", read_only=True).tag(priority=3, name="Timestamp")
-    dataset_path = TPath(Path("."), read_only=True).tag(priority=4, name="Dataset path")
-    sub_dataset_path = TPath(Path("."), read_only=True).tag(priority=5, name="Sub. dataset path")
-    converged = Bool(False, read_only=True).tag(priority=6, name="Converged")
-
-    q_val = Quantity(Q_(0.0, ""), read_only=True)
-    gof = Quantity(Q_(0.0, ""), read_only=True)
+    transmission_res_grp_name = "Transmission result"
+    measurement = Unicode("", read_only=True,
+                          group=transmission_res_grp_name).tag(priority=0, name="Measurement")
+    result_type = Unicode("None", read_only=True,
+                          group=transmission_res_grp_name).tag(priority=1, name="Result type")
+    model_name = Unicode("", read_only=True,
+                         group=transmission_res_grp_name).tag(priority=2, name="Model")
+    timestamp = Unicode("", read_only=True,
+                        group=transmission_res_grp_name).tag(priority=3, name="Timestamp")
+    dataset_path = TPath(Path("."), must_exist=False, read_only=True,
+                         group=transmission_res_grp_name).tag(priority=4, name="Dataset path")
+    sub_dataset_path = TPath(Path("."), must_exist=False, group=transmission_res_grp_name,
+                             read_only=True).tag(priority=5, name="Sub. dataset path")
+    converged = Bool(False, read_only=True,
+                     group=transmission_res_grp_name).tag(priority=6, name="Converged")
+    q_val = Quantity(Q_(0.0, ""), read_only=True, group=transmission_res_grp_name)
+    gof = Quantity(Q_(0.0, ""), read_only=True, group=transmission_res_grp_name)
 
     reg_result_grp_name = "Regression result values"
     fun = Float(0.0, read_only=True, group=reg_result_grp_name).tag(priority=-1)
@@ -102,7 +109,7 @@ class EvalResult(ComponentBase):
 
         return selected_results
 
-    @action(name="Show Q-space plot")
+    @action(name="Show Q-space plot", group=transmission_res_grp_name)
     def plot_q_space(self):
         thicknesses = self.thicknesses.items
         shifts = self.shifts.items
@@ -170,9 +177,8 @@ class EvalResult(ComponentBase):
         self.shifts.observe(select_quantity_dict, "selected_item")
 
     def load_result(self, res_path):
-        res_dict = self.parse_hdf5(res_path)
-
-        self.parse_eval_result_data(res_dict, is_loading=True)
+        eval_result_data = self.parse_hdf5(res_path)
+        self.parse_eval_result_data(eval_result_data, is_loading=True)
 
         logging.info(f"Loaded {res_path}")
 
@@ -188,6 +194,7 @@ class EvalResult(ComponentBase):
             data_dset = hdf5_group["data"]
             data_q = Q_(data_dset[()], data_dset.attrs.get("unit", ""))
             data_label = data_dset.attrs.get("data_label", "")
+            uncert_q = Q_(hdf5_group["uncert"][()], data_dset.attrs.get("unit", ""))
 
             axes_q, axes_labels = [], []
             axes_group = hdf5_group["axes"]
@@ -200,13 +207,14 @@ class EvalResult(ComponentBase):
 
             return QuantityDataSet(
                 data=data_q,
+                uncert=uncert_q,
                 axes=axes_q,
                 data_label=data_label,
                 axes_labels=axes_labels
             )
 
         with h5py.File(res_path, "r") as f:
-            eval_data = EvalResultData(
+            eval_result_data = EvalResultData(
                 result_type=f.attrs.get("result_type", ""),
                 dataset_path=Path(f.attrs.get("dataset_path", ".")),
                 model_name=f.attrs.get("model_name", ""),
@@ -240,9 +248,9 @@ class EvalResult(ComponentBase):
                 for ds_name in ds_grp.keys():
                     single_res.datasets[ds_name] = hdf5group_to_quantity_dataset(ds_grp[ds_name])
 
-                eval_data.results.append(single_res)
+                eval_result_data.results.append(single_res)
 
-        return eval_data
+        return eval_result_data
 
     def parse_eval_result_data(self, eval_result_data: EvalResultData, is_loading=False):
         if not eval_result_data:
@@ -253,7 +261,7 @@ class EvalResult(ComponentBase):
 
         if eval_result_data.result_type == "Regression":
             active_parameters = model_params(eval_result_data.model_name)
-            self.toggle_traits(active_parameters, group_filter=self.reg_result_grp_name)
+            self.toggle_traits(active_parameters, group_filter=self.transmission_res_grp_name)
         elif eval_result_data.result_type == "Transmission fit":
             self.toggle_traits([], group_filter=self.reg_result_grp_name)
 
