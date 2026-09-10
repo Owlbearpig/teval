@@ -925,18 +925,23 @@ class DataSet(ComponentBase):
     def tof_refractive_index(self, meas_):
         ref_list = self.measurement_selector.get_matching_refs(meas_)
         dt = self.delay_from_phase_slope(meas_, ref_list)
+
         d = self.settings.eval_opt.d.magnitude
-        d = 1 if np.isclose(d, 0) else d
+        d = 1.0 if np.isclose(d, 0) else float(d)
 
-        n_real = np.tile((dt * c_thz / d + 1)[:, None], (1, len(self.freq_axis)))
+        n_real = 1.0 + (c_thz * dt / d)[:, None]
 
-        amp_sam, amp_ref = self.p2p(meas_), self.p2p(ref_list)
+        amp_sam = self.p2p(meas_)
+        amp_ref = self.p2p(ref_list)
 
-        w = 2*np.pi*np.tile(self.freq_axis, (len(meas_), 1))
-        w[:, 0] = w[:, 1]
-        n_imag = (c_thz/(2*w*d)) * np.tile(np.log(amp_ref/amp_sam)[:, None], (1, len(self.freq_axis)))
+        w = 2 * np.pi * self.freq_axis
+        w = np.where(w == 0, w[1] if len(w) > 1 else 1e-12, w)
 
-        return n_real + 1j*n_imag
+        amp_ratio = (amp_ref / amp_sam)[:, None]
+
+        n_imag = (c_thz / (w * d)) * np.log(amp_ratio)
+
+        return n_real + 1j * n_imag
 
     def conductivity(self, meas_):
         sub_properties = self.get_single_layer_properties()

@@ -103,12 +103,18 @@ class DatasetEval(ComponentBase):
 
     t_fit_grp_name = "Transmission q-space fit"
     transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.tmm_1layer,
-                               group=t_fit_grp_name).tag(name="Selected transmission model")
+                               group=t_fit_grp_name).tag(name="Selected transmission model", priority=-1)
     d_opt_axis_bounds = ValueRange([Q_(500, "µm"), Q_(580, "µm", )],
                                    group=t_fit_grp_name).tag(name="Custom thickness axis bounds")
     d_opt_axis_step = Quantity(Q_(10, "µm"), group=t_fit_grp_name).tag(name="Custom thickness axis step")
+
+    shift_opt_axis_bounds = ValueRange([Q_(0, "fs"), Q_(0, "fs", )],
+                                   group=t_fit_grp_name).tag(name="Shift axis bounds")
+    shift_opt_axis_step = Quantity(Q_(1, "fs"), group=t_fit_grp_name).tag(name="Shift axis step")
+
     use_custom_d_opt_axis = Bool(True, group=t_fit_grp_name).tag(name="Use custom thickness axis")
-    number_of_workers = Integer(8, group=t_fit_grp_name).tag(name="Number of cpu cores to assign")
+    number_of_workers = Integer(8, group=t_fit_grp_name).tag(name="Number of cpu cores to assign",
+                                                             priority=-2)
     add_sim_to_res = Bool(False, group=t_fit_grp_name).tag(name="Add simulated t to result")
     normalize_q_vals = Bool(True, group=t_fit_grp_name).tag(name="Normalize q-vals")
 

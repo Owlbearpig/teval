@@ -255,9 +255,13 @@ class EvalResult(ComponentBase):
     def parse_eval_result_data(self, eval_result_data: EvalResultData, is_loading=False):
         if not eval_result_data:
             return
+
         self.eval_result_data = eval_result_data
         self.set_simple_traits(asdict(eval_result_data))
-        self.measurement_list.items = eval_result_data.measurement_names
+        self.measurement_list.items = list(set([res.measurement for res in eval_result_data.results]))
+        self.measurement_list.selected_item = None
+        if self.measurement_list.items:
+            self.measurement_list.selected_item = self.measurement_list.items[0]
 
         if eval_result_data.result_type == "Regression":
             active_parameters = model_params(eval_result_data.model_name)

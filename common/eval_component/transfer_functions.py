@@ -31,6 +31,8 @@ def t_tmm_model_1layer(n, freq, **opt_kwargs):
 
     t = e_sam / e_ref
 
+    t = np.conj(t)
+    
     t = shift_t(freq, t, shift)
 
     return np.nan_to_num(t)
@@ -56,6 +58,8 @@ def t_tmm_model_2layer(n, freq, **opt_kwargs):
 
     t = e_sam / e_ref
 
+    t = np.conj(t)
+    
     t = shift_t(freq, t, shift)
 
     return np.nan_to_num(t)
@@ -90,7 +94,9 @@ def model_1layer(n, freq, **opt_kwargs):
 
     t = (1 - r_as ** 2) * exp1 * s
     #"""
-
+    
+    t = np.conj(t)
+    
     t = shift_t(freq, t, shift)
 
     return np.nan_to_num(t)
@@ -120,6 +126,8 @@ def model_2layer(n, freq, **opt_kwargs):
     e_ref = np.exp(1j * ((d + h) * w_ / c_thz))
 
     t = e_sam / e_ref
+
+    t = np.conj(t)
 
     t = shift_t(freq, t, shift)
 
@@ -160,6 +168,8 @@ def _t_model_2layer(n, freq, **opt_kwargs):
     e_ref = np.exp(1j * ((d + h) * w_ / c_thz))
 
     t = e_sam / e_ref
+
+    t = np.conj(t)
 
     t = shift_t(freq, t, shift)
 

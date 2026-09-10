@@ -190,17 +190,15 @@ class QSpaceEval:
 
     def q_space_eval_mp(self, progress_carrier=None) -> EvalResultData:
         t_model_kwargs = self.dataset_eval.get_t_model_kwargs()
-
-        shift_axis = [*np.arange(-0, 3, 1.0)]
         iterations = 3
         step_size = [20, 5, 1]
         sas = (5, 20) # smoothing avg settings
         is_iterative = not self.dataset_eval.use_custom_d_opt_axis
         ref_fd_dict = self.ref_fd_dict
         ref_sam_map = self.dataset_eval.dataset.measurement_selector.sam_ref_meas_map
+        sel_meas_list = self.selected_measurements
         t_exp_dict = self.t_exp_dict
         n_guess = self.n_guess
-        meas_list = list(t_exp_dict.keys())
         common_opt_params = {
             "freq_axis": self.freq_axis,
             "transmission_model": self.transmission_model.value,
@@ -210,9 +208,13 @@ class QSpaceEval:
             **t_model_kwargs,
         }
         opt_configs = {meas: {**common_opt_params, "n_guess": n_guess[meas],
-                              "t_exp": t_exp_dict[meas]} for meas in meas_list}
+                              "t_exp": t_exp_dict[meas]} for meas in t_exp_dict}
 
         def get_new_tasks():
+            bnds = self.dataset_eval.shift_opt_axis_bounds
+            step = self.dataset_eval.shift_opt_axis_step
+            shift_axis = np.arange(bnds[0].magnitude, bnds[1].magnitude + step.magnitude, step.magnitude)
+
             tasks = []
             if self.dataset_eval.use_custom_d_opt_axis:
                 bnds = self.dataset_eval.d_opt_axis_bounds
@@ -270,17 +272,14 @@ class QSpaceEval:
 
             return results
 
-        meas_to_str = lambda meas: meas.filepath.name if isinstance(meas, Measurement) else str(meas)
-        meas_names = {meas: meas_to_str(meas) for meas in meas_list}
-
         eval_result_data = EvalResultData()
         eval_result_data.result_type = "Transmission fit"
         eval_result_data.dataset_path = self.dataset_eval.dataset.data_path
-        eval_result_data.measurement_names = list(meas_names.values())
+        eval_result_data.measurement_names = [meas.filepath.name for meas in sel_meas_list]
         eval_result_data.model_name = self.transmission_model.name
         eval_result_data.measurement_quantity = "Transmission"
 
-        for meas in meas_list:
+        for meas in t_exp_dict:
             ref_meas = ref_sam_map(meas)
             self.reset_opt_state()
 
@@ -293,9 +292,9 @@ class QSpaceEval:
                     break
 
             for opt_res in opt_results:
-                opt_res.measurement = meas_to_str(meas)
+                opt_res.measurement = meas.filepath.name if isinstance(meas, Measurement) else str(meas)
                 if meas == "Average":
-                    self.calc_uncertainties(opt_res, meas_list)
+                    self.calc_uncertainties(opt_res, sel_meas_list)
 
                 t_model_kwargs["shift"] = opt_res.shift.magnitude
                 t_model_kwargs["d"] = opt_res.d.magnitude

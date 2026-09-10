@@ -1,5 +1,6 @@
 from tmm import array, list_snell, seterr, cos, zeros, interface_r, interface_t, make_2x2_array, exp
 import numpy as np
+from common.consts import c_thz
 
 def coh_tmm_wrapper(pol, n_list, d_list, th_0, lam_vac):
     lam_vac = array(lam_vac)
@@ -72,3 +73,29 @@ def coh_tmm(pol, n_list, d_list, th_0, lam_vac):
     t = 1/Mtilde[0,0]
 
     return t
+
+if __name__ == '__main__':
+    def shift_t(freq, t, shift=0.0):
+        return t * np.exp(1j * 2 * np.pi * (shift * 1e-3) * freq)
+
+    def t_tmm_model_1layer(n, freq, **opt_kwargs):
+        d = opt_kwargs["d"]
+        shift = opt_kwargs["shift"]
+
+        pol = "s"
+        n_list = [1, n, 1]
+        d_list = [np.inf, d, np.inf]
+        th_0 = 0 * np.pi / 180
+        lam_vac = c_thz / freq
+        w_ = 2 * np.pi * freq
+
+        e_sam = coh_tmm_wrapper(pol, n_list, d_list, th_0, lam_vac)
+        e_ref = np.exp(1j * (d * w_ / c_thz))
+
+        t = e_sam / e_ref
+
+        t = shift_t(freq, t, shift)
+
+        return np.nan_to_num(t)
+
+
