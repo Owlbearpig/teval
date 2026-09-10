@@ -15,7 +15,7 @@ def optimize_transmission(d, shift, config_dict) -> SingleResultData:
     cost_fun = config_dict["cost_fun"]
     minimizer_kwargs = config_dict["minimizer_kwargs"]
     shgo_options = config_dict["shgo_options"]
-
+    # np.random.seed(d)
     model_kwargs_keys = ["n_sub", "n1", "n4", "h", "nfp"]
     model_kwargs = {k: config_dict[k] for k in model_kwargs_keys if k in config_dict}
     model_kwargs["shift"] = shift
@@ -38,25 +38,30 @@ def optimize_transmission(d, shift, config_dict) -> SingleResultData:
         conv, i_ = False, 0
         while not conv:
             i_ += 1
-            """
+            #"""
             shgo_opt_res_ = shgo(opt_fun,
                                  bounds=bounds,
-                                 minimizer_kwargs=minimizer_kwargs,
-                                 options=shgo_options,
-                                 # n=1, iters=200,
+                                 #minimizer_kwargs=minimizer_kwargs,
+                                 #options=shgo_options,
+                                 n=1, iters=20,
                                  )
             
             x = shgo_opt_res_.x
             gof += shgo_opt_res_.fun
             convergence_results[f_idx] = shgo_opt_res_.success
             n_opt_res_[f_idx] = x[0] + 1j * x[1]
-            """
-            n_opt_res_[f_idx] = n0_f_idx
+            #"""
+            #n_opt_res_[f_idx] = n0_f_idx
+
+            # x = np.random.random(2)
+            # n_opt_res_[f_idx] = x[0] + 0.001 * 1j * x[1]
+
+            # n_opt_res_[f_idx] = 1.5 + 1j * 0.015
 
             if f_idx == 0:
                 break
 
-            diff = (n_opt_res_[f_idx].real - n_opt_res_[f_idx - 1].real)
+            diff = (n_opt_res_[f_idx] - n_opt_res_[f_idx - 1]).real
             if np.abs(diff) < 0.10:
                 conv = True
             else:
@@ -72,7 +77,7 @@ def optimize_transmission(d, shift, config_dict) -> SingleResultData:
                 k_bounds = (n_prev.imag * c0, n_prev.imag * c1)
 
                 bounds = [(min(n_bounds), max(n_bounds)), (min(k_bounds), max(k_bounds))]
-            if i_ > 5:
+            if i_ > 1:
                 break
 
     alpha_ = freq_axis * 4 * np.pi * n_opt_res_.imag / (1e-4 * c_thz)
@@ -84,6 +89,10 @@ def optimize_transmission(d, shift, config_dict) -> SingleResultData:
     result_data.optimization_info["gof"] = Q_(gof / len(freq_axis), "")
     result_data.optimization_info["converged"] = np.all(convergence_results)
     result_data.optimization_info["timestamp"] = str(datetime.now().isoformat())
+    result_data.datasets["t_exp"] = QuantityDataSet(axes=[Q_(freq_axis, "THz")],
+                                                    data=Q_(t_exp[:, 1], ""),
+                                                    axes_labels=["Frequency"],
+                                                    data_label="Transmission coefficient experimental")
     result_data.datasets["n0"] = QuantityDataSet(axes=[Q_(freq_axis, "THz")],
                                                  data=Q_(n0[:, 1], ""),
                                                  axes_labels=["Frequency"],

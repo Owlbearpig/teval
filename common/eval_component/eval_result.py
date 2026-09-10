@@ -147,8 +147,8 @@ class EvalResult(ComponentBase):
         def on_measurement_selection(change):
             selected_meas = change["new"]
             optimization_results = [res for res in self.eval_result_data.results if res.measurement == selected_meas]
-            self.thicknesses.items = list(set([str(res.d.magnitude) for res in optimization_results]))
-            self.shifts.items = list(set([str(res.shift.magnitude) for res in optimization_results]))
+            self.thicknesses.items = sorted(list(set([str(res.d.magnitude) for res in optimization_results])))
+            self.shifts.items = sorted(list(set([str(res.shift.magnitude) for res in optimization_results])))
 
             if self.thicknesses.items and self.shifts.items:
                 self.thicknesses.selected_item = self.thicknesses.items[0]

@@ -70,6 +70,9 @@ class ComponentBase(HasTraits):
         if self.object_name is None:
             self.object_name = type(self).__name__
 
+        self.__ui_control_widget = None
+        self._pending_trait_toggles = {}
+
         self.__actions = []
         for name, memb in _dumb_list_of_actions(self):
             self.__actions.append((name, memb))

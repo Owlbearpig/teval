@@ -18,7 +18,7 @@ You should have received a copy of the GNU General Public License
 along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 """
 import os
-
+from common.units import ureg
 from PySide6 import QtCore, QtWidgets, QtGui
 from matplotlib.backends.backend_qt5agg import (FigureCanvasQTAgg,
                                                 NavigationToolbar2QT)
@@ -249,8 +249,11 @@ class MPLCanvas(QtWidgets.QGroupBox):
         if self._checked_order:
             last_key = self._checked_order[-1]
             dataset = self.dataset_dict[last_key]
-            x_label = f"{dataset.axes_labels[0] if dataset.axes_labels else 'X'} [{dataset.axes[0].units:C~}]"
-            y_label = f"{dataset.data_label if dataset.data_label else 'Y'} [{dataset.data.units:C~}]"
+            x_unit, y_unit = dataset.axes[0].units, dataset.data.units
+            y_unit_str = f"[{y_unit:C~}]" if y_unit != ureg.dimensionless else ""
+            x_unit_str = f"[{x_unit:C~}]" if x_unit != ureg.dimensionless else ""
+            x_label = f"{dataset.axes_labels[0] if dataset.axes_labels else 'X'} {x_unit_str}"
+            y_label = f"{dataset.data_label if dataset.data_label else 'Y'} {y_unit_str}"
         else:
             x_label, y_label = "", ""
 

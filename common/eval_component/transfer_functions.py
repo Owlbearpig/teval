@@ -62,6 +62,8 @@ def t_tmm_model_2layer(n, freq, **opt_kwargs):
 
 @layer_cnt_decorator(layer_cnt=1)
 def model_1layer(n, freq, **opt_kwargs):
+    #n = (3.6 + 0.01 * 1j) * np.ones_like(freq)
+    #opt_kwargs = {"d": 500, "nfp": 2, "n1": 1, "shift": 0}
     d = opt_kwargs["d"]
     nfp = opt_kwargs["nfp"]
     n1 = opt_kwargs["n1"]
@@ -72,7 +74,7 @@ def model_1layer(n, freq, **opt_kwargs):
     t_sa = 2 * n / (n1 + n)
     r_as = (n1 - n) / (n1 + n)
     r_sa = (n - n1) / (n1 + n)
-
+    # print(n, freq, d, nfp, n1, shift)
     """
     exp = np.exp(1j * (d * w_ / c_thz) * n3_)
     e_sam = t_as * t_sa * exp / (1 + r_as * r_sa * exp ** 2)
@@ -81,12 +83,10 @@ def model_1layer(n, freq, **opt_kwargs):
     t = e_sam / e_ref
     """
     #"""
-    exp1 = np.exp(1j * (d * w_ / c_thz) * (n - 1))
+    exp1 = np.exp(1j * (d * w_ / c_thz) * (n - n1))
     exp2 = np.exp(1j * 2 * (d * w_ / c_thz) * n)
 
-    s = 0
-    for i in range(nfp):
-        s += (r_as**2 * exp2)**i
+    s = np.sum([(r_sa**2 * exp2)**i for i in np.arange(nfp+1)], axis=0)
 
     t = (1 - r_as ** 2) * exp1 * s
     #"""

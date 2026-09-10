@@ -1,5 +1,7 @@
 import logging
 import traceback
+
+import matplotlib.pyplot as plt
 import numpy as np
 import scipy
 from common.dataset import format_meas_dict, DataSet
@@ -298,8 +300,8 @@ class QSpaceEval:
                 t_model_kwargs["shift"] = opt_res.shift.magnitude
                 t_model_kwargs["d"] = opt_res.d.magnitude
 
-                t_mod_ = self.transmission_model.value(opt_res.freq_axis.magnitude,
-                                                       opt_res.datasets["n"].data.magnitude,
+                t_mod_ = self.transmission_model.value(opt_res.datasets["n"].data.magnitude,
+                                                       opt_res.freq_axis.magnitude,
                                                        **t_model_kwargs)
                 sam_mod_db = to_db(ref_fd_dict[ref_meas][:, 1] * t_mod_)
                 opt_res.datasets["t_mod"] = QuantityDataSet(axes=[opt_res.freq_axis],
@@ -314,7 +316,7 @@ class QSpaceEval:
                 if self.dataset_eval.add_sim_to_res:
                     opt_res.datasets.update(self.calc_sim(t_model_kwargs, ref_fd_dict[ref_meas]))
 
-                smoothed_quantities = ["n", "alpha"]
+                smoothed_quantities = []#["n", "alpha"]
                 for q in smoothed_quantities:
                     if q in opt_res.datasets:
                         smoothed_data = moving_average(opt_res.datasets[q].data.magnitude, *sas)
@@ -373,5 +375,38 @@ class QSpaceEval:
         for opt_res in opt_results:
             q_val = opt_res.optimization_info["q_val"]
             opt_res.optimization_info["q_val"] = q_val / np.max(q_vals) if norm_q_vals else q_val
+
+            split_datasets = {}
+            for dataset_label, dataset in opt_res.datasets.items():
+                if np.iscomplex(dataset.data).any():
+                    if "t_" in dataset_label:
+                        q_abs = Q_(np.abs(dataset.data.magnitude), dataset.data.units)
+                        q_phi = Q_(np.angle(dataset.data.magnitude), "rad")
+                        split_datasets[f"{dataset_label}_abs"] = (
+                            QuantityDataSet(axes=dataset.axes,
+                                            data=q_abs,
+                                            axes_labels=dataset.axes_labels,
+                                            data_label=dataset.data_label + " (Magnitude)"))
+                        split_datasets[f"{dataset_label}_phi"] = (
+                            QuantityDataSet(axes=dataset.axes,
+                                            data=q_phi,
+                                            axes_labels=dataset.axes_labels,
+                                            data_label=dataset.data_label + " (Angle)"))
+                    else:
+                        q_real = Q_(np.real(dataset.data.magnitude), dataset.data.units)
+                        q_imag = Q_(np.imag(dataset.data.magnitude), dataset.data.units)
+                        split_datasets[f"{dataset_label}_real"] = (
+                            QuantityDataSet(axes=dataset.axes,
+                                            data=q_real,
+                                            axes_labels=dataset.axes_labels,
+                                            data_label=dataset.data_label + " (Real)"))
+                        split_datasets[f"{dataset_label}_imag"] = (
+                            QuantityDataSet(axes=dataset.axes,
+                                            data=q_imag,
+                                            axes_labels=dataset.axes_labels,
+                                            data_label=dataset.data_label + " (Imag)"))
+                else:
+                    split_datasets[dataset_label] = dataset
+            opt_res.datasets = split_datasets
 
         return opt_results

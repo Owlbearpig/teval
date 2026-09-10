@@ -81,8 +81,8 @@ class DataSetType(Enum):
 class DatasetEval(ComponentBase):
     selected_cost_fun = TEnum(CostFunctions, default_value=CostFunctions.abs_cost,
                               help="Model to experimental data metric").tag(name="Selected cost function")
-    selected_result_path = TPath(Path("")).tag(name="Load result")
-    selected_substrate_result_path = TPath(Path("")).tag(name="Substrate result")
+    selected_result_path = TPath(Path("")).tag(name="Load result", en_save=False)
+    selected_substrate_result_path = TPath(Path("")).tag(name="Substrate result", en_save=False)
     optimization_progress = Float(0, min=0, max=1, read_only=True).tag(name="Progress")
     only_eval_avg = Bool(False).tag(name="Only evaluate average")
 
@@ -133,7 +133,6 @@ class DatasetEval(ComponentBase):
             self.settings.save_configuration(self)
 
     def __enter__(self, *args):
-        return self
         if self.settings is not None:
             self.settings.load_configuration(self)
         return self

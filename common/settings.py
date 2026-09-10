@@ -4,7 +4,7 @@ import json
 from common.eval_component.eval_result import EvalResult
 from common.traits import ValueRange, Path as TPath, Quantity, MultiPathClass, MultiPathSelection
 from common.units import Q_
-from traitlets import Instance, Tuple, List, Bool, Integer, Float, Enum as TEnum
+from traitlets import Instance, Bool, Integer, Float, Enum as TEnum, Unicode
 from common.components import is_component_trait
 from common.default_appsettings import AppSettings
 from traitlets.traitlets import TraitError
@@ -53,6 +53,9 @@ class Settings(AppSettings):
 
         def make_dump_dict(dump_dict, instance):
             for k, trait in instance.attributes.items():
+                en_save = trait.metadata.get("en_save", True)
+                if not en_save:
+                    continue
                 val = trait.get(instance)
                 if not is_component_trait(trait):
                     if isinstance(val, Enum):
@@ -104,7 +107,7 @@ class Settings(AppSettings):
                 if actual_type == Instance:
                     instance_class = getattr(instance, trait_name)
                     set_trait_values(instance_class, dict_val)
-                elif issubclass(actual_type, (Bool, Integer, Float)):
+                elif issubclass(actual_type, (Bool, Integer, Float, Unicode)):
                     instance.set_trait(trait_name, dict_val)
                 elif issubclass(actual_type, Quantity):
                     value = getattr(instance, trait_name)
