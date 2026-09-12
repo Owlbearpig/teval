@@ -4,9 +4,10 @@ from PySide6.QtGui import QPalette
 
 def ChangeIndicatorSpinBox(*args, actual_value_getter,
                            is_double_spinbox=False, **kwargs):
+    decimals = kwargs.pop("decimals", 3)
     if is_double_spinbox:
         spinbox = QDoubleSpinBox(*args, **kwargs)
-        spinbox.setDecimals(3)
+        spinbox.setDecimals(decimals)
     else:
         spinbox = QSpinBox(*args, **kwargs)
 

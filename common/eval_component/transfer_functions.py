@@ -65,11 +65,8 @@ def t_tmm_model_2layer(n, freq, **opt_kwargs):
     return np.nan_to_num(t)
 
 @layer_cnt_decorator(layer_cnt=1)
-def model_1layer(n, freq, **opt_kwargs):
-    #n = (3.6 + 0.01 * 1j) * np.ones_like(freq)
-    #opt_kwargs = {"d": 500, "nfp": 2, "n1": 1, "shift": 0}
+def model_1layer_inf(n, freq, **opt_kwargs):
     d = opt_kwargs["d"]
-    nfp = opt_kwargs["nfp"]
     n1 = opt_kwargs["n1"]
     shift = opt_kwargs["shift"]
 
@@ -78,25 +75,40 @@ def model_1layer(n, freq, **opt_kwargs):
     t_sa = 2 * n / (n1 + n)
     r_as = (n1 - n) / (n1 + n)
     r_sa = (n - n1) / (n1 + n)
-    # print(n, freq, d, nfp, n1, shift)
-    """
-    exp = np.exp(1j * (d * w_ / c_thz) * n3_)
+
+    exp = np.exp(1j * (d * w_ / c_thz) * n)
     e_sam = t_as * t_sa * exp / (1 + r_as * r_sa * exp ** 2)
     e_ref = np.exp(1j * (d * w_ / c_thz))
 
     t = e_sam / e_ref
-    """
-    #"""
+    
+    t = np.conj(t)
+    
+    t = shift_t(freq, t, shift)
+
+    return np.nan_to_num(t)
+
+
+@layer_cnt_decorator(layer_cnt=1)
+def model_1layer_fp(n, freq, **opt_kwargs):
+    d = opt_kwargs["d"]
+    nfp = opt_kwargs["nfp"]
+    n1 = opt_kwargs["n1"]
+    shift = opt_kwargs["shift"]
+
+    w_ = 2 * np.pi * freq
+    r_as = (n1 - n) / (n1 + n)
+    r_sa = (n - n1) / (n1 + n)
+
     exp1 = np.exp(1j * (d * w_ / c_thz) * (n - n1))
     exp2 = np.exp(1j * 2 * (d * w_ / c_thz) * n)
 
     s = np.sum([(r_sa**2 * exp2)**i for i in np.arange(nfp+1)], axis=0)
 
     t = (1 - r_as ** 2) * exp1 * s
-    #"""
-    
+
     t = np.conj(t)
-    
+
     t = shift_t(freq, t, shift)
 
     return np.nan_to_num(t)
@@ -245,5 +257,17 @@ def dtdd(n, d, freq):
     return (dfdd*g-f*dgdd) / (g*g)
 
 if __name__ == '__main__':
-    model_2layer(1, 1, **{"d": 1, "h": 2, "n1": 1, "n4": 5})
+    import matplotlib.pyplot as plt
+    model_kwargs =  {"d": 500, "shift": 0, "h": 0, "n1": 1, "n4": 1, "nfp": 20}
+
+    freq_axis = np.linspace(0.250, 2.50, 10000)
+    n_test = (3.6 + 0.01*1j) * np.ones_like(freq_axis)
+    t_mod = model_1layer_inf(n_test, freq_axis, **model_kwargs)
+
+    plt.figure("angle")
+    plt.plot(freq_axis, np.angle(t_mod))
+
+    plt.figure("magnitude")
+    plt.plot(freq_axis, np.abs(t_mod))
+    plt.show()
 

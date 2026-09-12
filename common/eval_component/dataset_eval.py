@@ -9,7 +9,7 @@ from functools import partial
 import numpy as np
 import logging
 from common.consts import eps0_thz
-from common.eval_component.q_space_eval import QSpaceEval
+from common.eval_component.q_space_eval import QSpaceEval, OptimizationMethods
 from common.eval_component.quantity_set import QuantityDataSet
 from enum import Enum, member
 from common.eval_component.conductivity_models import RegressionModels, model_params
@@ -17,9 +17,11 @@ from common.traits import Quantity, Q_, ValueRange, Path as TPath
 from pathlib import Path
 from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance
 from common.default_appsettings import QuantityEnum
-from common.eval_component.transfer_functions import (t_tmm_model_1layer, model_1layer, t_tmm_model_2layer,
-                                                      model_2layer, _t_model_2layer)
+from common.eval_component.transfer_functions import (t_tmm_model_1layer, model_1layer_inf, t_tmm_model_2layer,
+                                                      model_2layer, _t_model_2layer, model_1layer_fp)
 from common.eval_component.shgo_settings import MinimizerOptions
+from common.eval_component.t_fit_global import spline_transmission_optimization
+from common.eval_component.single_opt import shgo_transmission_optimization
 from common.save import ResultSaver
 from common.eval_component.eval_result import EvalResult
 from concurrent.futures import ThreadPoolExecutor
@@ -45,23 +47,23 @@ class ProgressSignalCarrier(QObject):
 def abs_cost_fun(y_meas, y_mod):
     abs_diff = (np.abs(y_meas) - np.abs(y_mod)) ** 2
 
-    return np.sum(abs_diff)
+    return abs_diff
 
 
 def phi_cost_fun(y_meas, y_mod):
-    phi_diff = (np.angle(y_meas) - np.angle(y_mod)) ** 2
+    phi_diff = np.angle(y_meas / y_mod) ** 2
 
-    return np.sum(phi_diff)
+    return phi_diff
 
 
 def combined_cost_fun(y_meas, y_mod):
     return abs_cost_fun(y_meas, y_mod) + phi_cost_fun(y_meas, y_mod)
 
-
 class TransmissionModels(Enum):
     tmm_1layer = member(t_tmm_model_1layer)
     tmm_2layer = member(t_tmm_model_2layer)
-    model_1layer = member(model_1layer)
+    model_1layer_inf = member(model_1layer_inf)
+    model_1layer_fp = member(model_1layer_fp)
     model_2layer = member(model_2layer)
     t_model_2layer = member(_t_model_2layer)
 
@@ -85,6 +87,10 @@ class DatasetEval(ComponentBase):
     selected_substrate_result_path = TPath(Path("")).tag(name="Substrate result", en_save=False)
     optimization_progress = Float(0, min=0, max=1, read_only=True).tag(name="Progress")
     only_eval_avg = Bool(False).tag(name="Only evaluate average")
+    number_of_workers = Integer(8).tag(name="Number of cpu cores to assign", priority=-2)
+    smoothing_avg_en = Bool(True).tag(name="Enable smoothing average of quantities")
+    smoothing_avg_n = Integer(3).tag(name="Smoothing average window size")
+    smoothing_avg_iters = Integer(3).tag(name="Smoothing average iterations")
 
     reg_grp_name = "Regression"
     selected_meas_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.TransmissionAmp,
@@ -102,21 +108,28 @@ class DatasetEval(ComponentBase):
     c1_bounds = ValueRange([-1.0, 1.0], group=reg_grp_name).tag(name="c₁ Bounds")
 
     t_fit_grp_name = "Transmission q-space fit"
+    optimization_method = TEnum(OptimizationMethods, default_value=OptimizationMethods.Spline,
+                               group=t_fit_grp_name).tag(name="Optimization method", priority=-2)
     transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.tmm_1layer,
                                group=t_fit_grp_name).tag(name="Selected transmission model", priority=-1)
+
     d_opt_axis_bounds = ValueRange([Q_(500, "µm"), Q_(580, "µm", )],
-                                   group=t_fit_grp_name).tag(name="Custom thickness axis bounds")
-    d_opt_axis_step = Quantity(Q_(10, "µm"), group=t_fit_grp_name).tag(name="Custom thickness axis step")
+                                   group=t_fit_grp_name).tag(name="Custom thickness axis bounds", priority=0)
+    d_opt_axis_step = Quantity(Q_(10, "µm"), group=t_fit_grp_name).tag(name="Custom thickness axis step", priority=1)
+    iterative_thickness_optimization = Bool(True,
+                                            group=t_fit_grp_name).tag(name="Optimize thickness iteratively", priority=2)
+    iteration_count = Integer(3, group=t_fit_grp_name).tag(name="Iteration count", priority=3)
+    bound_shrink_factor = Float(0.20, group=t_fit_grp_name).tag(name="Thickness bounds shrink factor",
+                                                                priority=4)
 
-    shift_opt_axis_bounds = ValueRange([Q_(0, "fs"), Q_(0, "fs", )],
-                                   group=t_fit_grp_name).tag(name="Shift axis bounds")
-    shift_opt_axis_step = Quantity(Q_(1, "fs"), group=t_fit_grp_name).tag(name="Shift axis step")
-
-    use_custom_d_opt_axis = Bool(True, group=t_fit_grp_name).tag(name="Use custom thickness axis")
-    number_of_workers = Integer(8, group=t_fit_grp_name).tag(name="Number of cpu cores to assign",
-                                                             priority=-2)
-    add_sim_to_res = Bool(False, group=t_fit_grp_name).tag(name="Add simulated t to result")
+    add_sim_to_res = Bool(False, group=t_fit_grp_name).tag(name="Add simulated transmission to result")
     normalize_q_vals = Bool(True, group=t_fit_grp_name).tag(name="Normalize q-vals")
+
+    shift_grp = "Shift axis settings"
+    disable_shift_opt = Bool(True).tag(group=shift_grp).tag(name="Disable pulse shift optimization")
+    shift_opt_axis_bounds = ValueRange([Q_(0, "fs"), Q_(0, "fs", )],
+                                       group=shift_grp).tag(name="Shift axis bounds")
+    shift_opt_axis_step = Quantity(Q_(1, "fs"), group=shift_grp).tag(name="Shift axis step")
 
     current_result = Instance(EvalResult)
     # selected_substrate_result = Instance(EvalResult)
@@ -203,7 +216,7 @@ class DatasetEval(ComponentBase):
 
         y_dict = self.y_meas_dict
         opt_func_dict = {
-            meas_id: (lambda params, m_id=meas_id: cost_func(y_dict[m_id], mod_func(*params)))
+            meas_id: (lambda params, m_id=meas_id: np.sum(cost_func(y_dict[m_id], mod_func(*params))))
             for meas_id in y_dict
         }
 

@@ -346,6 +346,11 @@ class EvalOpt(ComponentBase):
     sim_n_selection = TEnum(SimRISelection, SimRISelection.const,
                             group=transmission_sim_grp).tag(name="Simulation refractive index")
 
+    regulated_spline_grp = "Regulated spline"
+    knot_cnt = Int(100).tag(name="Spline count", group=regulated_spline_grp)
+    reg_n = Float(1e-5).tag(name="n regularization", group=regulated_spline_grp, decimals=10)
+    reg_k = Float(1e-6).tag(name="k regularization", group=regulated_spline_grp, decimals=10)
+
     conductivity_calc_grp = "Conductivity calculation"
     use_sub_dataset = Bool(False, group=conductivity_calc_grp).tag(name="Use separate substrate dataset")
     sub_pnt = ValueRange([0, 0], group=conductivity_calc_grp).tag(name="Substrate point")

@@ -143,7 +143,8 @@ def create_spinbox_entry(component, name, trait):
                  else get_value_without_units)
     layout = QtWidgets.QHBoxLayout()
     spinbox = ChangeIndicatorSpinBox(is_double_spinbox=is_double_spinbox,
-                                     actual_value_getter=get_value)
+                                     actual_value_getter=get_value,
+                                     decimals=trait.metadata.get("decimals", 3))
     spinbox.setToolTip(trait.help)
 
     if is_integer:
@@ -169,6 +170,22 @@ def create_spinbox_entry(component, name, trait):
         units = (trait.metadata.get('preferred_units', None) or
                  trait.get(component).units)
         spinbox.setSuffix(" {:C~}".format(units))
+
+    if is_double_spinbox:
+        def textFromValue(self, val):
+            if abs(val) < 1e-3 and val != 0:
+                return f"{val:.4e}"
+            return f"{val:.{self.decimals()}f}"
+
+        def valueFromText(self, text):
+            clean_text = text.replace(self.suffix(), '').strip()
+            try:
+                return float(clean_text)
+            except ValueError:
+                return 0.0
+
+        spinbox.textFromValue = types.MethodType(textFromValue, spinbox)
+        spinbox.valueFromText = types.MethodType(valueFromText, spinbox)
 
     if is_double_spinbox and not has_limits:
         def sizeHint(self):
