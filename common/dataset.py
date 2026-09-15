@@ -108,11 +108,11 @@ class DataSetInfoPane(ComponentBase):
 
     sampling_start = Quantity(Q_(0, "ps"), read_only=True).tag(name="Sampling start", group="Data info")
     sampling_end = Quantity(Q_(0, "ps"), read_only=True).tag(name="Sampling end", group="Data info")
-    sampling_period = Quantity(Q_(0, "ps"), read_only=True).tag(name="Sampling period", group="Data info")
+    sampling_period = Quantity(Q_(0, "fs"), read_only=True).tag(name="Sampling period", group="Data info")
     sample_count = Int(0, read_only=True).tag(name="Time samples", group="Data info")
     sampling_window = Quantity(Q_(0, "ps"), read_only=True).tag(name="Sampling window", group="Data info")
 
-    frequency_resolution = Quantity(Q_(0, "THz"), read_only=True).tag(name="Frequency resolution", group="Data info")
+    frequency_resolution = Quantity(Q_(0, "GHz"), read_only=True).tag(name="Frequency resolution", group="Data info")
     spectral_line_cnt = Int(0, read_only=True).tag(name="Frequency samples", group="Data info")
     nyquist_frequency = Quantity(Q_(0, "THz"), read_only=True).tag(name="Nyquist frequency", group="Data info")
 
@@ -197,23 +197,24 @@ class DataSet(ComponentBase):
 
     @property
     def func_map(self):
-        func_map = {QuantityEnum.P2P: self.p2p, # 1D (N_meas)
-                    QuantityEnum.Phase: self.phase, # 2D (N_meas, Freq_slice)
-                    QuantityEnum.MeasTimeDeltaRef2Sam: self.meas_time_delta, # 0D scalar
-                    QuantityEnum.Power: self.power, # 2D (N_meas, Freq_slice)
-                    QuantityEnum.Absorbance: self.absorbance, # 2D (N_meas, Freq_slice)
-                    QuantityEnum.RefAmp: self.ref_max, # 2D (N_meas, Freq_slice)
-                    QuantityEnum.RefArgmax: self.get_ref_abs_argmax, # 1D (N_meas)
-                    QuantityEnum.RefPhase: self.ref_phase, # 2D (N_meas, Freq_slice)
-                    QuantityEnum.ZeroCrossing: self.get_zero_crossing, # 1D (N_meas)
-                    QuantityEnum.TimeOfFlight: self.time_of_flight, # 1D (N_meas)
-                    QuantityEnum.ToFRefractiveIdx: self.tof_refractive_index, # 2D (N_meas, Freq_slice)
-                    QuantityEnum.Transmission: self.transmission, # 2D (N_meas, Freq_slice)
-                    QuantityEnum.TransmissionAmp: self.amplitude_transmission, # 2D (N_meas, Freq_slice)
-                    QuantityEnum.TransmissionPhase: self.phase_difference, # 2D (N_meas, Freq_slice)
-                    QuantityEnum.RefractiveIdx: self.refractive_idx, # 2D (N_meas, Freq_slice)
-                    QuantityEnum.AbsorptionCoe: self.absorption_coef, # 2D (N_meas, Freq_slice)
-                    QuantityEnum.Conductivity: self.conductivity, # 2D (N_meas, Freq_slice)
+        func_map = {QuantityEnum.P2P: self.p2p,  # 1D (N_meas)
+                    QuantityEnum.Phase: self.phase,  # 2D (N_meas, Freq_slice)
+                    QuantityEnum.MeasTimeDeltaRef2Sam: self.meas_time_delta,  # 0D scalar
+                    QuantityEnum.Power: self.power,  # 2D (N_meas, Freq_slice)
+                    QuantityEnum.Absorbance: self.absorbance,  # 2D (N_meas, Freq_slice)
+                    QuantityEnum.RefAmp: self.ref_max,  # 2D (N_meas, Freq_slice)
+                    QuantityEnum.RefArgmax: self.get_ref_abs_argmax,  # 1D (N_meas)
+                    QuantityEnum.RefPhase: self.ref_phase,  # 2D (N_meas, Freq_slice)
+                    QuantityEnum.ZeroCrossing: self.get_zero_crossing,  # 1D (N_meas)
+                    QuantityEnum.TimeOfFlight: self.time_of_flight,  # 1D (N_meas)
+                    QuantityEnum.PhaseToF: self.delay_from_phase_slope,  # 1D (N_meas)
+                    QuantityEnum.RIEstimate: self.refractive_index_estimate,  # 2D (N_meas, Freq_slice)
+                    QuantityEnum.Transmission: self.transmission,  # 2D (N_meas, Freq_slice)
+                    QuantityEnum.TransmissionAmp: self.amplitude_transmission,  # 2D (N_meas, Freq_slice)
+                    QuantityEnum.TransmissionPhase: self.phase_difference,  # 2D (N_meas, Freq_slice)
+                    QuantityEnum.RefractiveIdx: self.refractive_idx,  # 2D (N_meas, Freq_slice)
+                    QuantityEnum.AbsorptionCoe: self.absorption_coef,  # 2D (N_meas, Freq_slice)
+                    QuantityEnum.Conductivity: self.conductivity,  # 2D (N_meas, Freq_slice)
 
                     }
         return func_map
@@ -597,7 +598,7 @@ class DataSet(ComponentBase):
         self.info_pane.set_trait("sampling_window", t_end-t_start)
         self.info_pane.set_trait("sampling_period", (t_end-t_start)/data_td.shape[1])
 
-        self.info_pane.set_trait("frequency_resolution", Q_(np.mean(np.diff(data_fd[0, :, 0].real)), "THz"))
+        self.info_pane.set_trait("frequency_resolution", Q_(1e3*np.mean(np.diff(data_fd[0, :, 0].real)), "GHz"))
         self.info_pane.set_trait("spectral_line_cnt", data_fd.shape[1])
         self.info_pane.set_trait("nyquist_frequency", Q_(data_fd[0, -1, 0].real, "THz"))
 
@@ -666,7 +667,7 @@ class DataSet(ComponentBase):
         self.sub_dataset = dataset_
         self.set_trait("sub_linked", True)
 
-    def windowing_eval(self, meas_):
+    def windowing_eval(self, meas_) -> WindowEvalResult:
         ref_meas = self.measurement_selector.get_matching_refs(meas_)
 
         with self.settings.pp_opt.override(window_enabled=True, win_width=10):
@@ -739,7 +740,7 @@ class DataSet(ComponentBase):
 
         return 1+np.log(np.abs(pearsonr(x, y, axis=1).statistic))
 
-    def delay_from_phase_slope(self, meas_0, meas_1, freq_min=0.15, freq_max=0.85):
+    def delay_from_phase_slope(self, meas_0, meas_1=None, freq_min=0.25, freq_max=0.85):
         phi_diff = self.phase_difference(meas_0, meas_1)
         mask = (freq_min <= self.freq_axis) & (self.freq_axis <= freq_max)
 
@@ -778,6 +779,10 @@ class DataSet(ComponentBase):
 
         return zero_crossing_interp
 
+    def pulse_amplitude(self, meas_: Measurement):
+        y_td = self.get_multi_data(meas_)
+        return np.max(y_td[:, :, 1], axis=1)
+
     def p2p(self, meas_: Measurement):
         y_td = self.get_multi_data(meas_)
         return np.max(y_td[:, :, 1], axis=1) - np.min(y_td[:, :, 1], axis=1)
@@ -812,9 +817,14 @@ class DataSet(ComponentBase):
         return power_val_sam / power_val_ref
 
     def meas_time_delta(self, meas_: Measurement):
-        ref_meas = self.measurement_selector.get_nearest_ref(meas_)
+        meas_list = [meas_] if isinstance(meas_, Measurement) else meas_
 
-        return (meas_.meas_time - ref_meas.meas_time).total_seconds()
+        get_nearest_ref = self.measurement_selector.get_nearest_ref
+        ref_list = [get_nearest_ref(meas) for meas in meas_list]
+
+        meas_times = [(meas.meas_time - ref_meas.meas_time).total_seconds()
+                      for (meas, ref_meas) in zip(meas_list, ref_list)]
+        return np.array(meas_times, dtype=float)
 
     def ref_max(self, meas_: Measurement):
         y_fd = self._ref_interpolation(meas_)
@@ -922,17 +932,17 @@ class DataSet(ComponentBase):
 
         return  t_zero_sam - t_zero_ref
 
-    def tof_refractive_index(self, meas_):
+    def refractive_index_estimate(self, meas_):
         ref_list = self.measurement_selector.get_matching_refs(meas_)
-        dt = self.delay_from_phase_slope(meas_, ref_list)
+        dt = self.time_of_flight(meas_)
 
         d = self.settings.eval_opt.d.magnitude
-        d = 1.0 if np.isclose(d, 0) else float(d)
+        d = 1.0 if np.isclose(d, 0) else d
 
         n_real = 1.0 + (c_thz * dt / d)[:, None]
 
-        amp_sam = self.p2p(meas_)
-        amp_ref = self.p2p(ref_list)
+        amp_sam = self.pulse_amplitude(meas_)
+        amp_ref = self.pulse_amplitude(ref_list)
 
         w = 2 * np.pi * self.freq_axis
         w = np.where(w == 0, w[1] if len(w) > 1 else 1e-12, w)
@@ -940,6 +950,13 @@ class DataSet(ComponentBase):
         amp_ratio = (amp_ref / amp_sam)[:, None]
 
         n_imag = (c_thz / (w * d)) * np.log(amp_ratio)
+
+        with self.settings.pp_opt.override(window_enabled=True, win_width=10):
+            t_amp = self.amplitude_transmission(meas_)
+
+        t_interface_amp = np.abs(4*n_real/(n_real+1)**2)
+
+        n_imag = -(c_thz / (w * d)) * np.log(t_amp / t_interface_amp)
 
         return n_real + 1j * n_imag
 

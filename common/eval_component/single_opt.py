@@ -40,8 +40,8 @@ def shgo_transmission_optimization(d, shift, config_dict) -> SingleResultData:
             i_ += 1
             shgo_opt_res_ = shgo(opt_fun,
                                  bounds=bounds,
-                                 # minimizer_kwargs=minimizer_kwargs,
-                                 #options=shgo_options,
+                                 minimizer_kwargs=minimizer_kwargs,
+                                 options=shgo_options,
                                  n=1,
                                  iters=30,
                                  )

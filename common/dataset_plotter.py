@@ -516,6 +516,19 @@ class DataSetPlotter(ComponentBase):
 
         self.plt_show()
 
+    def paint_fd_plot(self):
+        if not plt.fignum_exists(self.fd_fig_num):
+            fig, (ax0, ax1) = plt.subplots(2, 1, num=self.fd_fig_num,
+                                           sharex=True, gridspec_kw={'hspace': 0})
+            ax0.set_xlabel("Frequency (THz)")
+            ax0.set_ylabel("Amplitude (dB)")
+            ax1.set_ylabel("Phase (rad)")
+        else:
+            fig = plt.figure(num=self.fd_fig_num)
+            ax0, ax1 = fig.get_axes()
+
+        return ax0, ax1
+
     @action("Reference measurement", group="Plots")
     def plot_ref(self, ref_list=None):
         if ref_list is None:
@@ -537,15 +550,23 @@ class DataSetPlotter(ComponentBase):
             noise_floor_db = np.mean(ref_fd_db[:, upper_end_f_slice, 1], axis=1)[:, np.newaxis]
             ref_fd_db[:, :, 1] -= noise_floor_db
 
-        plot_data_fd = format_meas_dict(ref_list, ref_fd_db, self.only_plot_avg)
+        phi = np.unwrap(np.angle(ref_fd[:, :, 1]), axis=1)
+        freq_tile = np.tile(self.dataset.freq_axis, (len(ref_list), 1))
+        phi_stack = np.stack((freq_tile, phi, np.zeros_like(freq_tile)), axis=2)
+
+        plot_data_fd_phi = format_meas_dict(ref_list, phi_stack, self.only_plot_avg)
+        plot_data_fd_amp = format_meas_dict(ref_list, ref_fd_db, self.only_plot_avg)
         plot_data_td = format_meas_dict(ref_list, ref_td, self.only_plot_avg)
 
-        for ref_meas, y_fd_db in plot_data_fd.items():
+        ax0, ax1 = self.paint_fd_plot()
+
+        for ref_meas, y_fd_amp_db in plot_data_fd_amp.items():
             y_td = plot_data_td[ref_meas]
+            y_fd_phi = plot_data_fd_phi[ref_meas]
             label = f"Reference ({getattr(ref_meas, 'meas_time', 'Average')})"
 
-            plt.figure(self.fd_fig_num)
-            plt.plot(y_fd_db[:, 0], y_fd_db[:, 1], label=label)
+            ax0.plot(y_fd_amp_db[:, 0], y_fd_amp_db[:, 1], label=label)
+            ax1.plot(y_fd_amp_db[:, 0], y_fd_phi[:, 1], label=label)
 
             plt.figure(self.td_fig_num)
             plt.plot(y_td[:, 0], y_td[:, 1], label=label)
@@ -553,8 +574,6 @@ class DataSetPlotter(ComponentBase):
                 plt.scatter(zero_crossing, 0, color="red")
 
         plt.figure(self.fd_fig_num)
-        plt.xlabel("Frequency (THz)")
-        plt.ylabel("Amplitude (dB)")
         plt.draw()
 
         plt.figure(self.td_fig_num)
@@ -562,7 +581,7 @@ class DataSetPlotter(ComponentBase):
         plt.ylabel("Amplitude (Arb. u.)")
         plt.draw()
 
-        logging.info(f"Plotted {len(plot_data_fd)} reference measurement(s)")
+        logging.info(f"Plotted {len(plot_data_fd_amp)} reference measurement(s)")
 
     @action("Waveform", group="Plots")
     def plot_waveform(self, meas_list=None):
@@ -597,13 +616,20 @@ class DataSetPlotter(ComponentBase):
             noise_floor_db = np.mean(sam_fd_db[:, upper_end_f_slice, 1], axis=1)[:, np.newaxis]
             sam_fd_db[:, :, 1] -= noise_floor_db
 
-        plot_data_fd = format_meas_dict(meas_list, sam_fd_db, self.only_plot_avg)
+        phi = np.unwrap(np.angle(sam_fd[:, :, 1]), axis=1)
+        freq_tile = np.tile(self.dataset.freq_axis, (len(meas_list), 1))
+        phi_stack = np.stack((freq_tile, phi, np.zeros_like(freq_tile)), axis=2)
+
+        plot_data_fd_phi = format_meas_dict(meas_list, phi_stack, self.only_plot_avg)
+        plot_data_fd_amp = format_meas_dict(meas_list, sam_fd_db, self.only_plot_avg)
         plot_data_td = format_meas_dict(meas_list, sam_td, self.only_plot_avg)
 
         td_scale = self.plot_settings.td_scale
-
-        for sam_meas, y_fd_db in plot_data_fd.items():
+        ax0, ax1 = self.paint_fd_plot()
+        for sam_meas, y_fd_db in plot_data_fd_amp.items():
             y_td = plot_data_td[sam_meas]
+            y_fd_phi = plot_data_fd_phi[sam_meas]
+
             plt.figure(self.td_fig_num)
             label = self.get_legend_label(sam_meas)
 
@@ -618,8 +644,8 @@ class DataSetPlotter(ComponentBase):
                 td_label += f"\n(Amplitude x {td_scale})"
             plt.plot(y_td[:, 0], td_scale * y_td[:, 1], label=td_label)
 
-            plt.figure(self.fd_fig_num)
-            plt.plot(y_fd_db[:, 0], y_fd_db[:, 1], label=label)
+            ax0.plot(y_fd_db[:, 0], y_fd_db[:, 1], label=label)
+            ax1.plot(y_fd_phi[:, 0], y_fd_phi[:, 1], label=label)
 
         plt.figure(self.td_fig_num)
         plt.draw()
@@ -627,7 +653,7 @@ class DataSetPlotter(ComponentBase):
         plt.figure(self.fd_fig_num)
         plt.draw()
 
-        logging.info(f"Plotted {len(plot_data_fd)} measurement(s)")
+        logging.info(f"Plotted {len(plot_data_fd_amp)} measurement(s)")
         return meas_list
 
     @action("Phase plots", group="Phase plots")
@@ -655,7 +681,7 @@ class DataSetPlotter(ComponentBase):
             phi_cor_1meas = plot_data_phi_corrected[meas]
             label = self.get_legend_label(meas)
             if not label:
-                label = str(meas.filepath.name)
+                label = str(meas.filepath.name) if isinstance(meas, Measurement) else meas
 
             plt.figure("Phase correction comparison" + fig_num_ext)
             plt.plot(self.freq_axis, phi_1meas[:, 1], label=label + " (Original)", ls="dashed")
@@ -799,7 +825,7 @@ class DataSetPlotter(ComponentBase):
         for meas, phi_diff_1meas in plot_meas_dict.items():
             label = self.get_legend_label(meas)
             if not label:
-                label = str(meas.filepath.name)
+                label = str(meas.filepath.name) if isinstance(meas, Measurement) else meas
             plt.figure("Phi difference")
             plt.plot(self.freq_axis, phi_diff_1meas[:, 1], label=label)
 

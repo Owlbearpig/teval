@@ -9,6 +9,11 @@ from common.eval_component.shgo_settings import SHGOOptions
 from common.components import ComponentBase
 from common.traits import ValueRange, Path as TPath, Q_, Quantity as TQuantity
 
+class QSpaceQuantity(Enum):
+    n = "n"
+    k = "k"
+    alpha = "alpha"
+
 class SimRISelection(Enum):
     const = 0
 
@@ -57,27 +62,6 @@ class WindowTypes(Enum):
     parzen = "parzen"
     triang = "triang"
 
-class PixelInterpolation(Enum):
-    none = None
-    antialiased = 'antialiased'
-    nearest = 'nearest'
-    bilinear = 'bilinear'
-    bicubic = 'bicubic'
-    spline16 = 'spline16'
-    spline36 = 'spline36'
-    hanning = 'hanning'
-    hamming = 'hamming'
-    hermite = 'hermite'
-    kaiser = 'kaiser'
-    quadric = 'quadric'
-    catrom = 'catrom'
-    gaussian = 'gaussian'
-    bessel = 'bessel'
-    mitchell = 'mitchell'
-    sinc = 'sinc'
-    lanczos = 'lanczos'
-    blackman = 'blackman'
-
 
 class ClimateQuantity(Enum):
     Temperature = 0
@@ -100,6 +84,27 @@ class Filetype(Enum):
     pdf = ".pdf"
     png = ".png"
     jpg = ".jpg"
+
+class PixelInterpolation(Enum):
+    none = None
+    antialiased = 'antialiased'
+    nearest = 'nearest'
+    bilinear = 'bilinear'
+    bicubic = 'bicubic'
+    spline16 = 'spline16'
+    spline36 = 'spline36'
+    hanning = 'hanning'
+    hamming = 'hamming'
+    hermite = 'hermite'
+    kaiser = 'kaiser'
+    quadric = 'quadric'
+    catrom = 'catrom'
+    gaussian = 'gaussian'
+    bessel = 'bessel'
+    mitchell = 'mitchell'
+    sinc = 'sinc'
+    lanczos = 'lanczos'
+    blackman = 'blackman'
 
 class ColorMaps(Enum):
     magma = "magma"
@@ -309,7 +314,8 @@ class QuantityEnum(Enum):
     PeakCnt = QuantityFunc("Peak Cnt", domain=Domain.Time)
     ZeroCrossing = QuantityFunc("Zero Crossing", domain=Domain.Time, unit="ps")
     TimeOfFlight = QuantityFunc("Time of Flight", domain=Domain.Time, unit="ps")
-    ToFRefractiveIdx = QuantityFunc("Refractive index from tof", domain=Domain.Time)
+    PhaseToF = QuantityFunc("Phase slope ToF", domain=Domain.Time, unit="ps")
+    RIEstimate = QuantityFunc("Refractive index estimate", domain=Domain.Time)
     Transmission = QuantityFunc("Transmission", domain=Domain.Frequency)
     TransmissionAmp = QuantityFunc("Amplitude transmission", domain=Domain.Frequency)
     TransmissionPhase = QuantityFunc("Phase transmission", domain=Domain.Frequency, unit="rad")
@@ -321,20 +327,19 @@ class QuantityEnum(Enum):
 class EvalOpt(ComponentBase):
     dt = TQuantity(Q_(0.0, "fs")).tag(name="Conductivity pulse shift")
     fit_range = ValueRange([Q_(0.50, "THz"), Q_(2.20, "THz")]).tag(name="Fit range")
-    q_space_range = ValueRange([Q_(0.75, "THz"), Q_(2.00, "THz")]).tag(name="Q-space minimization range")
     phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(name="Phase correction fit range")
-    average = Bool(False, help="Average over consecutive measurements "
-                               "with same position").tag(name="Average measurements")
+
     delta_d = TQuantity(Q_(2.0, "µm")).tag(name="Thickness uncertainty")
     fp_count = Int(0).tag(name="Number of Fabry-Perots")
     phi_offset_correction = Bool(True).tag(name="Phase offset correction")
     printed_freqs = Unicode(default_value="1.0, 2.0").tag(name="Printed frequencies (THz)")
 
-    d = TQuantity(Q_(0.0, "µm")).tag(name="Sample thickness")
+    d = TQuantity(Q_(0.0, "µm")).tag(name="Nominal sample thickness")
     d_film = TQuantity(Q_(0.0, "µm")).tag(name="Film thickness")
     fp_spacing = TQuantity(Q_(12, "fs")).tag(name="Approximate Fabry-perot spacing")
 
     transmission_sim_grp = "Transmission simulation"
+    add_sim_to_res = Bool(False, group=transmission_sim_grp).tag(name="Add simulated transmission to result")
     sim_d = TQuantity(Q_(100, "µm"), group=transmission_sim_grp).tag(name="Simulation thickness")
     sim_h = TQuantity(Q_(1, "µm"), group=transmission_sim_grp).tag(name="Simulation film thickness")
     sim_nfp = Int(8, group=transmission_sim_grp).tag(name="Fabry perot count")
@@ -346,14 +351,33 @@ class EvalOpt(ComponentBase):
     sim_n_selection = TEnum(SimRISelection, SimRISelection.const,
                             group=transmission_sim_grp).tag(name="Simulation refractive index")
 
-    regulated_spline_grp = "Regulated spline"
-    knot_cnt = Int(100).tag(name="Spline count", group=regulated_spline_grp)
-    reg_n = Float(1e-5).tag(name="n regularization", group=regulated_spline_grp, decimals=10)
-    reg_k = Float(1e-6).tag(name="k regularization", group=regulated_spline_grp, decimals=10)
+    q_space_eval_grp = "Q-value calculation"
+    normalize_q_vals = Bool(False, group=q_space_eval_grp).tag(name="Normalize q-vals")
+    q_space_range = ValueRange([Q_(0.75, "THz"), Q_(2.00, "THz")]).tag(name="Q-space minimization range",
+                                                                       group=q_space_eval_grp)
+    q_space_quantity = TEnum(QSpaceQuantity, QSpaceQuantity.n).tag(name="Quantity used for q-value calculation",
+                                                                   group=q_space_eval_grp)
+
+    regulated_spline_grp = "Regulated spline optimization"
+    knot_cnt = Int(100, min=2).tag(name="Spline count", group=regulated_spline_grp)
+    reg_k = Float(1e-6).tag(name="k regularization", group=regulated_spline_grp, significant_figures=3)
+    reg_n = Float(1e-5).tag(name="n regularization", group=regulated_spline_grp, significant_figures=3)
+    max_nfev = Int(100, min=1).tag(name="Maximum number of function evaluations", group=regulated_spline_grp)
 
     conductivity_calc_grp = "Conductivity calculation"
     use_sub_dataset = Bool(False, group=conductivity_calc_grp).tag(name="Use separate substrate dataset")
     sub_pnt = ValueRange([0, 0], group=conductivity_calc_grp).tag(name="Substrate point")
+
+    smoothing_avg_grp = "Smoothing average"
+    smoothing_avg_en = Bool(False).tag(name="Enable smoothing average of quantities", group=smoothing_avg_grp)
+    smoothing_avg_n = Int(3).tag(name="Smoothing average window size", group=smoothing_avg_grp)
+    smoothing_avg_iters = Int(3).tag(name="Smoothing average iterations", group=smoothing_avg_grp)
+
+    shift_grp = "Shift axis settings"
+    enable_shift_opt = Bool(False).tag(group=shift_grp).tag(name="Enable pulse shift optimization")
+    shift_opt_axis_bounds = ValueRange([Q_(0, "fs"), Q_(0, "fs", )],
+                                       group=shift_grp).tag(name="Shift axis bounds")
+    shift_opt_axis_step = TQuantity(Q_(1, "fs"), group=shift_grp).tag(name="Shift axis step")
 
 class PpOpt(ComponentBase):
     remove_dc = Bool(True).tag(name="Subtract DC")

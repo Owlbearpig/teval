@@ -25,6 +25,7 @@ from common.eval_component.single_opt import shgo_transmission_optimization
 from common.save import ResultSaver
 from common.eval_component.eval_result import EvalResult
 from concurrent.futures import ThreadPoolExecutor
+import threading
 from PySide6.QtCore import QObject, Signal
 
 # testing
@@ -81,16 +82,14 @@ class DataSetType(Enum):
 
 
 class DatasetEval(ComponentBase):
+    selected_result_path = TPath(Path("")).tag(name="Load result", en_save=False, priority=-100)
+    selected_substrate_result_path = TPath(Path("")).tag(name="Substrate result", en_save=False, priority=1)
+    number_of_workers = Integer(8).tag(name="Number of cpu cores to assign", priority=2)
     selected_cost_fun = TEnum(CostFunctions, default_value=CostFunctions.abs_cost,
-                              help="Model to experimental data metric").tag(name="Selected cost function")
-    selected_result_path = TPath(Path("")).tag(name="Load result", en_save=False)
-    selected_substrate_result_path = TPath(Path("")).tag(name="Substrate result", en_save=False)
-    optimization_progress = Float(0, min=0, max=1, read_only=True).tag(name="Progress")
-    only_eval_avg = Bool(False).tag(name="Only evaluate average")
-    number_of_workers = Integer(8).tag(name="Number of cpu cores to assign", priority=-2)
-    smoothing_avg_en = Bool(True).tag(name="Enable smoothing average of quantities")
-    smoothing_avg_n = Integer(3).tag(name="Smoothing average window size")
-    smoothing_avg_iters = Integer(3).tag(name="Smoothing average iterations")
+                              help="Model to experimental data metric").tag(name="Selected cost function", priority=3)
+    only_eval_avg = Bool(False).tag(name="Only evaluate average", priority=4)
+    optimization_progress = Float(0, min=0, max=1, read_only=True).tag(name="Progress",
+                                                                       priority=5, en_save=False)
 
     reg_grp_name = "Regression"
     selected_meas_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.TransmissionAmp,
@@ -122,15 +121,6 @@ class DatasetEval(ComponentBase):
     bound_shrink_factor = Float(0.20, group=t_fit_grp_name).tag(name="Thickness bounds shrink factor",
                                                                 priority=4)
 
-    add_sim_to_res = Bool(False, group=t_fit_grp_name).tag(name="Add simulated transmission to result")
-    normalize_q_vals = Bool(True, group=t_fit_grp_name).tag(name="Normalize q-vals")
-
-    shift_grp = "Shift axis settings"
-    disable_shift_opt = Bool(True).tag(group=shift_grp).tag(name="Disable pulse shift optimization")
-    shift_opt_axis_bounds = ValueRange([Q_(0, "fs"), Q_(0, "fs", )],
-                                       group=shift_grp).tag(name="Shift axis bounds")
-    shift_opt_axis_step = Quantity(Q_(1, "fs"), group=shift_grp).tag(name="Shift axis step")
-
     current_result = Instance(EvalResult)
     # selected_substrate_result = Instance(EvalResult)
     result_saver = Instance(ResultSaver)
@@ -144,8 +134,11 @@ class DatasetEval(ComponentBase):
         # self.selected_substrate_result = EvalResult(object_name="Substrate result")
 
         self.result_saver = self.setup_saver()
-
         self.current_result.result_carrier.result_ready.connect(self.result_saver.process)
+
+        self._cancel_event = threading.Event()
+        self._thread_executor = None
+        self._active_eval = None
 
     def __exit__(self, *args):
         if self.settings is not None:
@@ -402,20 +395,33 @@ class DatasetEval(ComponentBase):
         if self.dataset.measurement_selector.selected_sam_cnt == "0":
             logging.warning("No measurements selected")
             return
+        self._cancel_event.clear()
         progress_carrier = ProgressSignalCarrier()
         progress_carrier.progress_changed.connect(self.update_progress)
 
         def bg_worker():
             try:
-                qs_eval = QSpaceEval(self)
-                qs_eval_data = qs_eval.q_space_eval_mp(progress_carrier=progress_carrier)
+                self._active_eval = QSpaceEval(self)
+                qs_eval_data = self._active_eval.q_space_eval_mp(progress_carrier=progress_carrier,
+                                                                 cancel_event=self._cancel_event)
                 self.current_result.result_carrier.received_result.emit(qs_eval_data)
             except Exception as e:
                 traceback.print_exc()
-        executor = ThreadPoolExecutor(max_workers=1)
-        executor.submit(bg_worker)
+        self._thread_executor = ThreadPoolExecutor(max_workers=1)
+        self._thread_executor.submit(bg_worker)
 
+    @action("Cancel optimization")
+    def cancel_optimization(self):
+        self._cancel_event.set()
 
+        if self._active_eval and self._active_eval.current_process_executor:
+            executor = self._active_eval.current_process_executor
+            processes = getattr(executor, "_processes", None) or {}
+            for proc in list(processes.values()):
+                if proc.is_alive():
+                    proc.kill()
+            executor.shutdown(wait=False, cancel_futures=True)
+        logging.info("Cancelled optimization")
 
 if __name__ == "__main__":
 

@@ -48,7 +48,7 @@ class EvalResult(ComponentBase):
     transmission_res_grp_name = "Transmission result"
     measurement = Unicode("", read_only=True,
                           group=transmission_res_grp_name).tag(priority=0, name="Measurement")
-    result_type = Unicode("None", read_only=True,
+    result_type = Unicode("", read_only=True,
                           group=transmission_res_grp_name).tag(priority=1, name="Result type")
     model_name = Unicode("", read_only=True,
                          group=transmission_res_grp_name).tag(priority=2, name="Model")
@@ -60,8 +60,8 @@ class EvalResult(ComponentBase):
                              read_only=True).tag(priority=5, name="Sub. dataset path")
     converged = Bool(False, read_only=True,
                      group=transmission_res_grp_name).tag(priority=6, name="Converged")
-    q_val = Quantity(Q_(0.0, ""), read_only=True, group=transmission_res_grp_name)
-    gof = Quantity(Q_(0.0, ""), read_only=True, group=transmission_res_grp_name)
+    q_val = Quantity(Q_(0.0, ""), read_only=True, group=transmission_res_grp_name, significant_figures=5)
+    gof = Quantity(Q_(0.0, ""), read_only=True, group=transmission_res_grp_name, significant_figures=5)
 
     reg_result_grp_name = "Regression result values"
     fun = Float(0.0, read_only=True, group=reg_result_grp_name).tag(priority=-1)
@@ -74,8 +74,8 @@ class EvalResult(ComponentBase):
     c1 = Float(0, read_only=True, group=reg_result_grp_name).tag(name="c₁")
 
     measurement_list = StrListSelection(group="Evaluated measurements", read_only=True, combine=True, priority=1)
-    thicknesses = StrListSelection(group="Thicknesses", read_only=True).tag(max_width=70, combine=True, priority=2)
-    shifts = StrListSelection(group="Pulse shifts", read_only=True).tag(max_width=70, combine=True, priority=3)
+    thicknesses = StrListSelection(group="Thicknesses (µm)", read_only=True).tag(max_width=70, combine=True, priority=2)
+    shifts = StrListSelection(group="Pulse shifts (fs)", read_only=True).tag(max_width=70, combine=True, priority=3)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -123,13 +123,13 @@ class EvalResult(ComponentBase):
             if not results:
                 continue
 
-            x_vals = [res.d.magnitude if hasattr(res.d, "magnitude") else res.d for res in results]
-            y_vals = []
-            for res in results:
-                q_val = res.optimization_info["q_val"]
-                y_vals.append(q_val.magnitude if hasattr(q_val, "magnitude") else q_val)
+            x_vals = np.array([res.d.magnitude for res in results], dtype=float)
+            y_vals = np.array([res.optimization_info["q_val"].magnitude for res in results], dtype=float)
+            sort_idx = np.argsort(x_vals)
+            plt.plot(x_vals[sort_idx], y_vals[sort_idx], label=f"shift={shift}")
 
-            plt.plot(x_vals, y_vals, label=f"shift={shift}")
+            q_argmin = np.argmin(y_vals)
+            logging.info(f"Optimum thickness: {results[q_argmin].d} (shift: {results[q_argmin].shift})")
 
         plt.xlabel("Thickness (µm)")
         plt.ylabel("Q-value")

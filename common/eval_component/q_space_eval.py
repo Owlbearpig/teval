@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy
 from common.dataset import format_meas_dict, DataSet
-from common.default_appsettings import SimRISelection, AppSettings, Domain
+from common.default_appsettings import SimRISelection, AppSettings, Domain, QSpaceQuantity
 from common.functions import f_axis_idx_map, moving_average, do_ifft, to_db, avg_data_array
 from common.eval_component.transfer_functions import model_1layer_inf, transferfunction_error, dtdn, dtdd
 from common.eval_component.quantity_set import QuantityDataSet
@@ -15,6 +15,7 @@ from common.measurements import Measurement
 from common.consts import c_thz
 from scipy.optimize import shgo
 from scipy.signal import iirnotch, filtfilt, detrend
+import concurrent
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from common.eval_component.single_opt import shgo_transmission_optimization
@@ -33,6 +34,8 @@ class QSpaceEval:
 
         self.cost_fun = self.dataset_eval.selected_cost_fun.value
         self.transmission_model = self.dataset_eval.transmission_model
+
+        self.current_process_executor = None
 
         self.opt_state = {}
 
@@ -77,7 +80,7 @@ class QSpaceEval:
     @property
     def n_guess(self):
         meas_list = self.selected_measurements
-        ref_idx = self.dataset_eval.dataset.tof_refractive_index(meas_list)
+        ref_idx = self.dataset_eval.dataset.refractive_index_estimate(meas_list)
 
         f_axis_tile = np.tile(self.freq_axis, (len(meas_list), 1))
         arrays = (f_axis_tile, ref_idx[:, self.freq_idx], np.zeros_like(f_axis_tile))
@@ -144,15 +147,22 @@ class QSpaceEval:
         q_space_idx_range = f_axis_idx_map(freq_axis, q_space_range)
 
         dt = np.mean(np.diff(freq_axis[q_space_idx_range]))
-        # y = opt_res_["n"][q_space_idx_range]
-        y = res_data.datasets["n"].data.magnitude[q_space_idx_range].real
+        q_space_q = self.settings.eval_opt.q_space_quantity
+
+        y = res_data.datasets["n"].data.magnitude
+        match q_space_q:
+            case QSpaceQuantity.n:
+                y = y.real
+            case QSpaceQuantity.k:
+                y = y.imag
+            case QSpaceQuantity.alpha:
+                y = res_data.datasets[QSpaceQuantity.alpha.name].data.magnitude
+
+        y = y[q_space_idx_range]
         y = y - np.mean(y)
 
         y = detrend(y, type="linear")
 
-        # y = np.array([freq_axis[q_space_idx_range], y]).T
-        # y = window(y, win_width=len(y), win_start=0, shift=40, en_plot=True, type=WindowTypes.hann)
-        # y = y[:, 1]
         og_len = len(y)
         y = np.concatenate([np.zeros(3 * len(y)), y, np.zeros(3 * len(y))])
 
@@ -166,12 +176,6 @@ class QSpaceEval:
         t0 = np.argmin(np.abs(t_axis - (fp_spacing - 2)))
         t1 = np.argmin(np.abs(t_axis - (fp_spacing + 2)))
 
-        # t0, t1 = 0.85*3*t_diff, 1.15*3*t_diff
-        # t0_idx, t1_idx = np.argmin(np.abs(t0-t_axis)), np.argmin(np.abs(t1-t_axis))
-        # print(t_axis[t0_idx], t_axis[t1_idx], t_diff)
-        # t_diff = np.abs(self._delay_from_phaseslope(meas_, ref_meas_))
-        # exit()
-
         q_val, peak_idx = np.max(q_val_axis[t0:t1]), np.argmax(q_val_axis[t0:t1])
         q_sum = np.sum(q_val_axis[t0:t1])
 
@@ -182,7 +186,6 @@ class QSpaceEval:
         qual_factor = 0.5  # quality factor: higher = narrower
 
         peak_freq = t_axis[t0:t1][peak_idx]
-        # print(peak_freq, fs)
         b, a = iirnotch(peak_freq / (fs / 2), qual_factor)
 
         y_filtered = filtfilt(b, a, y)
@@ -193,13 +196,13 @@ class QSpaceEval:
 
         return q_val
 
-    def q_space_eval_mp(self, progress_carrier=None) -> EvalResultData:
+    def q_space_eval_mp(self, progress_carrier=None, cancel_event=None) -> EvalResultData:
         t_model_kwargs = self.dataset_eval.get_t_model_kwargs()
 
         iteration_count = self.dataset_eval.iteration_count
         is_iterative = self.dataset_eval.iterative_thickness_optimization
 
-        sas = (self.dataset_eval.smoothing_avg_n, self.dataset_eval.smoothing_avg_iters)
+        sas = (self.settings.eval_opt.smoothing_avg_n, self.settings.eval_opt.smoothing_avg_iters)
 
         ref_fd_dict = self.ref_fd_dict
         ref_sam_map = self.dataset_eval.dataset.measurement_selector.sam_ref_meas_map
@@ -218,21 +221,25 @@ class QSpaceEval:
             common_opt_params["knot_count"] = self.settings.eval_opt.knot_cnt
             common_opt_params["reg_n"] = self.settings.eval_opt.reg_n
             common_opt_params["reg_k"] = self.settings.eval_opt.reg_k
+            common_opt_params["max_nfev"] = self.settings.eval_opt.max_nfev
         opt_configs = {meas: {**common_opt_params, "n_guess": n_guess[meas],
                               "t_exp": t_exp_dict[meas]} for meas in t_exp_dict}
 
         def get_new_tasks():
-            bnds = self.dataset_eval.shift_opt_axis_bounds
-            step = self.dataset_eval.shift_opt_axis_step
-            shift_axis = np.arange(bnds[0].magnitude, bnds[1].magnitude + step.magnitude, step.magnitude)
-            if self.dataset_eval.disable_shift_opt:
+            shift_bnds = self.settings.eval_opt.shift_opt_axis_bounds
+            shift_step = self.settings.eval_opt.shift_opt_axis_step
+            shift_axis = np.arange(shift_bnds[0].magnitude,
+                                   shift_bnds[1].magnitude + shift_step.magnitude,
+                                   shift_step.magnitude)
+            if not self.settings.eval_opt.enable_shift_opt:
                 shift_axis = [0]
 
             tasks = []
             if not self.dataset_eval.iterative_thickness_optimization:
                 bnds = self.dataset_eval.d_opt_axis_bounds
                 step = self.dataset_eval.d_opt_axis_step
-                d_axis = np.arange(bnds[0].magnitude, bnds[1].magnitude+step.magnitude, step.magnitude)
+                num_steps = int(round((bnds[1].magnitude - bnds[0].magnitude) / step.magnitude)) + 1
+                d_axis = np.linspace(bnds[0].magnitude, bnds[1].magnitude, num_steps)
             else:
                 shrink_factor = self.dataset_eval.bound_shrink_factor
                 d0 = self.opt_state["d"].magnitude
@@ -241,7 +248,7 @@ class QSpaceEval:
 
             for d in d_axis:
                 for shift in shift_axis:
-                    tasks.append((d, shift))
+                    tasks.append(np.array([d, shift], dtype=float))
 
             return tasks
 
@@ -251,18 +258,26 @@ class QSpaceEval:
                 logging.info(f"Thickness refinement iteration {it_idx} / {tot_it}")
             if iteration_progress is None or iteration_progress[0] == 0:
                 logging.info(f"Starting optimization")
+                if progress_carrier is not None:
+                    progress_carrier.progress_changed.emit(0)
 
             results = []
             with ProcessPoolExecutor(max_workers=self.dataset_eval.number_of_workers) as executor:
+                self.current_process_executor = executor
                 worker_func = partial(self.dataset_eval.optimization_method.value, config_dict=opt_config)
                 futures = [executor.submit(worker_func, d, shift) for d, shift in tasks]
                 total_tasks = len(futures)
 
                 logging.info(f"Processing {total_tasks} tasks")
                 for fut_idx, future in enumerate(futures):
-                    if progress_carrier is not None:
-                        progress_carrier.progress_changed.emit(0)
-                    res: SingleResultData = future.result()
+                    if cancel_event is not None and cancel_event.is_set():
+                        executor.shutdown(wait=False, cancel_futures=True)
+
+                    try:
+                        res: SingleResultData = future.result()
+                    except concurrent.futures.process.BrokenProcessPool:
+                        logging.info(f"Process stopped")
+                        return []
 
                     completed_tasks = fut_idx + 1
                     percentage = (completed_tasks / total_tasks) * 100
@@ -333,12 +348,12 @@ class QSpaceEval:
                                                                axes_labels=["Frequency"],
                                                                data_label="Residual")
 
-                if self.dataset_eval.add_sim_to_res:
+                if self.settings.eval_opt.add_sim_to_res:
                     opt_res.datasets.update(self.calc_sim(t_model_kwargs, ref_fd_dict[ref_meas]))
 
                 smoothed_quantities = ["n", "alpha"]
                 for q in smoothed_quantities:
-                    if not self.dataset_eval.smoothing_avg_en:
+                    if not self.settings.eval_opt.smoothing_avg_en:
                         continue
                     if q in opt_res.datasets:
                         smoothed_data = moving_average(opt_res.datasets[q].data.magnitude, *sas)
@@ -392,7 +407,7 @@ class QSpaceEval:
         return sim_res
 
     def prepare_results(self, opt_results: list[SingleResultData]):
-        norm_q_vals = self.dataset_eval.normalize_q_vals
+        norm_q_vals = self.settings.eval_opt.normalize_q_vals
         q_vals = [opt_res.optimization_info["q_val"] for opt_res in opt_results]
         for opt_res in opt_results:
             q_val = opt_res.optimization_info["q_val"]

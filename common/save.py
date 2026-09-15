@@ -22,7 +22,7 @@ from common.eval_component.eval_result import EvalResult, EvalResultData
 from common.eval_component.quantity_set import QuantityDataSetDict as QuantityDictClass, QuantityDataSet
 from common.units import Q_
 from enum import Enum, unique
-from common.traits import ValueRange
+from common.traits import ValueRange, Path as PathTrait
 from traitlets import Bool, Enum as EnumTrait, Unicode
 import numpy as np
 from datetime import datetime
@@ -31,6 +31,7 @@ from copy import deepcopy
 from common.consts import result_dir
 from pathlib import Path
 import h5py
+import re
 
 def _getManipulatorValueInPreferredUnits(m):
     val = m.value
@@ -43,8 +44,7 @@ def _getManipulatorValueInPreferredUnits(m):
 
 class ResultSaver(ComponentBase):
 
-    # base_path = PathTrait(default_value=result_dir, is_file=False, must_exist=False).tag(name="Path")
-    base_path = Path(result_dir)
+    base_path = PathTrait(default_value=result_dir, is_file=False, must_exist=False).tag(name="Path")
 
     textFileWithHeaders = Bool(False).tag(name="Write header to text files")
     fileNameTemplate = Unicode('{date}-{name}-{result_type}',
@@ -53,7 +53,7 @@ class ResultSaver(ComponentBase):
                                     "{name}: The main file name\n"
                                     "{date}: The current date and time").tag(
                                name="File name template")
-    mainFileName = Unicode('data').tag(name="Main file name")
+    mainFileName = Unicode('data').tag(name="Main file name", fullwidth=True)
 
     enabled = Bool(True, help="Whether data storage is enabled").tag(
                          name="Enabled")
@@ -92,9 +92,28 @@ class ResultSaver(ComponentBase):
         else:
             return str(attr)
 
-    def _getFileName(self):
+    def _get_main_file_name(self, meas_names=None):
+        if not meas_names:
+            return self.mainFileName
+        main_fn = self.mainFileName
+        if len(main_fn) < 2 or main_fn[:2] != "$$":
+            return main_fn
 
-        save_path = self.base_path / Path(self.script_name).stem
+        no_time_names = []
+        for meas in meas_names:
+            if len(meas) > 26:
+                no_time_names.append(meas[26:])
+
+        for meas_name in set(no_time_names):
+            match = re.search(main_fn[2:], meas_name)
+            if match:
+                return match.group(0)
+
+        return main_fn
+
+    def _getFileName(self, meas_names):
+
+        save_path = self.base_path
         save_path.mkdir(parents=True, exist_ok=True)
 
         date = datetime.now().isoformat().replace(':', '-')
@@ -107,7 +126,7 @@ class ResultSaver(ComponentBase):
                            for k, (inst, name) in self._attributes.items()}
 
         formattedName = self.fileNameTemplate.format(date=date,
-                                                     name=self.mainFileName,
+                                                     name=self._get_main_file_name(meas_names),
                                                      **manipValues,
                                                      **attributeValues)
         formattedName += ".hdf5"
@@ -116,7 +135,7 @@ class ResultSaver(ComponentBase):
         return str(save_path.joinpath(formattedName))
 
     def _saveHDF5(self, eval_result: EvalResult):
-        fileName = self._getFileName()
+        fileName = self._getFileName(eval_result.eval_result_data.measurement_names)
         eval_data: EvalResultData = eval_result.eval_result_data
 
         def write_quantity(group, name, quantity):

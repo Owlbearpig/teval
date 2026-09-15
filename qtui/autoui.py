@@ -23,187 +23,118 @@ def is_component_trait(x):
     return (isinstance(x, Instance) and issubclass(x.klass, ComponentBase))
 
 
-def create_range_entry(component, name, trait):
-    range_val = trait.get(component)
-    sb_cnt = len(range_val)
-    inner_value = range_val[0]
+def create_number_entry(component, name, trait):
+    raw_value = trait.get(component)
+    is_range = isinstance(raw_value, (tuple, list))
+    values = list(raw_value) if is_range else [raw_value]
+    sb_cnt = len(values)
+    sample = values[0]
 
-    is_integer = isinstance(inner_value, int)
-    is_float = isinstance(inner_value, float)
-    is_quantity = isinstance(inner_value, Q_)
+    is_integer = isinstance(trait, Integer) or isinstance(sample, int)
+    is_float = isinstance(trait, Float) or isinstance(sample, float)
+    is_quantity = isinstance(trait, Quantity) or isinstance(sample, Q_)
+
     is_double_spinbox = not is_integer
 
+    def limit(bound, default):
+        if bound is None:
+            return default
+        return bound.magnitude if is_quantity else bound
+
     if is_integer:
-        min_val = -2147483648 if trait.min is None else trait.min
-        max_val = 2147483647 if trait.max is None else trait.max
-    elif is_float:
-        min_val = float('-inf') if trait.min is None else trait.min
-        max_val = float('inf') if trait.max is None else trait.max
-    elif is_quantity:
-        min_val = float('-inf') if trait.min is None else trait.min.magnitude
-        max_val = float('inf') if trait.max is None else trait.max.magnitude
+        min_val = limit(trait.min, -2147483648)
+        max_val = limit(trait.max, 2147483647)
+    else:
+        min_val = limit(trait.min, float('-inf'))
+        max_val = limit(trait.max, float('inf'))
 
     has_limits = not (np.isinf(min_val) or np.isinf(max_val))
+    significant_figures = trait.metadata.get('significant_figures', 3)
+
+    if is_quantity:
+        preferred = trait.metadata.get('preferred_units', None)
+        units = [preferred or v.units for v in values]
+    else:
+        units = [None] * sb_cnt
+
+    def get_value(idx):
+        val = trait.get(component)
+        val = val[idx] if is_range else val
+        return val.to(units[idx]).magnitude if is_quantity else val
+
+    def set_value(idx, number):
+        new_val = number * units[idx] if is_quantity else number
+        if is_range:
+            full = list(trait.get(component))
+            full[idx] = new_val
+            setattr(component, name, full)
+        else:
+            setattr(component, name, new_val)
+
     layout = QtWidgets.QHBoxLayout()
 
     spinboxes = []
     def setup_single_spinbox(sb_idx):
-        def get_value():
-            range_ = trait.get(component)
-            return range_[sb_idx].magnitude if is_quantity else range_[sb_idx]
-
-        spinbox = ChangeIndicatorSpinBox(is_double_spinbox=is_double_spinbox,
-                                         actual_value_getter=get_value)
+        spinbox = ChangeIndicatorSpinBox(
+            is_double_spinbox=is_double_spinbox,
+            actual_value_getter=lambda: get_value(sb_idx))
         spinboxes.append(spinbox)
+
         spinbox.setMinimum(min_val)
         spinbox.setMaximum(max_val)
         spinbox.setToolTip(trait.help)
         spinbox.setReadOnly(trait.read_only)
-
         if trait.read_only:
             spinbox.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
 
-        units = None
         if is_quantity:
-            trait_val = trait.get(component)
-            units = trait.metadata.get('preferred_units', None) or trait_val[sb_idx].units
-            spinbox.setSuffix(f" {units:C~}")
+            spinbox.setSuffix(f" {units[sb_idx]:C~}")
 
-        if is_double_spinbox and not has_limits:
+        if is_double_spinbox:
+            spinbox.setDecimals(30)
+
+            def textFromValue(self, val):
+                if abs(val) < 10 ** (1 - significant_figures) and val != 0.0:
+                    text = f"{val:.{significant_figures}e}"
+                else:
+                    text = f"{val:.{significant_figures}f}"
+                return text.replace(".", ",")
+
+            def valueFromText(self, text):
+                clean_text = text.replace(self.suffix(), '').strip()
+                try:
+                    return float(clean_text.replace(",", "."))
+                except ValueError:
+                    return 0.0
+
+            spinbox.textFromValue = types.MethodType(textFromValue, spinbox)
+            spinbox.valueFromText = types.MethodType(valueFromText, spinbox)
+
             def sizeHint(self):
                 original_hint = QtWidgets.QDoubleSpinBox.sizeHint(self)
-                decimals = spinbox.decimals()
-                font_metrics = spinbox.fontMetrics()
-                text_width = font_metrics.horizontalAdvance(f"{get_value():.{decimals}f}")
+                font_metrics = self.fontMetrics()
+                text_width = font_metrics.horizontalAdvance(
+                    f"{get_value(sb_idx):.{significant_figures}f}")
                 button_padding = 30
-                suffix_padding = font_metrics.horizontalAdvance(spinbox.suffix())
-                return QtCore.QSize(max(text_width + button_padding + suffix_padding, 20), original_hint.height())
+                suffix_padding = font_metrics.horizontalAdvance(self.suffix())
+                new_width = text_width + button_padding + suffix_padding
+
+                return QtCore.QSize(new_width, original_hint.height())
 
             spinbox.sizeHint = types.MethodType(sizeHint, spinbox)
             spinbox.updateGeometry()
 
         layout.addWidget(spinbox)
 
-        if not trait.read_only:
-            apply = QtWidgets.QToolButton()
-            apply.setFocusPolicy(QtCore.Qt.NoFocus)
-            apply.setText('✓')
-            apply.setAutoRaise(True)
-            layout.addWidget(apply)
-
-            def apply_value_to_component():
-                new_range_val = list(trait.get(component))
-                new_range_val[sb_idx] = spinbox.value() * units if is_quantity else spinbox.value()
-
-                setattr(component, name, new_range_val)
-
-            apply.clicked.connect(apply_value_to_component)
-            apply.clicked.connect(spinbox.check_changed)
-            spinbox.editingFinished.connect(apply_value_to_component)
-            spinbox.editingFinished.connect(spinbox.check_changed)
-
-        def update_spinbox_from_trait(new_val):
-            spinbox.blockSignals(True)
-            spinbox.setValue(new_val[sb_idx].to(units).magnitude if is_quantity else new_val[sb_idx])
-            spinbox.blockSignals(False)
-
-        if not trait.read_only:
-            update_spinbox_from_trait(trait.get(component))
-            component.observe(lambda c: update_spinbox_from_trait(c['new']), name)
-
-    for i in range(2):
+    for i in range(sb_cnt):
         setup_single_spinbox(sb_idx=i)
 
-        if i != sb_cnt-1:
+        if i != sb_cnt - 1:
             separator_label = QtWidgets.QLabel("-")
             separator_label.setAlignment(QtCore.Qt.AlignCenter)
-            separator_label.setStyleSheet("padding: 0 4px;")
+            separator_label.setStyleSheet("padding: 0 1px;")
             layout.addWidget(separator_label)
 
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setStretch(0, 1)
-    layout.setStretch(1, 0)
-
-    return layout
-
-def create_spinbox_entry(component, name, trait):
-    is_integer = isinstance(trait, Integer)
-    is_float = isinstance(trait, Float)
-    is_quantity = isinstance(trait, Quantity)
-
-    is_double_spinbox = not is_integer
-
-    def get_value_with_units():
-        return trait.get(component).magnitude
-
-    def get_value_without_units():
-        return trait.get(component)
-
-    get_value = (get_value_with_units if is_quantity
-                 else get_value_without_units)
-    layout = QtWidgets.QHBoxLayout()
-    spinbox = ChangeIndicatorSpinBox(is_double_spinbox=is_double_spinbox,
-                                     actual_value_getter=get_value,
-                                     decimals=trait.metadata.get("decimals", 3))
-    spinbox.setToolTip(trait.help)
-
-    if is_integer:
-        spinbox.setMinimum(-2147483648 if trait.min is None else trait.min)
-        spinbox.setMaximum(2147483647 if trait.max is None else trait.max)
-    elif is_float:
-        spinbox.setMinimum(float('-inf') if trait.min is None
-                           else trait.min)
-        spinbox.setMaximum(float('inf') if trait.max is None
-                           else trait.max)
-    elif is_quantity:
-        spinbox.setMinimum(float('-inf') if trait.min is None
-                           else trait.min.magnitude)
-        spinbox.setMaximum(float('inf') if trait.max is None
-                           else trait.max.magnitude)
-    has_limits = not (np.isinf(spinbox.minimum()) or np.isinf(spinbox.maximum()))
-
-    spinbox.setReadOnly(trait.read_only)
-    if trait.read_only:
-        spinbox.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
-
-    if is_quantity:
-        units = (trait.metadata.get('preferred_units', None) or
-                 trait.get(component).units)
-        spinbox.setSuffix(" {:C~}".format(units))
-
-    if is_double_spinbox:
-        def textFromValue(self, val):
-            if abs(val) < 1e-3 and val != 0:
-                return f"{val:.4e}"
-            return f"{val:.{self.decimals()}f}"
-
-        def valueFromText(self, text):
-            clean_text = text.replace(self.suffix(), '').strip()
-            try:
-                return float(clean_text)
-            except ValueError:
-                return 0.0
-
-        spinbox.textFromValue = types.MethodType(textFromValue, spinbox)
-        spinbox.valueFromText = types.MethodType(valueFromText, spinbox)
-
-    if is_double_spinbox and not has_limits:
-        def sizeHint(self):
-            original_hint = QtWidgets.QDoubleSpinBox.sizeHint(self)
-            decimals = spinbox.decimals()
-            font_metrics = spinbox.fontMetrics()
-            text_width = font_metrics.horizontalAdvance(str(f"{get_value():.{decimals}f}"))
-            button_padding = 30
-            suffix_padding = font_metrics.horizontalAdvance(spinbox.suffix())
-
-            new_width = text_width + button_padding + suffix_padding
-
-            return QtCore.QSize(max(new_width, 20), original_hint.height())
-
-        spinbox.sizeHint = types.MethodType(sizeHint, spinbox)
-        spinbox.updateGeometry()
-
-    layout.addWidget(spinbox)
     if not trait.read_only:
         apply = QtWidgets.QToolButton()
         apply.setFocusPolicy(QtCore.Qt.NoFocus)
@@ -211,43 +142,40 @@ def create_spinbox_entry(component, name, trait):
         apply.setAutoRaise(True)
         layout.addWidget(apply)
 
+        def apply_all():
+            if is_range:
+                full = [sb.value() * units[i] if is_quantity else sb.value()
+                        for i, sb in enumerate(spinboxes)]
+                setattr(component, name, full)
+            else:
+                set_value(0, spinboxes[0].value())
+            refresh_spinboxes()
+
+        apply.clicked.connect(apply_all)
+
+        def connect_spinbox(sb_idx, spinbox):
+            def apply_single():
+                set_value(sb_idx, spinbox.value())
+
+            spinbox.editingFinished.connect(apply_single)
+            spinbox.editingFinished.connect(spinbox.check_changed)
+
+        for idx, sb in enumerate(spinboxes):
+            connect_spinbox(idx, sb)
+
+    def refresh_spinboxes(*args):
+        for sb_idx, spinbox in enumerate(spinboxes):
+            spinbox.blockSignals(True)
+            spinbox.setValue(get_value(sb_idx))
+            spinbox.blockSignals(False)
+            spinbox.check_changed()
+
+    refresh_spinboxes()
+    component.observe(refresh_spinboxes, name)
+
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setStretch(0, 1)
     layout.setStretch(1, 0)
-
-    def apply_value_to_component_with_units():
-        val = spinbox.value() * units
-        setattr(component, name, val)
-
-    def apply_value_to_component_without_units():
-        setattr(component, name, spinbox.value())
-
-    apply_value_to_component = \
-        (apply_value_to_component_with_units if is_quantity
-         else apply_value_to_component_without_units)
-
-    def apply_value_to_spinbox_with_units(val):
-        spinbox.blockSignals(True)
-        spinbox.setValue(val.to(units).magnitude)
-        spinbox.blockSignals(False)
-
-    def apply_value_to_spinbox_without_units(val):
-        spinbox.blockSignals(True)
-        spinbox.setValue(val)
-        spinbox.blockSignals(False)
-
-    apply_value_to_spinbox = \
-        (apply_value_to_spinbox_with_units if is_quantity
-         else apply_value_to_spinbox_without_units)
-
-    apply_value_to_spinbox(trait.get(component))
-    component.observe(lambda c: apply_value_to_spinbox(c['new']), name)
-
-    if not trait.read_only:
-        apply.clicked.connect(apply_value_to_component)
-        apply.clicked.connect(spinbox.check_changed)
-        spinbox.editingFinished.connect(apply_value_to_component)
-        spinbox.editingFinished.connect(spinbox.check_changed)
 
     return layout
 
@@ -639,19 +567,15 @@ def generate_component_ui(name, component):
         groups[group].combine = trait.metadata.get("combine", False)
 
         field_widget = None
-        if isinstance(trait, ValueRange):
-            field_widget = create_range_entry(component, name, trait)
-        elif isinstance(trait, Quantity):
-            field_widget = create_spinbox_entry(component, name, trait)
-        elif isinstance(trait, Integer):
-            field_widget = create_spinbox_entry(component, name, trait)
+        if isinstance(trait, (Quantity, Integer, ValueRange)):
+            field_widget = create_number_entry(component, name, trait)
         elif isinstance(trait, Enum) and not trait.read_only:
             field_widget = create_combobox(component, name, trait)
         elif isinstance(trait, Float):
             if trait.read_only and not (np.isinf(trait.min) or np.isinf(trait.max)):
                 field_widget = create_progressbar(component, name, trait)
             else:
-                field_widget = create_spinbox_entry(component, name, trait)
+                field_widget = create_number_entry(component, name, trait)
         elif isinstance(trait, Bool):
             field_widget = create_checkbox(component, name, prettyName, trait)
         elif isinstance(trait, Unicode):

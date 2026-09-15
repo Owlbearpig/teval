@@ -1,13 +1,27 @@
 from PySide6.QtWidgets import QSpinBox, QDoubleSpinBox
-from PySide6.QtGui import QPalette
+from PySide6.QtGui import QPalette, QValidator
+from PySide6.QtCore import QRegularExpression
 
+
+class ScientificDoubleSpinBox(QDoubleSpinBox):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._regex = QRegularExpression(r"^[-+]?[0-9]*[,]?[0-9]*([eE][-+]?[0-9]*)?$")
+
+    def validate(self, text, pos):
+        clean_text = text.replace(self.suffix(), "").strip()
+
+        match = self._regex.match(clean_text)
+
+        if match.hasMatch():
+            return QValidator.State.Acceptable, text, pos
+
+        return QValidator.State.Invalid, text, pos
 
 def ChangeIndicatorSpinBox(*args, actual_value_getter,
                            is_double_spinbox=False, **kwargs):
-    decimals = kwargs.pop("decimals", 3)
     if is_double_spinbox:
-        spinbox = QDoubleSpinBox(*args, **kwargs)
-        spinbox.setDecimals(decimals)
+        spinbox = ScientificDoubleSpinBox(*args, **kwargs)
     else:
         spinbox = QSpinBox(*args, **kwargs)
 
