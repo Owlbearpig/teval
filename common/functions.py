@@ -5,7 +5,7 @@ import numpy as np
 from common.units import Q_
 from scipy.stats import pearsonr
 from numpy import array, nan_to_num, zeros, pi
-from common.consts import c0, THz
+from common.consts import c0, THz, c_thz
 from numpy.fft import irfft, rfft, rfftfreq
 from scipy import signal
 from enum import Enum

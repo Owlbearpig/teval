@@ -1,5 +1,4 @@
 import traceback
-
 import matplotlib.pyplot as plt
 
 from common.components import ComponentBase
@@ -939,24 +938,19 @@ class DataSet(ComponentBase):
         d = self.settings.eval_opt.d.magnitude
         d = 1.0 if np.isclose(d, 0) else d
 
-        n_real = 1.0 + (c_thz * dt / d)[:, None]
-
-        amp_sam = self.pulse_amplitude(meas_)
-        amp_ref = self.pulse_amplitude(ref_list)
-
         w = 2 * np.pi * self.freq_axis
         w = np.where(w == 0, w[1] if len(w) > 1 else 1e-12, w)
 
-        amp_ratio = (amp_ref / amp_sam)[:, None]
-
-        n_imag = (c_thz / (w * d)) * np.log(amp_ratio)
-
         with self.settings.pp_opt.override(window_enabled=True, win_width=10):
             t_amp = self.amplitude_transmission(meas_)
+            phi_diff = np.abs(self.phase_difference(meas_))
 
+        n_real = 1.0 + (c_thz * phi_diff / (w*d))
         t_interface_amp = np.abs(4*n_real/(n_real+1)**2)
 
         n_imag = -(c_thz / (w * d)) * np.log(t_amp / t_interface_amp)
+
+        n_real = 1.0 + (c_thz * dt / d)[:, None]
 
         return n_real + 1j * n_imag
 

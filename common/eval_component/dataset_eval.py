@@ -421,7 +421,9 @@ class DatasetEval(ComponentBase):
                 if proc.is_alive():
                     proc.kill()
             executor.shutdown(wait=False, cancel_futures=True)
-        logging.info("Cancelled optimization")
+            logging.info("Cancelled optimization")
+        else:
+            logging.info("Optimization process is not running")
 
 if __name__ == "__main__":
 

@@ -252,8 +252,8 @@ class MeasurementSelection(ComponentBase):
 
     def get_meas_from_filenames(self):
         sam_paths = self.sample_paths.selected_paths
-
-        sam_meas_list = [self.cache.filepath_map[p] for p in sam_paths if p.is_file()]
+        cache_map = self.cache.filepath_map
+        sam_meas_list = [cache_map[p] for p in sam_paths if p.is_file() and p in cache_map]
 
         return sam_meas_list
 

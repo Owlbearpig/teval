@@ -60,8 +60,12 @@ class EvalResult(ComponentBase):
                              read_only=True).tag(priority=5, name="Sub. dataset path")
     converged = Bool(False, read_only=True,
                      group=transmission_res_grp_name).tag(priority=6, name="Converged")
-    q_val = Quantity(Q_(0.0, ""), read_only=True, group=transmission_res_grp_name, significant_figures=5)
-    gof = Quantity(Q_(0.0, ""), read_only=True, group=transmission_res_grp_name, significant_figures=5)
+    q_val = Quantity(Q_(0.0, ""), read_only=True, group=transmission_res_grp_name,
+                     significant_figures=5).tag(name="Q-val")
+    gof = Quantity(Q_(0.0, ""), read_only=True, group=transmission_res_grp_name,
+                   significant_figures=5).tag(name="GoF")
+    nfev = Integer(0, read_only=True,
+                   group=transmission_res_grp_name).tag(name="Number of function evaluations")
 
     reg_result_grp_name = "Regression result values"
     fun = Float(0.0, read_only=True, group=reg_result_grp_name).tag(priority=-1)

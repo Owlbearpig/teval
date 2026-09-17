@@ -53,7 +53,7 @@ class ResultSaver(ComponentBase):
                                     "{name}: The main file name\n"
                                     "{date}: The current date and time").tag(
                                name="File name template")
-    mainFileName = Unicode('data').tag(name="Main file name", fullwidth=True)
+    mainFileName = Unicode("data").tag(name="Main file name", fullwidth=True)
 
     enabled = Bool(True, help="Whether data storage is enabled").tag(
                          name="Enabled")
