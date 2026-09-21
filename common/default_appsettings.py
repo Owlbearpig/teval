@@ -360,8 +360,8 @@ class EvalOpt(ComponentBase):
 
     regulated_spline_grp = "Regulated spline optimization"
     knot_cnt = Int(100, min=2).tag(name="Spline count", group=regulated_spline_grp)
-    reg_k = Float(1e-6).tag(name="k regularization", group=regulated_spline_grp, significant_figures=3)
-    reg_n = Float(1e-5).tag(name="n regularization", group=regulated_spline_grp, significant_figures=3)
+    reg_k = Float(1e-10).tag(name="k regularization", group=regulated_spline_grp, significant_figures=3)
+    reg_n = Float(1e-10).tag(name="n regularization", group=regulated_spline_grp, significant_figures=3)
     max_nfev = Int(100, min=1).tag(name="Maximum number of function evaluations", group=regulated_spline_grp)
 
     conductivity_calc_grp = "Conductivity calculation"

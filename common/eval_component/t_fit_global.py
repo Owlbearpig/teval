@@ -2,7 +2,6 @@ import numpy as np
 import logging
 from scipy.interpolate import CubicSpline
 from scipy.optimize import least_squares
-from scipy.ndimage import gaussian_filter1d
 from common.consts import c_thz
 from common.eval_component.eval_result import SingleResultData
 from common.units import Q_

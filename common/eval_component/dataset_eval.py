@@ -9,7 +9,7 @@ from functools import partial
 import numpy as np
 import logging
 from common.consts import eps0_thz
-from common.eval_component.q_space_eval import QSpaceEval, OptimizationMethods
+from common.eval_component.q_space_eval import QSpaceEval, OptimizationMethods, OptimizationCancelled
 from common.eval_component.quantity_set import QuantityDataSet
 from enum import Enum, member
 from common.eval_component.conductivity_models import RegressionModels, model_params
@@ -87,7 +87,7 @@ class DatasetEval(ComponentBase):
     number_of_workers = Integer(8).tag(name="Number of cpu cores to assign", priority=2)
     selected_cost_fun = TEnum(CostFunctions, default_value=CostFunctions.abs_cost,
                               help="Model to experimental data metric").tag(name="Selected cost function", priority=3)
-    only_eval_avg = Bool(False).tag(name="Only evaluate average", priority=4)
+    only_eval_avg = Bool(True).tag(name="Only evaluate average", priority=4)
     optimization_progress = Float(0, min=0, max=1, read_only=True).tag(name="Progress",
                                                                        priority=5, en_save=False)
 
@@ -395,35 +395,48 @@ class DatasetEval(ComponentBase):
         if self.dataset.measurement_selector.selected_sam_cnt == "0":
             logging.warning("No measurements selected")
             return
-        self._cancel_event.clear()
+        if self._active_eval is not None:
+            logging.warning("Optimization is already running")
+            return
+
+        cancel_event = threading.Event()
+        self._cancel_event = cancel_event
+
         progress_carrier = ProgressSignalCarrier()
         progress_carrier.progress_changed.connect(self.update_progress)
 
+        evaluator = QSpaceEval(self)
+        self._active_eval = evaluator
+
         def bg_worker():
             try:
-                self._active_eval = QSpaceEval(self)
-                qs_eval_data = self._active_eval.q_space_eval_mp(progress_carrier=progress_carrier,
-                                                                 cancel_event=self._cancel_event)
-                self.current_result.result_carrier.received_result.emit(qs_eval_data)
-            except Exception as e:
+                qs_eval_data = evaluator.q_space_eval_mp(progress_carrier=progress_carrier,
+                                                         cancel_event=cancel_event)
+                if not cancel_event.is_set():
+                    self.current_result.result_carrier.received_result.emit(qs_eval_data)
+            except OptimizationCancelled:
+                logging.info("Optimization cancelled")
+            except Exception:
                 traceback.print_exc()
-        self._thread_executor = ThreadPoolExecutor(max_workers=1)
+            finally:
+                if self._active_eval is evaluator:
+                    self._active_eval = None
+
+        if self._thread_executor is None:
+            self._thread_executor = ThreadPoolExecutor(max_workers=1)
         self._thread_executor.submit(bg_worker)
+
+    def _request_cancel(self):
+        self._cancel_event.set()
 
     @action("Cancel optimization")
     def cancel_optimization(self):
-        self._cancel_event.set()
-
-        if self._active_eval and self._active_eval.current_process_executor:
-            executor = self._active_eval.current_process_executor
-            processes = getattr(executor, "_processes", None) or {}
-            for proc in list(processes.values()):
-                if proc.is_alive():
-                    proc.kill()
-            executor.shutdown(wait=False, cancel_futures=True)
-            logging.info("Cancelled optimization")
-        else:
+        if self._active_eval is None:
             logging.info("Optimization process is not running")
+            return
+        self._request_cancel()
+        logging.info("Cancelling optimization...")
+
 
 if __name__ == "__main__":
 

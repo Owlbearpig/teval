@@ -1,6 +1,5 @@
 import numpy as np
 from common.eval_component.shgo import shgo
-import time
 from common.consts import c_thz
 from common.eval_component.eval_result import SingleResultData
 from common.units import Q_
@@ -9,7 +8,7 @@ from datetime import datetime
 
 def shgo_transmission_optimization(d, shift, config_dict) -> SingleResultData:
     freq_axis = config_dict["freq_axis"]
-    n0 = config_dict["n_guess"]
+    n0 = np.asarray(config_dict["n_guess"])
     t_exp = config_dict["t_exp"]
     transmission_model = config_dict["transmission_model"]
     cost_fun = config_dict["cost_fun"]
@@ -21,7 +20,7 @@ def shgo_transmission_optimization(d, shift, config_dict) -> SingleResultData:
     model_kwargs["shift"] = shift
     model_kwargs["d"] = d
 
-    gof = 0
+    nfev, gof = 0, 0
     convergence_results = np.zeros_like(freq_axis, dtype=bool)
     n_opt_res_ = np.zeros_like(freq_axis, dtype=complex)
     for f_idx, freq in enumerate(freq_axis):
@@ -42,12 +41,13 @@ def shgo_transmission_optimization(d, shift, config_dict) -> SingleResultData:
                                  bounds=bounds,
                                  minimizer_kwargs=minimizer_kwargs,
                                  options=shgo_options,
-                                 n=1,
-                                 iters=30,
+                                 n=config_dict["n"],
+                                 iters=config_dict["iters"],
                                  )
             
             x = shgo_opt_res_.x
             gof += shgo_opt_res_.fun
+            nfev += shgo_opt_res_.nfev
             convergence_results[f_idx] = shgo_opt_res_.success
 
             n_opt_res_[f_idx] = x[0] + 1j * x[1]
@@ -88,24 +88,38 @@ def shgo_transmission_optimization(d, shift, config_dict) -> SingleResultData:
     result_data.shift = Q_(shift, "fs")
     result_data.freq_axis = Q_(freq_axis, "THz")
     result_data.optimization_info["gof"] = Q_(gof / len(freq_axis), "")
+    result_data.optimization_info["nfev"] = nfev
     result_data.optimization_info["converged"] = np.all(convergence_results)
     result_data.optimization_info["timestamp"] = str(datetime.now().isoformat())
-    result_data.datasets["t_exp"] = QuantityDataSet(axes=[Q_(freq_axis, "THz")],
-                                                    data=Q_(t_exp[:, 1], ""),
-                                                    axes_labels=["Frequency"],
-                                                    data_label="Transmission coefficient experimental")
-    result_data.datasets["n0"] = QuantityDataSet(axes=[Q_(freq_axis, "THz")],
-                                                 data=Q_(n0[:, 1], ""),
-                                                 axes_labels=["Frequency"],
-                                                 data_label="Refractive index")
-    result_data.datasets["n"] = QuantityDataSet(axes=[Q_(freq_axis, "THz")],
-                                                data=Q_(n_opt_res_, ""),
-                                                axes_labels=["Frequency"],
-                                                data_label="Refractive index")
-    result_data.datasets["alpha"] = QuantityDataSet(axes=[Q_(freq_axis, "THz")],
-                                                data=Q_(alpha_, "1/cm"),
-                                                axes_labels=["Frequency"],
-                                                data_label="Absorption coefficient")
+
+
+    result_data.datasets["t_exp"] = QuantityDataSet(
+        axes=[Q_(freq_axis, "THz")],
+        data=Q_(t_exp[:, 1], ""),
+        axes_labels=["Frequency"],
+        data_label="Transmission coefficient experimental"
+    )
+
+    result_data.datasets["n0"] = QuantityDataSet(
+        axes=[Q_(freq_axis, "THz")],
+        data=Q_(n0[:, 1], ""),
+        axes_labels=["Frequency"],
+        data_label="Refractive index"
+    )
+
+    result_data.datasets["n"] = QuantityDataSet(
+        axes=[Q_(freq_axis, "THz")],
+        data=Q_(n_opt_res_, ""),
+        axes_labels=["Frequency"],
+        data_label="Refractive index"
+    )
+
+    result_data.datasets["alpha"] = QuantityDataSet(
+        axes=[Q_(freq_axis, "THz")],
+        data=Q_(alpha_, "1/cm"),
+        axes_labels=["Frequency"],
+        data_label="Absorption coefficient"
+    )
 
     return result_data
 

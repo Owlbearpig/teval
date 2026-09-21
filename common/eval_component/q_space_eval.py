@@ -6,25 +6,42 @@ import scipy
 from common.dataset import format_meas_dict, DataSet
 from common.default_appsettings import SimRISelection, AppSettings, Domain, QSpaceQuantity
 from common.functions import f_axis_idx_map, moving_average, do_ifft, to_db, avg_data_array
-from common.eval_component.transfer_functions import model_1layer_inf, transferfunction_error, dtdn, dtdd
 from common.eval_component.quantity_set import QuantityDataSet
 from common.eval_component.eval_result import EvalResultData, SingleResultData
 from enum import member, Enum
 from common.units import Q_
 from common.measurements import Measurement
 from common.consts import c_thz
-from scipy.optimize import shgo
 from scipy.signal import iirnotch, filtfilt, detrend
 import concurrent
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, wait as futures_wait
+from concurrent.futures.process import BrokenProcessPool
 from functools import partial
 from common.eval_component.single_opt import shgo_transmission_optimization
 from common.eval_component.t_fit_global import spline_transmission_optimization
-from datetime import datetime
+
+
+class OptimizationCancelled(Exception):
+    """Raised inside the evaluation thread when the user cancels the optimization."""
+
+
+def kill_process_pool(executor):
+    """Hard-stop a ProcessPoolExecutor: drop queued work and SIGKILL running workers."""
+    # shutdown() sets executor._processes to None, so grab the workers first
+    procs = list((getattr(executor, "_processes", None) or {}).values())
+    executor.shutdown(wait=False, cancel_futures=True)
+    for proc in procs:
+        try:
+            if proc.is_alive():
+                proc.kill()
+        except Exception:
+            pass
+
 
 class OptimizationMethods(Enum):
     Spline = member(spline_transmission_optimization)
     SHGO = member(shgo_transmission_optimization)
+
 
 class QSpaceEval:
 
@@ -122,7 +139,7 @@ class QSpaceEval:
 
         delta_t = transferfunction_error(sam_fd_avg, ref_fd_avg, noise_freq=5.0)
         delta_t = delta_t[self.freq_idx]
-        
+
         delta_n = np.sqrt(((1 / dtdn_) * delta_t) ** 2 + ((1 / dtdn_) * dtdd_ * delta_d) ** 2)
         delta_alpha = (4 * np.pi * f_axis / (1e-4 * c_thz)) * delta_n.imag
         """
@@ -215,6 +232,8 @@ class QSpaceEval:
             "cost_fun": self.cost_fun,
             "minimizer_kwargs": self.settings.shgo_options.get_minimizer_kwargs(),
             "shgo_options": self.settings.shgo_options.get_shgo_options(),
+            "n": self.settings.shgo_options.n,
+            "iters": self.settings.shgo_options.iters,
             **t_model_kwargs,
         }
         if self.dataset_eval.optimization_method == OptimizationMethods.Spline:
@@ -243,7 +262,7 @@ class QSpaceEval:
             else:
                 shrink_factor = self.dataset_eval.bound_shrink_factor
                 d0 = self.opt_state["d"].magnitude
-                d_min, d_max = d0*(1+shrink_factor), d0*(1-shrink_factor)
+                d_min, d_max = d0 * (1 + shrink_factor), d0 * (1 - shrink_factor)
                 d_axis = np.linspace(d_min, d_max, 5)
 
             for d in d_axis:
@@ -251,6 +270,21 @@ class QSpaceEval:
                     tasks.append(np.array([d, shift], dtype=float))
 
             return tasks
+
+        def check_cancel():
+            if cancel_event is not None and cancel_event.is_set():
+                raise OptimizationCancelled()
+
+        def get_result(future):
+            # Poll instead of blocking in future.result(), so a cancel request is noticed quickly
+            while not future.done():
+                check_cancel()
+                futures_wait([future], timeout=0.2)
+            try:
+                return future.result()
+            except BrokenProcessPool:
+                check_cancel()  # workers were killed because of a cancel -> not a real error
+                raise
 
         def process_tasks(tasks, opt_config, iteration_progress=None):
             if iteration_progress is not None:
@@ -261,43 +295,43 @@ class QSpaceEval:
                 if progress_carrier is not None:
                     progress_carrier.progress_changed.emit(0)
 
+            check_cancel()
             results = []
             with ProcessPoolExecutor(max_workers=self.dataset_eval.number_of_workers) as executor:
                 self.current_process_executor = executor
-                worker_func = partial(self.dataset_eval.optimization_method.value, config_dict=opt_config)
-                futures = [executor.submit(worker_func, d, shift) for d, shift in tasks]
-                total_tasks = len(futures)
+                try:
+                    worker_func = partial(self.dataset_eval.optimization_method.value, config_dict=opt_config)
+                    futures = [executor.submit(worker_func, d, shift) for d, shift in tasks]
+                    total_tasks = len(futures)
 
-                logging.info(f"Processing {total_tasks} tasks")
-                for fut_idx, future in enumerate(futures):
-                    if cancel_event is not None and cancel_event.is_set():
-                        executor.shutdown(wait=False, cancel_futures=True)
+                    logging.info(f"Processing {total_tasks} tasks")
+                    for fut_idx, future in enumerate(futures):
+                        res: SingleResultData = get_result(future)
+                        completed_tasks = fut_idx + 1
+                        percentage = (completed_tasks / total_tasks) * 100
 
-                    try:
-                        res: SingleResultData = future.result()
-                    except concurrent.futures.process.BrokenProcessPool:
-                        logging.info(f"Process stopped")
-                        return []
+                        progress_str = f"Processed task {completed_tasks}/{total_tasks} ({percentage:.1f}%)"
+                        logging.info(progress_str)
+                        info_str = f"Finished optimizing thickness {np.round(res.d, 2)} "
+                        info_str += f"with a shift of {res.shift}"
+                        logging.info(info_str)
 
-                    completed_tasks = fut_idx + 1
-                    percentage = (completed_tasks / total_tasks) * 100
+                        if progress_carrier is not None:
+                            progress_carrier.progress_changed.emit(percentage / 100)
 
-                    progress_str = f"Processed task {completed_tasks}/{total_tasks} ({percentage:.1f}%)"
-                    logging.info(progress_str)
-                    info_str = f"Finished optimizing thickness {np.round(res.d, 2)} "
-                    info_str += f"with a shift of {res.shift}"
-                    logging.info(info_str)
+                        q_val = self.calc_q_val(res)
+                        if q_val < self.opt_state["q_min"]:
+                            self.opt_state["d"] = res.d
+                            self.opt_state["shift"] = res.shift
+                            self.opt_state["q_min"] = q_val
 
-                    if progress_carrier is not None:
-                        progress_carrier.progress_changed.emit(percentage/100)
-
-                    q_val = self.calc_q_val(res)
-                    if q_val < self.opt_state["q_min"]:
-                        self.opt_state["d"] = res.d
-                        self.opt_state["shift"] = res.shift
-                        self.opt_state["q_min"] = q_val
-
-                    results.append(res)
+                        results.append(res)
+                except BaseException:
+                    # cancel or crash: never leave orphaned workers running
+                    kill_process_pool(executor)
+                    raise
+                finally:
+                    self.current_process_executor = None
 
             results = sorted(results, key=lambda res_: res_.d)
 
@@ -311,11 +345,15 @@ class QSpaceEval:
         eval_result_data.measurement_quantity = "Transmission"
 
         for meas in t_exp_dict:
+            check_cancel()
+            if meas != "Average":
+                logging.info(f"Evaluating measurement {meas.filepath.name}")
             ref_meas = ref_sam_map(meas)
             self.reset_opt_state()
 
             opt_results: list[SingleResultData] = []
             for iter_idx in range(max(1, iteration_count)):
+                check_cancel()
                 it_prog = (iter_idx, iteration_count) if is_iterative else None
                 new_tasks = get_new_tasks()
                 opt_results.extend(process_tasks(new_tasks, opt_configs[meas], iteration_progress=it_prog))
