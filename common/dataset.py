@@ -931,11 +931,12 @@ class DataSet(ComponentBase):
 
         return  t_zero_sam - t_zero_ref
 
-    def refractive_index_estimate(self, meas_):
+    def refractive_index_estimate(self, meas_, d=None):
         ref_list = self.measurement_selector.get_matching_refs(meas_)
         dt = self.time_of_flight(meas_)
 
-        d = self.settings.eval_opt.d.magnitude
+        if d is None:
+            d = self.settings.eval_opt.d.magnitude
         d = 1.0 if np.isclose(d, 0) else d
 
         w = 2 * np.pi * self.freq_axis

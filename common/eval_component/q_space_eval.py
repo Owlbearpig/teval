@@ -97,7 +97,8 @@ class QSpaceEval:
     @property
     def n_guess(self):
         meas_list = self.selected_measurements
-        ref_idx = self.dataset_eval.dataset.refractive_index_estimate(meas_list)
+        d_init = np.mean(self.dataset_eval.d_opt_axis_bounds.magnitude)
+        ref_idx = self.dataset_eval.dataset.refractive_index_estimate(meas_list, d_init)
 
         f_axis_tile = np.tile(self.freq_axis, (len(meas_list), 1))
         arrays = (f_axis_tile, ref_idx[:, self.freq_idx], np.zeros_like(f_axis_tile))
