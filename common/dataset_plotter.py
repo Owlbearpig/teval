@@ -1,5 +1,6 @@
 from common.components import ComponentBase, action
 from common.dataset import DataSet, format_meas_dict
+from common.measurement_selection import ReferenceSelection
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -514,7 +515,8 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel(f"Time since first measurement ({dt1.units})")
         plt.ylabel("Phase (rad)")
 
-        self.plt_show()
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
 
     def paint_fd_plot(self):
         if not plt.fignum_exists(self.fd_fig_num):
@@ -532,8 +534,12 @@ class DataSetPlotter(ComponentBase):
     @action("Reference measurement", group="Plots")
     def plot_ref(self, ref_list=None):
         if ref_list is None:
-            ref_list = self.dataset.measurement_selector.get_matching_refs(self.selected_measurements)
+            if self.dataset.measurement_selector.ref_sel_criterion == ReferenceSelection.file_selection:
+                ref_list = self.dataset.measurement_selector.ref_file_selection_to_ref_meas()
+            else:
+                ref_list = self.dataset.measurement_selector.get_matching_refs(self.selected_measurements)
         if not ref_list:
+            logging.info("No reference measurements selected")
             return
 
         zero_crossing = self.dataset.get_zero_crossing(ref_list)
@@ -565,11 +571,32 @@ class DataSetPlotter(ComponentBase):
             y_fd_phi = plot_data_fd_phi[ref_meas]
             label = f"Reference ({getattr(ref_meas, 'meas_time', 'Average')})"
 
-            ax0.plot(y_fd_amp_db[:, 0], y_fd_amp_db[:, 1], label=label)
-            ax1.plot(y_fd_amp_db[:, 0], y_fd_phi[:, 1], label=label)
+            if isinstance(ref_meas, Measurement):
+                ax0.plot(y_fd_amp_db[:, 0], y_fd_amp_db[:, 1], label=label)
+                ax1.plot(y_fd_amp_db[:, 0], y_fd_phi[:, 1], label=label)
+            else:
+                ax0.plot(y_fd_amp_db[:, 0], y_fd_amp_db[:, 1], label=label)
+                ax0.fill_between(y_fd_amp_db[:, 0],
+                                 y_fd_amp_db[:, 1] - y_fd_amp_db[:, 2],
+                                 y_fd_amp_db[:, 1] + y_fd_amp_db[:, 2],
+                                 alpha=0.2)
+
+                ax1.plot(y_fd_amp_db[:, 0], y_fd_phi[:, 1], label=label)
+                ax1.fill_between(y_fd_amp_db[:, 0],
+                                 y_fd_phi[:, 1] - y_fd_phi[:, 2],
+                                 y_fd_phi[:, 1] + y_fd_phi[:, 2],
+                                 alpha=0.2)
 
             plt.figure(self.td_fig_num)
-            plt.plot(y_td[:, 0], y_td[:, 1], label=label)
+            if isinstance(ref_meas, Measurement):
+                plt.plot(y_td[:, 0], y_td[:, 1], label=label)
+            else:
+                plt.plot(y_td[:, 0], y_td[:, 1], label=label)
+                plt.fill_between(y_td[:, 0],
+                                 y_td[:, 1] - y_td[:, 2],
+                                 y_td[:, 1] + y_td[:, 2],
+                                 alpha=0.2)
+
             if self.plot_settings.plot_zero_crossing:
                 plt.scatter(zero_crossing, 0, color="red")
 
@@ -581,7 +608,13 @@ class DataSetPlotter(ComponentBase):
         plt.ylabel("Amplitude (Arb. u.)")
         plt.draw()
 
-        logging.info(f"Plotted {len(plot_data_fd_amp)} reference measurement(s)")
+        if self.only_plot_avg:
+            logging.info(f"Plotted average of {len(ref_list)} reference measurement"+ "s"*(len(ref_list) > 1))
+        else:
+            logging.info(f"Plotted {len(plot_data_fd_amp)} reference measurement" + "s"*(len(plot_data_fd_amp) > 1))
+
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
 
     @action("Waveform", group="Plots")
     def plot_waveform(self, meas_list=None):
@@ -654,6 +687,10 @@ class DataSetPlotter(ComponentBase):
         plt.draw()
 
         logging.info(f"Plotted {len(plot_data_fd_amp)} measurement(s)")
+
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
+
         return meas_list
 
     @action("Phase plots", group="Phase plots")
@@ -707,7 +744,8 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase (rad/THz)")
 
-        self.plt_show()
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
 
         logging.info(f"Plotted {len(plot_data_phi)} measurement(s)")
 
@@ -727,7 +765,8 @@ class DataSetPlotter(ComponentBase):
         plt.ylabel(y_label)
         fig.set_tight_layout(True)
 
-        self.plt_show()
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
 
         logging.info(f"Plotted {sel_quant} for {len(meas_list)} measurement(s)")
 
@@ -795,7 +834,8 @@ class DataSetPlotter(ComponentBase):
             ax0.set_ylabel(f"{y_label} (Real part)")
             ax1.set_ylabel(f"{y_label} (Imag part)")
 
-        self.plt_show()
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
 
         logging.info(f"Plotted {sel_quant} for {len(plot_value_dict)} measurement(s)")
 
@@ -833,7 +873,8 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Phase difference (rad)")
 
-        self.plt_show()
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
 
         logging.info(f"Plotted {len(plot_meas_dict)} measurement(s)")
 
@@ -853,7 +894,8 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel(f"Frequency (THz)")
         plt.ylabel("Amplitude (dB)")
 
-        self.plt_show()
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
 
         logging.info(f"Plotted reference noise")
 
@@ -861,7 +903,7 @@ class DataSetPlotter(ComponentBase):
     def plot_system_stability(self):
         stability_data = self.get_stability_data()
         if stability_data is None:
-            return []
+            return
 
         meas_set = stability_data["meas_set"]
         meas_times = stability_data["meas_times"]
@@ -987,11 +1029,16 @@ class DataSetPlotter(ComponentBase):
         plt.ylabel("1 + ln|pears_r|")
         plt.xlabel(f"Measurement time ({mt_unit})")
 
-        ret = {"meas_times": meas_times, "relative_delay": relative_delay}
+        if not self.settings.plot_opt.add_climate_plot:
+            if self.settings.plot_opt.auto_show:
+                self.plt_show()
+            return
 
         climate_plot_ret = self.plot_climate(mt_unit)
         if climate_plot_ret is None:
-            return ret
+            if self.settings.plot_opt.auto_show:
+                self.plt_show()
+            return
         else:
             climate_meas_times, climate_value_dict = climate_plot_ret
 
@@ -1047,9 +1094,10 @@ class DataSetPlotter(ComponentBase):
         plt.ylabel("Pulse shift (fs)")
         plt.xlabel("Temperature (°C)")
 
-        self.plt_show()
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
 
-        return ret
+        return
 
     @action("Climate", group="Stability plots")
     def plot_climate(self, time_unit=None):
@@ -1245,7 +1293,8 @@ class DataSetPlotter(ComponentBase):
             ax1.set_xlabel(f"Measurement time ({mt_unit})")
             ax1.set_ylabel(y_label)
 
-        self.plt_show()
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
 
         return meas_time, quant_values
 
@@ -1306,7 +1355,8 @@ class DataSetPlotter(ComponentBase):
         plt.xlabel(f"Measurement time (unit?)")
         plt.ylabel("Time (fs)")
 
-        self.plt_show()
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
 
     def on_image_click(self, event):
         if not self.enable_img_interaction:
@@ -1431,7 +1481,8 @@ class DataSetPlotter(ComponentBase):
 
         self.img_ax = ax
 
-        self.plt_show()
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
 
     def _plot_meas_on_image(self, measurements):
         if not plt.fignum_exists(self.image_fig_num):
@@ -1514,6 +1565,9 @@ class DataSetPlotter(ComponentBase):
 
         logging.info(f"Plotted {sel_quant} for {len(meas_on_line)} measurement(s)")
 
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
+
         return x_axis_vals, vals, fig_num
 
     @action("Knife edge", group=line_plot_grp)
@@ -1593,6 +1647,8 @@ class DataSetPlotter(ComponentBase):
         plt.draw()
 
         logging.info("Plotted knife edge evaluation")
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
 
         return popt, pcov
 

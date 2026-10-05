@@ -428,8 +428,16 @@ class SaveSettings(ComponentBase):
 class PlotOpt(ComponentBase):
     plot_range = ValueRange([Q_(0.05, "THz"), Q_(3.5, "THz")],
                             metadata={"priority": 1, "readonly": False}).tag(name="Plot range")
+    shift_sam2ref = Bool(False).tag(name="Shift sample pulse to ref")
+    sub_noise_floor = Bool(False).tag(name="Subtract spectrum noise floor")
+    td_scale = Float(1.0).tag(name="Scale waveform")
+    remove_t_offset = Bool(False).tag(name="Start t-axis at 0 ps")
+    fig_num_ext = Unicode("").tag(name="Figure number extension")
+    plot_zero_crossing = Bool(False).tag(name="Plot zero crossing")
+    auto_show = Bool(True).tag(name="Automatically show plots")
 
     climate_group = "Stability and climate"
+    add_climate_plot = Bool(False, group=climate_group).tag(name="Add climate values to stability plot")
     stability_plot_rel_change = Bool(False, group=climate_group).tag(name="Convert to percent")
     subtract_mean = Bool(False, group=climate_group).tag(name="Subtract mean value")
     temp_sensor_idx = Int(-1, group=climate_group, help="-1 selects all sensors").tag(name="Select sensor index")
@@ -449,14 +457,6 @@ class PlotOpt(ComponentBase):
         },
         group=climate_group
     )
-
-    shift_sam2ref = Bool(False).tag(name="Shift sample pulse to ref")
-    sub_noise_floor = Bool(False).tag(name="Subtract spectrum noise floor")
-    td_scale = Float(1.0).tag(name="Scale waveform")
-    remove_t_offset = Bool(False).tag(name="Start t-axis at 0 ps")
-    fig_num_ext = Unicode("").tag(name="Figure number extension")
-
-    plot_zero_crossing = Bool(False).tag(name="Plot zero crossing")
 
     image_group = "Image"
     cbar_lim = ValueRange(default_value=[0.0, 0.0], group=image_group).tag(name="Custom color bar limits")

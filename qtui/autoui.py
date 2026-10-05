@@ -91,7 +91,7 @@ def create_number_entry(component, name, trait):
             spinbox.setSuffix(f" {units[sb_idx]:C~}")
 
         if is_double_spinbox:
-            spinbox.setDecimals(30)
+            spinbox.setDecimals(323)
 
             def textFromValue(self, val):
                 if abs(val) < 10 ** (1 - significant_figures) and val != 0.0:

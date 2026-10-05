@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 from common.components import ComponentBase
 from common.settings import Settings
@@ -45,10 +47,10 @@ class SelectionCriterionEnum(Enum):
     string_search = "String"
 
 class ReferenceSelection(Enum):
+    file_selection = "File selection"
     max_amp_measurement = "Maximum amplitude measurement"
     closest_distance = "Closest distance"
     fix_ref = "Use fixed index reference"
-    file_selection = "File selection"
 
 class MeasurementSelection(ComponentBase):
     measurement_selection_grp = "Measurement selection"
@@ -65,7 +67,7 @@ class MeasurementSelection(ComponentBase):
 
     reference_matching_grp = "Reference matching"
     ref_sel_criterion = TEnum(ReferenceSelection,
-                              ReferenceSelection.max_amp_measurement).tag(name="Reference matching criterion",
+                              ReferenceSelection.file_selection).tag(name="Reference matching criterion",
                                                                           group=reference_matching_grp,
                                                                           priority=-2)
     dist_func = TEnum(Dist, default_value=Dist.Time).tag(priority=1000, name="Measurement distance function",
@@ -76,7 +78,7 @@ class MeasurementSelection(ComponentBase):
     direct_match = Bool(False, read_only=True,
                         help="Appends or slices reference file selection if the count is "
                              "different from the measurement file selection"
-                        ).tag(name="Direct file match", priority=2000, group=reference_matching_grp)
+                        ).tag(name="Equal selection count", priority=2000, group=reference_matching_grp)
 
     reference_paths = MultiPathSelection().tag(fullwidth=False, group="Direct reference file selection", combine=True)
     sample_paths = MultiPathSelection().tag(fullwidth=False, group="Direct sample file selection", combine=True)
@@ -147,8 +149,9 @@ class MeasurementSelection(ComponentBase):
         change_name = change["name"]
         if change_name in ["selected_ref_cnt", "selected_sam_cnt"]:
             return
+
         selected_measurements = self.selected_measurements
-        if selected_measurements is None:
+        if not selected_measurements and (self.ref_sel_criterion != ReferenceSelection.file_selection):
             return
         matching_refs = self.get_matching_refs(selected_measurements)
 
@@ -354,15 +357,24 @@ class MeasurementSelection(ComponentBase):
 
         return closest_ref
 
-    def _ref_file_selection(self, meas_list):
+    def ref_file_selection_to_ref_meas(self):
+        if self.ref_sel_criterion != ReferenceSelection.file_selection:
+            return []
         ref_list = [self.cache.filepath_map[p] for p in self.reference_paths.selected_paths if p.is_file()]
+        return ref_list
+
+    def _ref_file_selection(self, meas_list):
+        ref_list = self.ref_file_selection_to_ref_meas()
         rl_len, ml_len = len(ref_list), len(meas_list)
         if rl_len != ml_len:
             self.set_trait("direct_match", False)
         else:
             self.set_trait("direct_match", True)
+        if ml_len == 0:
+            return ref_list
         if rl_len == 0:
             ref_list = ml_len * [self.measurements["max_amp_meas"]]
+            logging.info("No reference files selected, using maximum amplitude measurement")
         elif rl_len != ml_len:
             if rl_len < ml_len:
                 ref_list.extend((ml_len - rl_len) * [ref_list[-1]])
