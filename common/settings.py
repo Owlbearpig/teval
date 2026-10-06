@@ -52,6 +52,8 @@ class Settings(AppSettings):
         simple_types = (float, str, list, bool, int)
 
         def make_dump_dict(dump_dict, instance):
+            if instance is None:
+                return
             for k, trait in instance.attributes.items():
                 en_save = trait.metadata.get("en_save", True)
                 if not en_save:
@@ -103,6 +105,8 @@ class Settings(AppSettings):
 
         def set_trait_values(instance, dict_):
             for trait_name, dict_val in dict_.items():
+                if instance is None:
+                    continue
                 actual_type = type(getattr(instance.__class__, trait_name))
                 if actual_type == Instance:
                     instance_class = getattr(instance, trait_name)

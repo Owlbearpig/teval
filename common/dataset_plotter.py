@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from common.components import ComponentBase, action
 from common.dataset import DataSet, format_meas_dict
 from common.measurement_selection import ReferenceSelection
@@ -14,7 +16,7 @@ from common.measurements import Measurement
 from scipy.special import erfc
 from scipy.optimize import curve_fit
 from common.eval_component.shgo import shgo
-from traitlets import Float, Bool, Unicode, Enum as TEnum
+from traitlets import Float, Bool, Unicode, Enum as TEnum, Instance
 from common.traits import Q_, Quantity, ValueRange
 from mpl_settings import mpl_style_params
 from scipy.stats import pearsonr
@@ -40,7 +42,7 @@ class GridWorker(QThread):
         else:
             meas_set = self.p.measurements["all"]
         grid = self.p._get_empty_grid()
-        sel_quant = self.p.get_selected_quantity()
+        sel_quant = self.p.selected_quantity_value
 
         positions = np.array([m.position for m in meas_set])
         x_idxs = np.argmin(np.abs(positions[:, 0, None] - self.p.img_shape["x_coords"]), axis=1)
@@ -66,24 +68,9 @@ class GridWorker(QThread):
         logging.info(f"Finished calculating {self.p.selected_quantity.name} grid values")
         self.finished.emit(grid)
 
-class DataSetPlotter(ComponentBase):
 
-    sel_freq_range = ValueRange(default_value=[Q_(1.000, "THz"), Q_(1.200, "THz")]).tag(
-        name="Selected frequency range", priority=1000,
-    )
-    comparison_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Point for comparison (x, y)")
 
-    selected_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(name="Selected quantity", priority=1001)
-    quantity_value = Unicode("", read_only=True).tag(name="Quantity value", priority=1003)
-    only_plot_avg = Bool(False).tag(name="Only plot average")
-    label = Unicode("").tag(name="Legend label")
-
-    rect_sel_grp = "Average value rectangle"
-    rect_sel_label = Unicode("").tag(name="Rectangle label", priority=1000, group=rect_sel_grp)
-    rect_sel_bot_left = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
-        name="Bottom left rectangle selection", group=rect_sel_grp, priority=1001)
-    rect_sel_top_right = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
-        name="Top right rectangle selection", group=rect_sel_grp, priority=1002)
+class ImagePlot(ComponentBase):
 
     image_grp = "Image actions"
     confine_to_extent = Bool(False,
@@ -97,78 +84,54 @@ class DataSetPlotter(ComponentBase):
                                group=image_grp).tag(name="Grid calculation progress")
     only_use_sample_set = Bool(True, group=image_grp,
                                help="Will only use measurements classified as a sample measurement "
-                                     "for the image plot, otherwise uses all measurements in the "
-                                     "dataset").tag(name="Only use sample measurements for image")
+                                    "for the image plot, otherwise uses all measurements in the "
+                                    "dataset").tag(name="Only use sample measurements for image")
+
+    rect_sel_grp = "Average value rectangle"
+    rect_sel_label = Unicode("").tag(name="Rectangle label", priority=1000, group=rect_sel_grp)
+    rect_sel_bot_left = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
+        name="Bottom left rectangle selection", group=rect_sel_grp, priority=1001)
+    rect_sel_top_right = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
+        name="Top right rectangle selection", group=rect_sel_grp, priority=1002)
 
     line_plot_grp = "Image slice plot"
     line_start = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
-        name="Line start point", group=line_plot_grp, priority=1001)
+        name="Line start point (x, y)", group=line_plot_grp, priority=1001)
     line_end = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
-        name="Line end point", group=line_plot_grp, priority=1002)
+        name="Line end point (x, y)", group=line_plot_grp, priority=1002)
 
-
-
-    def __init__(self, dataset : DataSet, **kwargs):
+    def __init__(self, plotter_instance: DataSetPlotter, **kwargs):
         super().__init__(**kwargs)
-        self.dataset = dataset
-
+        self.plotter_instance = plotter_instance
+        self.dataset = self.plotter_instance.dataset
         self.grid_vals = None
         self.img_ax = None
         self.drawn_elements = {"patches": [], "text_labels": [], "points": []}
         self.grid_thread = None
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.settings.save_configuration(self)
-
-    def __enter__(self):
-        self.settings.load_configuration(self)
-
-        return self
-
     @property
-    def scalar_freq_idx(self):
-        freq = self.sel_freq_range[0]
-        selected_freq_idx = f_axis_idx_map(self.dataset.freq_axis, freq)
-
-        return selected_freq_idx[0]
-
-    @property
-    def freq_axis(self):
-        return self.dataset.freq_axis[self.freq_idx]
-
-    @property
-    def freq_idx(self):
-        return f_axis_idx_map(self.dataset.freq_axis, self.plot_settings.plot_range)
+    def img_shape(self):
+        return self.plotter_instance.dataset.shape_properties
 
     @property
     def settings(self):
-        return self.dataset.settings
+        return self.plotter_instance.settings
 
     @property
     def plot_settings(self):
-        return self.dataset.settings.plot_opt
+        return self.plotter_instance.plot_settings
 
     @property
-    def measurements(self):
-        return self.dataset.measurements
+    def sel_freq_range(self):
+        return self.plotter_instance.sel_freq_range
 
     @property
-    def img_shape(self):
-        return self.dataset.shape_properties
-
-    @property
-    def td_fig_num(self):
-        fig_num_ext = self.plot_settings.fig_num_ext
-        return "Time domain" + fig_num_ext
-
-    @property
-    def fd_fig_num(self):
-        fig_num_ext = self.plot_settings.fig_num_ext
-        return "Frequency domain" + fig_num_ext
+    def selected_quantity(self):
+        return self.plotter_instance.selected_quantity
 
     @property
     def image_fig_num(self):
-        sel_quant = self.get_selected_quantity()
+        sel_quant = self.plotter_instance.selected_quantity_value
         en_freq_label = Domain.Frequency == sel_quant.domain
         fig_num = ""
         if self.plot_settings.img_fig_num_ext:
@@ -184,36 +147,8 @@ class DataSetPlotter(ComponentBase):
 
         return fig_num
 
-    @property
-    def quantity_label(self):
-        sel_quant = self.get_selected_quantity()
-        en_freq_label = Domain.Frequency == sel_quant.domain
-        if np.isclose(self.sel_freq_range[0].magnitude, self.sel_freq_range[1].magnitude):
-            freq_label = f"({self.sel_freq_range[0]})"
-        else:
-            freq_label = f"({self.sel_freq_range[0]}-{self.sel_freq_range[1]})"
-
-        return " ".join([str(sel_quant), freq_label * en_freq_label])
-
-    @property
-    def selected_measurements(self):
-        return self.dataset.measurement_selector.selected_measurements
-
-    def get_legend_label(self, meas_):
-        if len(self.label) < 2 or self.label[:2] != "$$":
-            return self.label
-        if isinstance(meas_, str):
-            return meas_
-
-        match = re.search(self.label[2:], meas_.filepath.name)
-        if match:
-            return match.group(0)  # Output: sample_4_1
-        else:
-            return self.label
-
-    def get_selected_quantity(self):
-        self._update_sel_quant_func()
-        return self.selected_quantity.value
+    def plt_show(self):
+        self.plotter_instance.plt_show()
 
     def _get_empty_grid(self):
         img_shape = self.img_shape
@@ -221,15 +156,6 @@ class DataSetPlotter(ComponentBase):
         grid_vals = np.zeros((w, h), dtype=complex)
 
         return grid_vals
-
-    def _update_sel_quant_func(self):
-        func_map = self.dataset.func_map
-
-        freq_range = self.sel_freq_range.magnitude
-        func_map[QuantityEnum.PowerInt] = partial(self.dataset.power_int, freq_range=freq_range) # 1D (N_meas)
-        func_map[QuantityEnum.PeakCnt] = partial(self.dataset.simple_peak_cnt, threshold=2.5)
-
-        self.selected_quantity.value.func = func_map[self.selected_quantity]
 
     def _coords_to_idx(self, x_, y_):
         shape_properties = self.img_shape
@@ -273,94 +199,6 @@ class DataSetPlotter(ComponentBase):
                     filtered_grid[x_idx, y_idx] = empty_grid[x_idx, y_idx]
 
         return filtered_grid
-
-    @action("Calculate quantity value", priority=1002)
-    def calc_quant_value(self):
-        selected_meas = self.selected_measurements
-        if not selected_meas:
-            logging.info("No measurements selected")
-            return
-
-        sel_quant = self.get_selected_quantity()
-        value = sel_quant.func(selected_meas)
-
-        if value.ndim == 0:
-            s = f"{value:.2f}"
-        elif value.ndim == 1:
-            mean_value = np.mean(value)
-            mean_std = np.std(value, ddof=1) if value.shape[0] != 1 else 0
-            s = f"{mean_value:.2f}±{mean_std:.2f}"
-        elif value.ndim == 2:
-            mean_value = np.mean(value[:, self.scalar_freq_idx])
-            std_val = np.std(value[:, self.scalar_freq_idx], ddof=1) if value.shape[0] != 1 else 0
-            s = f"{mean_value:.2f}±{std_val:.2f}"
-        else:
-            logging.info("Selected quantity is not a scalar")
-            return
-
-        unit = sel_quant.unit
-        if unit:
-            s += f" {unit}"
-
-        if value.ndim == 2:
-            s += f" at {self.sel_freq_range[0]}"
-
-        self.set_trait("quantity_value", s)
-
-    def set_time_axis_unit(self, axis):
-        axis = axis.to("h")
-        if axis.magnitude.max() < 5 / 60:
-            axis = axis.to("s")
-        elif 5 / 60 <= axis.magnitude.max() < 0.5:
-            axis = axis.to("min")
-        else:
-            axis = axis.to("h")
-
-        return axis
-
-    def get_stability_data(self, meas_set_kw=None):
-        if meas_set_kw is not None:
-            meas_set = []
-            for meas in self.measurements["all"]:
-                if meas_set_kw in meas.filepath.name:
-                    meas_set.append(meas)
-            logging.info(f"Using measurements containing keyword {meas_set_kw}")
-        elif all([self.measurements["all"][0].position == meas.position for meas in self.measurements["all"]]):
-            meas_set = self.measurements["all"]
-            logging.info("Using all measurements")
-        else:
-            meas_set = self.measurements["refs"]
-            logging.info("Using reference measurement set")
-            if len(meas_set) < 2:
-                msg = "Not enough measurements assigned as reference in dataset. "
-                msg += "Using all measurements instead"
-                logging.info(msg)
-                meas_set = self.measurements["all"]
-
-        if len(meas_set) == 0:
-            logging.info("No measurements in selected measurement set")
-            return None
-
-        meas0 = meas_set[0]
-        n_meas = len(meas_set)
-        ref_fd = self.dataset.get_multi_data(meas_set, domain=Domain.Frequency)
-        fd_val = ref_fd[:, self.scalar_freq_idx, 1]
-
-        ret = {
-            "meas_set": meas_set,
-            "meas_times": Q_(np.zeros(n_meas), "h"),
-            "ampl_arr": np.abs(fd_val),
-            "zero_crossing": self.dataset.get_zero_crossing(meas_set),
-            "relative_delay": self.dataset.delay_from_phase_slope(len(meas_set)*[meas0], meas_set),
-            "angle_arr": -np.angle(fd_val),
-            "spec_similarity": self.dataset.spectral_similarity(len(meas_set)*[meas0], meas_set),
-        }
-
-        for i, meas in enumerate(meas_set):
-            ret["meas_times"][i] = self.dataset.meas_time_diff(meas0, meas)
-        ret["meas_times"] = self.set_time_axis_unit(ret["meas_times"])
-
-        return ret
 
     @action(name="Draw average value rectangle", group=rect_sel_grp, priority=2)
     def average_area(self):
@@ -464,6 +302,496 @@ class DataSetPlotter(ComponentBase):
 
         if plt.fignum_exists(num=self.image_fig_num):
             plt.draw()
+
+
+    def on_image_click(self, event):
+        if not self.enable_img_interaction:
+            return
+        if event.inaxes is None:
+            return
+        toolbar = event.canvas.toolbar
+        if toolbar is not None and toolbar.mode != "":
+            return
+
+        if event.button is MouseButton.LEFT:
+            dx = self.dataset.shape_properties["dx"]
+            dy = self.dataset.shape_properties["dy"]
+            x = round_dx(event.xdata, dx)
+            y = round_dx(event.ydata, dy)
+            meas_list = self.dataset.measurement_selector.get_measurements_from_point(x, y)
+            if self.selected_quantity == QuantityEnum.P2P:
+                plotted_meas = self.plotter_instance.plot_waveform(meas_list)
+            else:
+                plotted_meas = self.plotter_instance.plot_selected_quantity(meas_list)
+
+            self._plot_meas_on_image(plotted_meas)
+
+            self.plt_show()
+
+    def calculate_grid_vals(self, callback=None):
+        if self.grid_thread is not None and self.grid_thread.isRunning():
+            logging.warning("Grid calculation already running...")
+            return
+
+        self.grid_thread = GridWorker(self)
+
+        self.grid_thread.progress_changed.connect(lambda val: self.set_trait("grid_calc_progress", val))
+
+        def _on_finish(new_grid_vals):
+            self.grid_vals = np.nan_to_num(new_grid_vals)
+
+            if callback:
+                callback(new_grid_vals)
+
+        self.grid_thread.finished.connect(_on_finish)
+        self.grid_thread.start()
+
+    @action("Plot image", group=image_grp, priority=1)
+    def plot_image(self, grid_vals=None):
+        if grid_vals is None:
+            self.calculate_grid_vals(callback=self.plot_image)
+            return
+
+        shape_properties = self.img_shape
+
+        if not self.confine_to_extent:
+            img_extent = shape_properties["extent"]
+            w0, w1, h0, h1 = [0, shape_properties["w"], 0, shape_properties["h"]]
+        else:
+            img_extent = [*self.img_extent_x_range.magnitude, *self.img_extent_y_range.magnitude]
+            dx, dy = shape_properties["dx"], shape_properties["dy"]
+            w0, w1 = (int((img_extent[0] - shape_properties["extent"][0]) / dx),
+                      int((img_extent[1] - shape_properties["extent"][0]) / dx))
+            h0, h1 = (int((img_extent[2] - shape_properties["extent"][2]) / dy),
+                      int((img_extent[3] - shape_properties["extent"][2]) / dy))
+
+        shown_grid_vals = self.grid_vals.real
+        shown_grid_vals = shown_grid_vals[w0:w1, h0:h1]
+        shown_grid_vals = self._exclude_pixels(shown_grid_vals)
+
+        if self.plot_settings.log_scale:
+            shown_grid_vals = np.log10(shown_grid_vals)
+
+        fig = plt.figure(self.image_fig_num)
+        ax = fig.add_subplot(111)
+        fig.subplots_adjust(left=0.2)
+
+        if self.plot_settings.en_cbar_lim:
+            cbar_min, cbar_max = self.plot_settings.cbar_lim
+        else:
+            cbar_min = np.min(shown_grid_vals)
+            cbar_max = np.max(shown_grid_vals)
+        np.savetxt("grid_values.txt", shown_grid_vals)
+        if self.plot_settings.log_scale:
+            cbar_min = np.log10(cbar_min)
+            cbar_max = np.log10(cbar_max)
+
+        axes_extent = (float(img_extent[0] - shape_properties["dx"] / 2),
+                       float(img_extent[1] + shape_properties["dx"] / 2),
+                       float(img_extent[2] - shape_properties["dy"] / 2),
+                       float(img_extent[3] + shape_properties["dy"] / 2))
+        img_ = ax.imshow(shown_grid_vals.transpose((1, 0)),
+                         vmin=cbar_min, vmax=cbar_max,
+                         origin="lower",
+                         cmap=plt.get_cmap(self.plot_settings.color_map.value),
+                         extent=axes_extent,
+                         interpolation=self.plot_settings.pixel_interpolation.value
+                         )
+        img_.format_cursor_data = lambda data: f"[{data:.3f}]"
+
+        if self.plot_settings.invert_x:
+            ax.invert_xaxis()
+        if self.plot_settings.invert_y:
+            ax.invert_yaxis()
+
+        ax.set_xlabel("x (mm)")
+        ax.set_ylabel("y (mm)")
+
+        quantity_label = self.plotter_instance.quantity_label
+
+        img_title_option = str(self.plot_settings.img_title)
+        ax.set_title(" ".join([quantity_label, img_title_option]))
+
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+
+        cbar = fig.colorbar(img_, cax=cax)
+        cbar.set_ticks(np.round(np.linspace(cbar_min, cbar_max, 4), 3))
+
+        if self.plot_settings.en_cbar_label:
+            quant = self.selected_quantity.value
+            cbar_label = quant.label + " " + quant.unit
+            cbar.set_label(cbar_label, rotation=270, labelpad=30)
+
+        plt.connect('button_press_event', self.on_image_click)
+
+        self.img_ax = ax
+
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
+
+    def _plot_meas_on_image(self, measurements):
+        if not plt.fignum_exists(self.image_fig_num):
+            return
+        if measurements is None:
+            return
+
+        if isinstance(measurements, Measurement):
+            measurements = [measurements]
+
+        plt.figure(num=self.image_fig_num)
+        img_ax = self.img_ax
+
+        ext = self.img_shape["extent"]
+
+        any_in_extent = False
+        meas_x_coords, meas_y_coords = [], []
+        for m in measurements:
+            x, y = m.position
+            meas_x_coords.append(x)
+            meas_y_coords.append(y)
+
+            if (ext[0] < x < ext[1]) * (ext[2] < y < ext[3]):
+                any_in_extent = True
+
+        if not any_in_extent:
+            logging.info("None of the measurements are within the image extent")
+
+        plt_fun = img_ax.scatter
+        pnt = plt_fun(meas_x_coords, meas_y_coords, color="black", linewidth=0.4)
+        self.drawn_elements["points"].append(pnt)
+
+        plt.draw()
+
+    @action("Plot references on image", group=image_grp)
+    def plot_refs_on_image(self):
+        self._plot_meas_on_image(self.dataset.measurements["refs"])
+
+    @action("Line plot", group=line_plot_grp)
+    def plot_line(self):
+        start = self.line_start.magnitude
+        end = self.line_end.magnitude
+        meas_on_line, meas_points = self.dataset.measurement_selector.get_arb_line(start, end)
+
+        sel_quant = self.plotter_instance.selected_quantity_value
+
+        vals = np.real(sel_quant.func(meas_on_line))
+        if vals.ndim == 2:
+            vals = vals[:, self.plotter_instance.scalar_freq_idx]
+
+        x_coords, y_coords = [p[0] for p in meas_points], [p[1] for p in meas_points]
+        if len(set(x_coords)) == len(meas_points):
+            primary_direction = Direction.Horizontal
+        else:
+            primary_direction = Direction.Vertical
+
+        if primary_direction == Direction.Horizontal:
+            fig_num = "x-slice"
+            x_label = "x (mm)"
+            x_axis_vals = x_coords
+        else:
+            fig_num = "y-slice"
+            x_label = "y (mm)"
+            x_axis_vals = y_coords
+
+        fig_num += "_" + self.plotter_instance.quantity_label.replace(" ", "_")
+        plt.figure(fig_num)
+        plt.title(f"Line scan ({primary_direction.name})")
+        plt.xlabel(x_label)
+        plt.ylabel(self.plotter_instance.quantity_label)
+
+        unit = self.line_start[0].units
+        line_label = f"({start[0]}, {start[1]}) to ({end[0]}, {end[1]}) {unit}"
+
+        plt.plot(x_axis_vals, vals, label=line_label)
+        plt.legend()
+        plt.draw()
+
+        self._plot_meas_on_image(meas_on_line)
+
+        logging.info(f"Plotted {sel_quant} for {len(meas_on_line)} measurement(s)")
+
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
+
+        return x_axis_vals, vals, fig_num
+
+    @action("Knife edge", group=line_plot_grp)
+    def knife_edge(self):
+        if self.selected_quantity != QuantityEnum.PowerInt:
+            logging.info("Integrated power must be selected")
+            return None
+
+        coords, vals, fig_num = self.plot_line()
+
+        pos_axis = np.array(coords)
+        sort_order = np.argsort(pos_axis)
+
+        pos_axis = pos_axis[sort_order]
+        vals = np.array(vals)[sort_order]
+        max_min_step = np.argmin(vals) > np.argmax(vals)
+
+        pos_axis_ordered = pos_axis if max_min_step else np.flip(pos_axis)
+
+        def _model(x, p_max, p_offset, w, h0):
+            return p_offset + 0.5 * p_max * erfc(np.sqrt(2) * (x - h0) / w)
+
+        def _cost(p):
+            return np.sum((vals - _model(pos_axis_ordered, *p)) ** 2)
+
+        slope_pos = pos_axis_ordered[np.argmax(np.abs(np.diff(vals))) + 1]
+
+        p0 = np.array([np.max(vals), np.min(vals), 0.5, slope_pos])
+        bounds = ([p0[0] - 1, p0[0] + 1],
+                  [p0[1], p0[1] + 0.01],
+                  [p0[2] - 0.4, p0[2] + 2.0],
+                  [p0[3] - 2, p0[3] + 2])
+        opt_res = shgo(_cost, bounds=bounds)
+
+        popt, pcov = curve_fit(
+            _model,
+            pos_axis_ordered,
+            vals,
+            p0=opt_res.x,
+            bounds=([bounds[i][0] for i in range(4)], [bounds[i][1] for i in range(4)])
+        )
+
+        perr = np.sqrt(np.diag(pcov))
+
+        plt.figure(fig_num)
+        plt.scatter(pos_axis, vals, label="Measurement", s=30, c="red", zorder=3)
+        plt.plot(pos_axis, _model(pos_axis_ordered, *popt), label="Optimization result")
+        plt.plot(pos_axis, _model(pos_axis_ordered, *p0), label="Initial guess", linestyle="--")
+
+        labels = ["$P_{max}$: ", "$P_{offset}$: ", "Beam radius: ", "$h_0$: "]
+        units = ["", "", " mm", " mm"]
+        s = "\n".join([
+            f"{lbl}{val:.2f} ± {err:.2f}{unit}"
+            for lbl, val, err, unit in zip(labels, np.abs(popt), perr, units)
+        ])
+
+        bbox_props = dict(
+            boxstyle="round,pad=0.5",
+            facecolor="white",
+            edgecolor="gray",
+            alpha=0.85,
+            linewidth=1
+        )
+        box_pos = (0.05, 0.25) if max_min_step else (0.05, 0.95)
+        plt.gca().text(
+            *box_pos, s,
+            transform=plt.gca().transAxes,
+            verticalalignment="top",
+            horizontalalignment="left",
+            fontsize=18,
+            fontfamily="sans-serif",
+            bbox=bbox_props,
+            zorder=5
+        )
+
+        plt.legend()
+        plt.draw()
+
+        logging.info("Plotted knife edge evaluation")
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
+
+        return popt, pcov
+
+class DataSetPlotter(ComponentBase):
+
+    sel_freq_range = ValueRange(default_value=[Q_(1.000, "THz"), Q_(1.200, "THz")]).tag(
+        name="Selected frequency range", priority=1000,
+    )
+    comparison_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(name="Point for comparison (x, y)")
+
+    selected_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(name="Selected quantity", priority=1001)
+    quantity_value = Unicode("", read_only=True).tag(name="Quantity value", priority=1003)
+    only_plot_avg = Bool(False).tag(name="Only plot average")
+    label = Unicode("").tag(name="Legend label")
+
+    image_plotter = Instance(ImagePlot, allow_none=True)
+
+    def __init__(self, dataset : DataSet, en_image_plotter=True, **kwargs):
+        super().__init__(**kwargs)
+        self.dataset = dataset
+
+        if en_image_plotter:
+            self.image_plotter = ImagePlot(self, object_name="Image plot")
+
+    def __exit__(self, *args):
+        self.settings.save_configuration(self)
+
+    def __enter__(self, *args):
+        self.settings.load_configuration(self)
+
+        return self
+
+    @property
+    def scalar_freq_idx(self):
+        freq = self.sel_freq_range[0]
+        selected_freq_idx = f_axis_idx_map(self.dataset.freq_axis, freq)
+
+        return selected_freq_idx[0]
+
+    @property
+    def freq_axis(self):
+        return self.dataset.freq_axis[self.freq_idx]
+
+    @property
+    def freq_idx(self):
+        return f_axis_idx_map(self.dataset.freq_axis, self.plot_settings.plot_range)
+
+    @property
+    def settings(self):
+        return self.dataset.settings
+
+    @property
+    def plot_settings(self):
+        return self.dataset.settings.plot_opt
+
+    @property
+    def measurements(self):
+        return self.dataset.measurements
+
+    @property
+    def td_fig_num(self):
+        fig_num_ext = self.plot_settings.fig_num_ext
+        return "Time domain" + fig_num_ext
+
+    @property
+    def fd_fig_num(self):
+        fig_num_ext = self.plot_settings.fig_num_ext
+        return "Frequency domain" + fig_num_ext
+
+    @property
+    def selected_quantity_value(self):
+        self._update_sel_quant_func()
+        return self.selected_quantity.value
+
+    @property
+    def quantity_label(self):
+        sel_quant = self.selected_quantity_value
+        en_freq_label = Domain.Frequency == sel_quant.domain
+        if np.isclose(self.sel_freq_range[0].magnitude, self.sel_freq_range[1].magnitude):
+            freq_label = f"({self.sel_freq_range[0]})"
+        else:
+            freq_label = f"({self.sel_freq_range[0]}-{self.sel_freq_range[1]})"
+
+        return " ".join([str(sel_quant), freq_label * en_freq_label])
+
+    @property
+    def selected_measurements(self):
+        return self.dataset.measurement_selector.selected_measurements
+
+    def get_legend_label(self, meas_):
+        if len(self.label) < 2 or self.label[:2] != "$$":
+            return self.label
+        if isinstance(meas_, str):
+            return meas_
+
+        match = re.search(self.label[2:], meas_.filepath.name)
+        if match:
+            return match.group(0)
+        else:
+            return self.label
+
+    def _update_sel_quant_func(self):
+        func_map = self.dataset.func_map
+
+        freq_range = self.sel_freq_range.magnitude
+        func_map[QuantityEnum.PowerInt] = partial(self.dataset.power_int, freq_range=freq_range) # 1D (N_meas)
+        func_map[QuantityEnum.PeakCnt] = partial(self.dataset.simple_peak_cnt, threshold=2.5)
+
+        self.selected_quantity.value.func = func_map[self.selected_quantity]
+
+    @action("Calculate quantity value", priority=1002)
+    def calc_quant_value(self):
+        selected_meas = self.selected_measurements
+        if not selected_meas:
+            logging.info("No measurements selected")
+            return
+
+        sel_quant = self.selected_quantity_value
+        value = sel_quant.func(selected_meas)
+
+        if value.ndim == 0:
+            s = f"{value:.2f}"
+        elif value.ndim == 1:
+            mean_value = float(np.mean(value))
+            mean_std = float(np.std(value, ddof=1)) if value.shape[0] != 1 else 0
+            s = f"{mean_value:.2f}±{mean_std:.2f}"
+        elif value.ndim == 2:
+            mean_value = float(np.mean(value[:, self.scalar_freq_idx]))
+            std_val = float(np.std(value[:, self.scalar_freq_idx], ddof=1)) if value.shape[0] != 1 else 0
+            s = f"{mean_value:.2f}±{std_val:.2f}"
+        else:
+            logging.info("Selected quantity is not a scalar")
+            return
+
+        unit = sel_quant.unit
+        if unit:
+            s += f" {unit}"
+
+        if value.ndim == 2:
+            s += f" at {self.sel_freq_range[0]}"
+
+        self.set_trait("quantity_value", s)
+
+    def set_time_axis_unit(self, axis):
+        axis = axis.to("h")
+        if axis.magnitude.max() < 5 / 60:
+            axis = axis.to("s")
+        elif 5 / 60 <= axis.magnitude.max() < 0.5:
+            axis = axis.to("min")
+        else:
+            axis = axis.to("h")
+
+        return axis
+
+    def get_stability_data(self, meas_set_kw=None):
+        if meas_set_kw is not None:
+            meas_set = []
+            for meas in self.measurements["all"]:
+                if meas_set_kw in meas.filepath.name:
+                    meas_set.append(meas)
+            logging.info(f"Using measurements containing keyword {meas_set_kw}")
+        elif all([self.measurements["all"][0].position == meas.position for meas in self.measurements["all"]]):
+            meas_set = self.measurements["all"]
+            logging.info("Using all measurements")
+        else:
+            meas_set = self.measurements["refs"]
+            logging.info("Using reference measurement set")
+            if len(meas_set) < 2:
+                msg = "Not enough measurements assigned as reference in dataset. "
+                msg += "Using all measurements instead"
+                logging.info(msg)
+                meas_set = self.measurements["all"]
+
+        if len(meas_set) == 0:
+            logging.info("No measurements in selected measurement set")
+            return None
+
+        meas0 = meas_set[0]
+        n_meas = len(meas_set)
+        ref_fd = self.dataset.get_multi_data(meas_set, domain=Domain.Frequency)
+        fd_val = ref_fd[:, self.scalar_freq_idx, 1]
+
+        ret = {
+            "meas_set": meas_set,
+            "meas_times": Q_(np.zeros(n_meas), "h"),
+            "ampl_arr": np.abs(fd_val),
+            "zero_crossing": self.dataset.get_zero_crossing(meas_set),
+            "relative_delay": self.dataset.delay_from_phase_slope(len(meas_set)*[meas0], meas_set),
+            "angle_arr": -np.angle(fd_val),
+            "spec_similarity": self.dataset.spectral_similarity(len(meas_set)*[meas0], meas_set),
+        }
+
+        for i, meas in enumerate(meas_set):
+            ret["meas_times"][i] = self.dataset.meas_time_diff(meas0, meas)
+        ret["meas_times"] = self.set_time_axis_unit(ret["meas_times"])
+
+        return ret
 
     @action("Reference difference", group="Plots")
     def ref_difference_plot(self):
@@ -752,7 +1080,7 @@ class DataSetPlotter(ComponentBase):
     def plot_scalar_quantity(self, meas_list):
         fig_num_ext = self.plot_settings.fig_num_ext
 
-        sel_quant = self.get_selected_quantity()
+        sel_quant = self.selected_quantity_value
         values = sel_quant.func(meas_list)
 
         fignum = str(sel_quant) + fig_num_ext
@@ -779,7 +1107,7 @@ class DataSetPlotter(ComponentBase):
             logging.info("No measurements selected")
             return []
 
-        sel_quant = self.get_selected_quantity()
+        sel_quant = self.selected_quantity_value
         values = sel_quant.func(meas_list)
 
         if not isinstance(values, np.ndarray):
@@ -1357,300 +1685,6 @@ class DataSetPlotter(ComponentBase):
 
         if self.settings.plot_opt.auto_show:
             self.plt_show()
-
-    def on_image_click(self, event):
-        if not self.enable_img_interaction:
-            return
-        if event.inaxes is None:
-            return
-        toolbar = event.canvas.toolbar
-        if toolbar is not None and toolbar.mode != "":
-            return
-
-        if event.button is MouseButton.LEFT:
-            dx = self.dataset.shape_properties["dx"]
-            dy = self.dataset.shape_properties["dy"]
-            x = round_dx(event.xdata, dx)
-            y = round_dx(event.ydata, dy)
-            meas_list = self.dataset.measurement_selector.get_measurements_from_point(x, y)
-            if self.selected_quantity == QuantityEnum.P2P:
-                plotted_meas = self.plot_waveform(meas_list)
-            else:
-                plotted_meas = self.plot_selected_quantity(meas_list)
-
-            self._plot_meas_on_image(plotted_meas)
-
-            self.plt_show()
-
-    def calculate_grid_vals(self, callback=None):
-        if self.grid_thread is not None and self.grid_thread.isRunning():
-            logging.warning("Grid calculation already running...")
-            return
-
-        self.grid_thread = GridWorker(self)
-
-        self.grid_thread.progress_changed.connect(lambda val: self.set_trait("grid_calc_progress", val))
-
-        def _on_finish(new_grid_vals):
-            self.grid_vals = np.nan_to_num(new_grid_vals)
-
-            if callback:
-                callback(new_grid_vals)
-
-        self.grid_thread.finished.connect(_on_finish)
-        self.grid_thread.start()
-
-    @action("Plot image", group=image_grp, priority=1)
-    def plot_image(self, grid_vals=None):
-        if grid_vals is None:
-            self.calculate_grid_vals(callback=self.plot_image)
-            return
-
-        shape_properties = self.img_shape
-
-        if not self.confine_to_extent:
-            img_extent = shape_properties["extent"]
-            w0, w1, h0, h1 = [0, shape_properties["w"], 0, shape_properties["h"]]
-        else:
-            img_extent = [*self.img_extent_x_range.magnitude, *self.img_extent_y_range.magnitude]
-            dx, dy = shape_properties["dx"], shape_properties["dy"]
-            w0, w1 = (int((img_extent[0] - shape_properties["extent"][0]) / dx),
-                      int((img_extent[1] - shape_properties["extent"][0]) / dx))
-            h0, h1 = (int((img_extent[2] - shape_properties["extent"][2]) / dy),
-                      int((img_extent[3] - shape_properties["extent"][2]) / dy))
-
-        shown_grid_vals = self.grid_vals.real
-        shown_grid_vals = shown_grid_vals[w0:w1, h0:h1]
-        shown_grid_vals = self._exclude_pixels(shown_grid_vals)
-
-        if self.plot_settings.log_scale:
-            shown_grid_vals = np.log10(shown_grid_vals)
-
-        fig = plt.figure(self.image_fig_num)
-        ax = fig.add_subplot(111)
-        fig.subplots_adjust(left=0.2)
-
-        if self.plot_settings.en_cbar_lim:
-            cbar_min, cbar_max = self.plot_settings.cbar_lim
-        else:
-            cbar_min = np.min(shown_grid_vals)
-            cbar_max = np.max(shown_grid_vals)
-        np.savetxt("grid_values.txt", shown_grid_vals)
-        if self.plot_settings.log_scale:
-            cbar_min = np.log10(cbar_min)
-            cbar_max = np.log10(cbar_max)
-
-        axes_extent = (float(img_extent[0] - shape_properties["dx"] / 2),
-                       float(img_extent[1] + shape_properties["dx"] / 2),
-                       float(img_extent[2] - shape_properties["dy"] / 2),
-                       float(img_extent[3] + shape_properties["dy"] / 2))
-        img_ = ax.imshow(shown_grid_vals.transpose((1, 0)),
-                         vmin=cbar_min, vmax=cbar_max,
-                         origin="lower",
-                         cmap=plt.get_cmap(self.plot_settings.color_map.value),
-                         extent=axes_extent,
-                         interpolation=self.plot_settings.pixel_interpolation.value
-                         )
-        img_.format_cursor_data = lambda data: f"[{data:.3f}]"
-
-        if self.plot_settings.invert_x:
-            ax.invert_xaxis()
-        if self.plot_settings.invert_y:
-            ax.invert_yaxis()
-
-        ax.set_xlabel("x (mm)")
-        ax.set_ylabel("y (mm)")
-
-        quantity_label = self.quantity_label
-
-        img_title_option = str(self.plot_settings.img_title)
-        ax.set_title(" ".join([quantity_label, img_title_option]))
-
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes("right", size="5%", pad=0.05)
-
-        cbar = fig.colorbar(img_, cax=cax)
-        cbar.set_ticks(np.round(np.linspace(cbar_min, cbar_max, 4), 3))
-
-        if self.plot_settings.en_cbar_label:
-            quant = self.selected_quantity.value
-            cbar_label = quant._label + " " + quant.unit
-            cbar.set_label(cbar_label, rotation=270, labelpad=30)
-
-        plt.connect('button_press_event', self.on_image_click)
-
-        self.img_ax = ax
-
-        if self.settings.plot_opt.auto_show:
-            self.plt_show()
-
-    def _plot_meas_on_image(self, measurements):
-        if not plt.fignum_exists(self.image_fig_num):
-            return
-        if measurements is None:
-            return
-
-        if isinstance(measurements, Measurement):
-            measurements = [measurements]
-
-        plt.figure(num=self.image_fig_num)
-        img_ax = self.img_ax
-
-        ext = self.img_shape["extent"]
-
-        any_in_extent = False
-        meas_x_coords, meas_y_coords = [], []
-        for m in measurements:
-            x, y = m.position
-            meas_x_coords.append(x)
-            meas_y_coords.append(y)
-
-            if (ext[0] < x < ext[1]) * (ext[2] < y < ext[3]):
-                any_in_extent = True
-
-        if not any_in_extent:
-            logging.info("None of the measurements are within the image extent")
-
-        plt_fun = img_ax.scatter
-        pnt = plt_fun(meas_x_coords, meas_y_coords, color="black", linewidth=0.4)
-        self.drawn_elements["points"].append(pnt)
-
-        plt.draw()
-
-    @action("Plot references on image", group=image_grp)
-    def plot_refs_on_image(self):
-        self._plot_meas_on_image(self.measurements["refs"])
-
-    @action("Line plot", group=line_plot_grp)
-    def plot_line(self):
-        start = self.line_start.magnitude
-        end = self.line_end.magnitude
-        meas_on_line, meas_points = self.dataset.measurement_selector.get_arb_line(start, end)
-
-        sel_quant = self.get_selected_quantity()
-
-        vals = np.real(sel_quant.func(meas_on_line))
-        if vals.ndim == 2:
-            vals = vals[:, self.scalar_freq_idx]
-
-        x_coords, y_coords = [p[0] for p in meas_points], [p[1] for p in meas_points]
-        if len(set(x_coords)) == len(meas_points):
-            primary_direction = Direction.Horizontal
-        else:
-            primary_direction = Direction.Vertical
-
-        if primary_direction == Direction.Horizontal:
-            fig_num = "x-slice"
-            x_label = "x (mm)"
-            x_axis_vals = x_coords
-        else:
-            fig_num = "y-slice"
-            x_label = "y (mm)"
-            x_axis_vals = y_coords
-
-        fig_num += "_" + self.quantity_label.replace(" ", "_")
-        plt.figure(fig_num)
-        plt.title(f"Line scan ({primary_direction.name})")
-        plt.xlabel(x_label)
-        plt.ylabel(self.quantity_label)
-
-        unit = self.line_start[0].units
-        line_label = f"({start[0]}, {start[1]}) to ({end[0]}, {end[1]}) {unit}"
-
-        plt.plot(x_axis_vals, vals, label=line_label)
-        plt.legend()
-        plt.draw()
-
-        self._plot_meas_on_image(meas_on_line)
-
-        logging.info(f"Plotted {sel_quant} for {len(meas_on_line)} measurement(s)")
-
-        if self.settings.plot_opt.auto_show:
-            self.plt_show()
-
-        return x_axis_vals, vals, fig_num
-
-    @action("Knife edge", group=line_plot_grp)
-    def knife_edge(self):
-        if self.selected_quantity != QuantityEnum.PowerInt:
-            logging.info("Integrated power must be selected")
-            return None
-
-        coords, vals, fig_num = self.plot_line()
-
-        pos_axis = np.array(coords)
-        sort_order = np.argsort(pos_axis)
-
-        pos_axis = pos_axis[sort_order]
-        vals = np.array(vals)[sort_order]
-        max_min_step = np.argmin(vals) > np.argmax(vals)
-
-        pos_axis_ordered = pos_axis if max_min_step else np.flip(pos_axis)
-
-        def _model(x, p_max, p_offset, w, h0):
-            return p_offset + 0.5 * p_max * erfc(np.sqrt(2) * (x - h0) / w)
-
-        def _cost(p):
-            return np.sum((vals - _model(pos_axis_ordered, *p)) ** 2)
-
-        slope_pos = pos_axis_ordered[np.argmax(np.abs(np.diff(vals))) + 1]
-
-        p0 = np.array([np.max(vals), np.min(vals), 0.5, slope_pos])
-        bounds = ([p0[0] - 1, p0[0] + 1],
-                  [p0[1], p0[1] + 0.01],
-                  [p0[2] - 0.4, p0[2] + 2.0],
-                  [p0[3] - 2, p0[3] + 2])
-        opt_res = shgo(_cost, bounds=bounds)
-
-        popt, pcov = curve_fit(
-            _model,
-            pos_axis_ordered,
-            vals,
-            p0=opt_res.x,
-            bounds=([bounds[i][0] for i in range(4)], [bounds[i][1] for i in range(4)])
-        )
-
-        perr = np.sqrt(np.diag(pcov))
-
-        plt.figure(fig_num)
-        plt.scatter(pos_axis, vals, label="Measurement", s=30, c="red", zorder=3)
-        plt.plot(pos_axis, _model(pos_axis_ordered, *popt), label="Optimization result")
-        plt.plot(pos_axis, _model(pos_axis_ordered, *p0), label="Initial guess", linestyle="--")
-
-        labels = ["$P_{max}$: ", "$P_{offset}$: ", "Beam radius: ", "$h_0$: "]
-        units = ["", "", " mm", " mm"]
-        s = "\n".join([
-            f"{lbl}{val:.2f} ± {err:.2f}{unit}"
-            for lbl, val, err, unit in zip(labels, np.abs(popt), perr, units)
-        ])
-
-        bbox_props = dict(
-            boxstyle="round,pad=0.5",
-            facecolor="white",
-            edgecolor="gray",
-            alpha=0.85,
-            linewidth=1
-        )
-        box_pos = (0.05, 0.25) if max_min_step else (0.05, 0.95)
-        plt.gca().text(
-            *box_pos, s,
-            transform=plt.gca().transAxes,
-            verticalalignment="top",
-            horizontalalignment="left",
-            fontsize=18,
-            fontfamily="sans-serif",
-            bbox=bbox_props,
-            zorder=5
-        )
-
-        plt.legend()
-        plt.draw()
-
-        logging.info("Plotted knife edge evaluation")
-        if self.settings.plot_opt.auto_show:
-            self.plt_show()
-
-        return popt, pcov
 
     def save_fig(self, fig_num_, **kwargs):
         save_dir = self.settings.save_settings.path

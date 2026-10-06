@@ -91,8 +91,6 @@ def create_number_entry(component, name, trait):
             spinbox.setSuffix(f" {units[sb_idx]:C~}")
 
         if is_double_spinbox:
-            spinbox.setDecimals(323)
-
             def textFromValue(self, val):
                 if abs(val) < 10 ** (1 - significant_figures) and val != 0.0:
                     text = f"{val:.{significant_figures}e}"
@@ -708,6 +706,8 @@ def generate_ui(component):
     stack = QtWidgets.QStackedWidget()
 
     def make_tree_items(component, name, depth, treeitem):
+        if component is None:
+            return
         prettyName = component.object_name or name
         newItem = QtWidgets.QTreeWidgetItem(treeitem)
         newItem.setText(0, prettyName)
