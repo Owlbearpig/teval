@@ -717,12 +717,12 @@ class DataSetPlotter(ComponentBase):
         if value.ndim == 0:
             s = f"{value:.2f}"
         elif value.ndim == 1:
-            mean_value = float(np.mean(value))
-            mean_std = float(np.std(value, ddof=1)) if value.shape[0] != 1 else 0
+            mean_value = np.mean(value)
+            mean_std = np.std(value, ddof=1) if value.shape[0] != 1 else 0
             s = f"{mean_value:.2f}±{mean_std:.2f}"
         elif value.ndim == 2:
-            mean_value = float(np.mean(value[:, self.scalar_freq_idx]))
-            std_val = float(np.std(value[:, self.scalar_freq_idx], ddof=1)) if value.shape[0] != 1 else 0
+            mean_value = np.mean(value[:, self.scalar_freq_idx])
+            std_val = np.std(value[:, self.scalar_freq_idx], ddof=1) if value.shape[0] != 1 else 0
             s = f"{mean_value:.2f}±{std_val:.2f}"
         else:
             logging.info("Selected quantity is not a scalar")

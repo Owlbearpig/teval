@@ -105,7 +105,7 @@ class Settings(AppSettings):
 
         def set_trait_values(instance, dict_):
             for trait_name, dict_val in dict_.items():
-                if instance is None:
+                if instance is None or getattr(instance.__class__, trait_name, None) is None:
                     continue
                 actual_type = type(getattr(instance.__class__, trait_name))
                 if actual_type == Instance:

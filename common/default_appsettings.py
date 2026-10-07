@@ -369,7 +369,7 @@ class EvalOpt(ComponentBase):
     sub_pnt = ValueRange([0, 0], group=conductivity_calc_grp).tag(name="Substrate point")
 
     smoothing_avg_grp = "Smoothing average"
-    smoothing_avg_en = Bool(False).tag(name="Enable smoothing average of quantities", group=smoothing_avg_grp)
+    smoothing_avg_en = Bool(False).tag(name="Enable smoothing average of n and k", group=smoothing_avg_grp)
     smoothing_avg_n = Int(3).tag(name="Smoothing average window size", group=smoothing_avg_grp)
     smoothing_avg_iters = Int(3).tag(name="Smoothing average iterations", group=smoothing_avg_grp)
 
@@ -476,7 +476,7 @@ class AppSettings(ComponentBase):
 
     save_settings = Instance(SaveSettings, args=())
     pp_opt = Instance(PpOpt, args=())
-    #eval_opt = Instance(EvalOpt, args=())
+    eval_opt = Instance(EvalOpt, args=())
     plot_opt = Instance(PlotOpt, args=())
     shgo_options = Instance(SHGOOptions, args=())
 
