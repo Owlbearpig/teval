@@ -183,7 +183,7 @@ class MeasurementSelection(ComponentBase):
         self.sample_paths = MultiPathClass(root_path=self.dataset.data_path, shown_filenames=sam_filenames)
 
         if en_queue:
-            self.selection_queue = SelectionQueue()
+            self.selection_queue = SelectionQueue(object_name="Selection queue")
 
     def set_observers(self):
         self.dataset.observe(self.update_fileselection, "measurements")

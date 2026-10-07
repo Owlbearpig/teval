@@ -476,7 +476,7 @@ class AppSettings(ComponentBase):
 
     save_settings = Instance(SaveSettings, args=())
     pp_opt = Instance(PpOpt, args=())
-    eval_opt = Instance(EvalOpt, args=())
+    #eval_opt = Instance(EvalOpt, args=())
     plot_opt = Instance(PlotOpt, args=())
     shgo_options = Instance(SHGOOptions, args=())
 

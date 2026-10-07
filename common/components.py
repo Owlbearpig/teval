@@ -83,14 +83,14 @@ class ComponentBase(HasTraits):
 
     def __enter__(self, *args):
         for name, trait in self.traits().items():
-            if is_component_trait(trait):
+            if is_component_trait(trait) and trait.get(self):
                 trait.get(self).__enter__(*args)
 
         return self
 
     def __exit__(self, *args):
         for name, trait in self.traits().items():
-            if is_component_trait(trait):
+            if is_component_trait(trait) and trait.get(self):
                 trait.get(self).__exit__(*args)
 
         return False

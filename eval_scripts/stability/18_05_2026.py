@@ -26,12 +26,12 @@ sub_settings_file = "18_05_2026_sub"
 
 class AppRoot(ComponentBase):
 
-    settings = Instance(Settings)
+    settings = Instance(Settings, allow_none=True)
     # settings_sub = Instance(Settings)
-    dataset = Instance(DataSet)
+    dataset = Instance(DataSet, allow_none=True)
     # dataset_sub = Instance(DataSet)
-    dataset_plotter = Instance(DataSetPlotter)
-    dataset_eval = Instance(DatasetEval)
+    dataset_plotter = Instance(DataSetPlotter, allow_none=True)
+    dataset_eval = Instance(DatasetEval, allow_none=True)
 
     def __init__(self):
         super().__init__()
