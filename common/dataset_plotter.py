@@ -104,6 +104,8 @@ class ImagePlot(ComponentBase):
         super().__init__(**kwargs)
         self.plotter_instance = plotter_instance
         self.dataset = self.plotter_instance.dataset
+        self.measurement_selector = self.plotter_instance.measurement_selector
+
         self.grid_vals = None
         self.img_ax = None
         self.drawn_elements = {"patches": [], "text_labels": [], "points": []}
@@ -318,7 +320,7 @@ class ImagePlot(ComponentBase):
             dy = self.dataset.shape_properties["dy"]
             x = round_dx(event.xdata, dx)
             y = round_dx(event.ydata, dy)
-            meas_list = self.dataset.measurement_selector.get_measurements_from_point(x, y)
+            meas_list = self.measurement_selector.get_measurements_from_point(x, y)
             if self.selected_quantity == QuantityEnum.P2P:
                 plotted_meas = self.plotter_instance.plot_waveform(meas_list)
             else:
@@ -471,7 +473,7 @@ class ImagePlot(ComponentBase):
     def plot_line(self):
         start = self.line_start.magnitude
         end = self.line_end.magnitude
-        meas_on_line, meas_points = self.dataset.measurement_selector.get_arb_line(start, end)
+        meas_on_line, meas_points = self.measurement_selector.get_arb_line(start, end)
 
         sel_quant = self.plotter_instance.selected_quantity_value
 
@@ -615,6 +617,7 @@ class DataSetPlotter(ComponentBase):
     def __init__(self, dataset : DataSet, en_image_plotter=True, **kwargs):
         super().__init__(**kwargs)
         self.dataset = dataset
+        self.measurement_selector = self.dataset.measurement_selector
 
         if en_image_plotter:
             self.image_plotter = ImagePlot(self, object_name="Image plot")
@@ -680,10 +683,6 @@ class DataSetPlotter(ComponentBase):
 
         return " ".join([str(sel_quant), freq_label * en_freq_label])
 
-    @property
-    def selected_measurements(self):
-        return self.dataset.measurement_selector.selected_measurements
-
     def get_legend_label(self, meas_):
         if len(self.label) < 2 or self.label[:2] != "$$":
             return self.label
@@ -707,10 +706,10 @@ class DataSetPlotter(ComponentBase):
 
     @action("Calculate quantity value", priority=1002)
     def calc_quant_value(self):
-        selected_meas = self.selected_measurements
-        if not selected_meas:
-            logging.info("No measurements selected")
+        selection = self.measurement_selector.get_selection()
+        if not selection:
             return
+        selected_meas = selection.sams
 
         sel_quant = self.selected_quantity_value
         value = sel_quant.func(selected_meas)
@@ -863,9 +862,10 @@ class DataSetPlotter(ComponentBase):
     def plot_ref(self, ref_list=None):
         if ref_list is None:
             if self.dataset.measurement_selector.ref_sel_criterion == ReferenceSelection.file_selection:
-                ref_list = self.dataset.measurement_selector.ref_file_selection_to_ref_meas()
+                ref_list = self.measurement_selector.ref_file_selection_to_ref_meas()
             else:
-                ref_list = self.dataset.measurement_selector.get_matching_refs(self.selected_measurements)
+                selection = self.measurement_selector.get_selection()
+                ref_list = selection.refs if selection else None
         if not ref_list:
             logging.info("No reference measurements selected")
             return
@@ -947,11 +947,13 @@ class DataSetPlotter(ComponentBase):
     @action("Waveform", group="Plots")
     def plot_waveform(self, meas_list=None):
         if meas_list is None:
-            meas_list = self.selected_measurements
-        if not meas_list:
-            logging.info("No measurements selected")
-            return None
-        ref_list = self.dataset.measurement_selector.get_matching_refs(meas_list)
+            selection = self.measurement_selector.get_selection()
+            if selection is None:
+                return None
+            meas_list = selection.sams
+            ref_list = selection.refs
+        else:
+            ref_list = self.dataset.measurement_selector.get_matching_refs(meas_list)
 
         sam_td = self.dataset.get_multi_data(meas_list)
         sam_fd = self.dataset.get_multi_data(meas_list, Domain.Frequency)
@@ -1014,7 +1016,10 @@ class DataSetPlotter(ComponentBase):
         plt.figure(self.fd_fig_num)
         plt.draw()
 
-        logging.info(f"Plotted {len(plot_data_fd_amp)} measurement(s)")
+        if self.only_plot_avg:
+            logging.info(f"Plotted average of {len(meas_list)}  measurement" + "s" * (len(meas_list) > 1))
+        else:
+            logging.info(f"Plotted {len(plot_data_fd_amp)} measurement" + "s" * (len(plot_data_fd_amp) > 1))
 
         if self.settings.plot_opt.auto_show:
             self.plt_show()
@@ -1023,10 +1028,10 @@ class DataSetPlotter(ComponentBase):
 
     @action("Phase plots", group="Phase plots")
     def plot_phases(self):
-        meas_list = self.selected_measurements
-        if not meas_list:
-            logging.info("No measurements selected")
+        selection = self.measurement_selector.get_selection()
+        if selection is None:
             return
+        meas_list = selection.sams
 
         phi = self.dataset.simple_phase_difference(meas_list)
         phi_corrected = self.dataset.phase_difference(meas_list)
@@ -1102,10 +1107,10 @@ class DataSetPlotter(ComponentBase):
     def plot_selected_quantity(self, meas_list=None):
         fig_num_ext = self.plot_settings.fig_num_ext
         if meas_list is None:
-            meas_list = self.selected_measurements
-        if not meas_list:
-            logging.info("No measurements selected")
-            return []
+            selection = self.measurement_selector.get_selection()
+            if selection is None:
+                return None
+            meas_list = selection.sams
 
         sel_quant = self.selected_quantity_value
         values = sel_quant.func(meas_list)
@@ -1171,10 +1176,10 @@ class DataSetPlotter(ComponentBase):
 
     @action("Phase difference", group="Phase plots")
     def plot_meas_phi_diff(self):
-        sam_meas_list0 = self.selected_measurements
-        if not sam_meas_list0:
-            logging.info("No measurements selected")
-            return
+        selection = self.measurement_selector.get_selection()
+        if selection is None:
+            return None
+        sam_meas_list0 = selection.sams
 
         sam_meas_list1 = self.dataset.measurement_selector.get_measurements_from_point(*self.comparison_point)
         sam_meas_list1 = len(sam_meas_list0)*[sam_meas_list1[0]]

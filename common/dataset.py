@@ -177,17 +177,15 @@ class DataSet(ComponentBase):
 
         self.settings : Settings = settings
 
-        self.measurement_selector = MeasurementSelection(self)
+        self.measurement_selector = MeasurementSelection(self, object_name="Measurement selection")
 
         self.freq_axis = None
 
     def __exit__(self, *args):
         self.settings.save_configuration(self)
-        self.settings.save_configuration(self.measurement_selector)
 
     def __enter__(self, *args):
         self.settings.load_configuration(self)
-        self.settings.load_configuration(self.measurement_selector)
         self._set_observers()
         self.measurement_selector.set_observers()
         self._parse_measurements()
@@ -238,9 +236,6 @@ class DataSet(ComponentBase):
     @property
     def mean_time_diff(self):
         return np.mean(self.time_diffs)
-
-    def selected_measurements(self):
-        return self.measurement_selector.selected_measurements
 
     @observe("data_path")
     def _set_path(self, change=None):
@@ -790,11 +785,11 @@ class DataSet(ComponentBase):
         y_fd = self.get_multi_data(meas_, domain=Domain.Frequency)
         return np.angle(y_fd[:, :, 1])
 
-    def absorbance(self, meas_: Measurement):
-        return -to_db(self.power(meas_)) / 20
+    def absorbance(self, meas_: Measurement, ref_meas_=None):
+        return -to_db(self.power(meas_, ref_meas_)) / 20
 
-    def power(self, meas_: Measurement):
-        ref_meas = self.measurement_selector.get_matching_refs(meas_)
+    def power(self, meas_: Measurement, ref_meas_=None):
+        ref_meas = ref_meas_ if ref_meas_ else self.measurement_selector.get_matching_refs(meas_)
         ref_fd = self.get_multi_data(ref_meas, domain=Domain.Frequency)
         sam_fd = self.get_multi_data(meas_, domain=Domain.Frequency)
 
@@ -803,10 +798,13 @@ class DataSet(ComponentBase):
 
         return (power_val_sam / power_val_ref) ** 2
 
-    def power_int(self, meas_: Measurement, freq_range):
+    def power_int(self, meas_: Measurement, ref_meas_=None, freq_range=None):
+        if freq_range is None:
+            self.logger.warning("No frequency range passed, using full range for power integration")
+            freq_range = (0, len(self.freq_axis))
         freq_slice = (freq_range[0] < self.freq_axis) * (self.freq_axis < freq_range[1])
 
-        ref_meas = self.measurement_selector.get_matching_refs(meas_)
+        ref_meas = ref_meas_ if ref_meas_ else self.measurement_selector.get_matching_refs(meas_)
         ref_fd = self.get_multi_data(ref_meas, domain=Domain.Frequency)
         sam_fd = self.get_multi_data(meas_, domain=Domain.Frequency)
 
@@ -815,11 +813,11 @@ class DataSet(ComponentBase):
 
         return power_val_sam / power_val_ref
 
-    def meas_time_delta(self, meas_: Measurement):
+    def meas_time_delta(self, meas_: Measurement, ref_meas_=None):
         meas_list = [meas_] if isinstance(meas_, Measurement) else meas_
 
         get_nearest_ref = self.measurement_selector.get_nearest_ref
-        ref_list = [get_nearest_ref(meas) for meas in meas_list]
+        ref_list = ref_meas_ if ref_meas_ else [get_nearest_ref(meas) for meas in meas_list]
 
         meas_times = [(meas.meas_time - ref_meas.meas_time).total_seconds()
                       for (meas, ref_meas) in zip(meas_list, ref_list)]
@@ -906,34 +904,34 @@ class DataSet(ComponentBase):
 
         return phi
 
-    def amplitude_transmission(self, meas_):
-        ref_meas_ = self.measurement_selector.get_matching_refs(meas_)
+    def amplitude_transmission(self, meas_, ref_meas_=None):
+        if ref_meas_ is None:
+            ref_meas_ = self.measurement_selector.get_matching_refs(meas_)
+
         ref_fd = self.get_multi_data(ref_meas_, Domain.Frequency)
         sam_fd = self.get_multi_data(meas_, Domain.Frequency)
 
-        t = sam_fd[:, :, 1] / ref_fd[:, :, 1]
+        return np.abs(sam_fd[:, :, 1] / ref_fd[:, :, 1])
 
-        return np.abs(t)
-
-    def transmission(self, meas_):
-        t_abs = self.amplitude_transmission(meas_)
-        phase_difference = self.phase_difference(meas_)
+    def transmission(self, meas_, ref_meas_=None):
+        t_abs = self.amplitude_transmission(meas_, ref_meas_)
+        phase_difference = self.phase_difference(meas_, ref_meas_)
 
         t = t_abs * np.exp(1j * phase_difference)
 
         return t
 
-    def time_of_flight(self, meas_):
-        closest_ref = self.measurement_selector.get_matching_refs(meas_)
+    def time_of_flight(self, meas_, ref_meas_=None):
+        closest_ref = ref_meas_ if ref_meas_ else self.measurement_selector.get_matching_refs(meas_)
 
         t_zero_ref = self.get_zero_crossing(closest_ref)
         t_zero_sam = self.get_zero_crossing(meas_)
 
         return  t_zero_sam - t_zero_ref
 
-    def refractive_index_estimate(self, meas_, d=None):
-        ref_list = self.measurement_selector.get_matching_refs(meas_)
-        dt = self.time_of_flight(meas_)
+    def refractive_index_estimate(self, meas_, ref_meas_=None, d=None):
+        ref_list = ref_meas_ if ref_meas_ else self.measurement_selector.get_matching_refs(meas_)
+        dt = self.time_of_flight(meas_, ref_list)
 
         if d is None:
             d = self.settings.eval_opt.d.magnitude
@@ -943,8 +941,8 @@ class DataSet(ComponentBase):
         w = np.where(w == 0, w[1] if len(w) > 1 else 1e-12, w)
 
         with self.settings.pp_opt.override(window_enabled=True, win_width=10):
-            t_amp = self.amplitude_transmission(meas_)
-            phi_diff = np.abs(self.phase_difference(meas_))
+            t_amp = self.amplitude_transmission(meas_, ref_list)
+            phi_diff = np.abs(self.phase_difference(meas_, ref_list))
 
         n_real = 1.0 + (c_thz * phi_diff / (w*d))
         t_interface_amp = np.abs(4*n_real/(n_real+1)**2)
@@ -1030,8 +1028,11 @@ class DataSet(ComponentBase):
 
     @action("Export measurement data", group=data_export_grp)
     def export_measurement_data(self):
-        selected_meas = self.selected_measurements
-        ref_meas = self.measurement_selector.get_matching_refs(selected_meas)
+        selection = self.measurement_selector.get_selection()
+        if selection is None:
+            return
+        selected_meas, ref_meas = selection.sams, selection.refs
+
         data_arrays = {
             "ref_td": self.get_multi_data(ref_meas, domain=Domain.Time),
             "ref_fd": self.get_multi_data(ref_meas, domain=Domain.Frequency),

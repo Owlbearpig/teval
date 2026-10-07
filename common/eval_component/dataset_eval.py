@@ -22,6 +22,7 @@ from common.eval_component.transfer_functions import (t_tmm_model_1layer, model_
 from common.eval_component.shgo_settings import MinimizerOptions
 from common.eval_component.t_fit_global import spline_transmission_optimization
 from common.eval_component.single_opt import shgo_transmission_optimization
+from common.measurement_selection import SelectionQueue
 from common.save import ResultSaver
 from common.eval_component.eval_result import EvalResult
 from concurrent.futures import ThreadPoolExecutor
@@ -170,12 +171,11 @@ class DatasetEval(ComponentBase):
         return meas_quantity
 
     @property
-    def selected_measurements(self):
-        return self.dataset.selected_measurements
-
-    @property
     def y_meas_dict(self):
-        meas_list = self.selected_measurements
+        selection = self.dataset.measurement_selector.get_selection()
+        if selection is None:
+            return None
+        meas_list = selection.sams
         y_meas = self.meas_quantity.value.func(meas_list)
 
         y_sub = y_meas[:, self.f_idx]
@@ -208,17 +208,18 @@ class DatasetEval(ComponentBase):
         mod_func = t_mod_func if self.convert_sigma_to_t else reg_mod
 
         y_dict = self.y_meas_dict
-        opt_func_dict = {
+        return {
             meas_id: (lambda params, m_id=meas_id: np.sum(cost_func(y_dict[m_id], mod_func(*params))))
             for meas_id in y_dict
         }
 
-        return opt_func_dict
-
     @property
     def _opt_conf(self):
         bounds, bounds_units = self.get_bounds()
-        conf_dict = {"measurements": {meas.identifier: meas for meas in self.selected_measurements},
+        selection = self.dataset.measurement_selector.get_selection()
+        if selection is None:
+            return None
+        conf_dict = {"measurements": {meas.identifier: meas for meas in selection.sams},
                      "freq_axis": self.freq_axis,
                      "meas_quantity": self.meas_quantity,
                      "y_meas_dict": self.y_meas_dict,
@@ -272,6 +273,25 @@ class DatasetEval(ComponentBase):
         res_saver.registerObjectAttribute(self.current_result, "result_type")
 
         return res_saver
+
+    @action("Fit transmission model", group=t_fit_grp_name)
+    def fit_unknown_layer(self):
+        selection = self.dataset.measurement_selector.get_selection()
+        if selection is None:
+            return
+        self._evaluate_queue(no_queue_selection=selection)
+
+    @action("Evaluate queue", group=t_fit_grp_name,
+            enable_checker=lambda self: self.dataset.measurement_selector.selection_queue is not None)
+    def evaluate_queue(self):
+        queue = self.dataset.measurement_selector.selection_queue
+        if queue is None:
+            logging.warning("Queue is not enabled")
+            return
+        if len(queue) == 0:
+            logging.warning("Queue is empty")
+            return
+        self._evaluate_queue()
 
     def update_progress(self, progress_value):
         self.set_trait("optimization_progress", progress_value)
@@ -390,15 +410,16 @@ class DatasetEval(ComponentBase):
             executor.submit(bg_worker, meas_key)
         executor.shutdown(wait=False)
 
-    @action("Fit transmission model", group=t_fit_grp_name)
-    def fit_unknown_layer(self):
-        if self.dataset.measurement_selector.selected_sam_cnt == "0":
-            logging.warning("No measurements selected")
-            return
+    def _evaluate_queue(self, no_queue_selection=None):
         if self._active_eval is not None:
             logging.warning("Optimization is already running")
             return
 
+        if no_queue_selection is not None:
+            queue = SelectionQueue()
+            queue.append(no_queue_selection)
+        else:
+            queue = self.dataset.measurement_selector.selection_queue
         cancel_event = threading.Event()
         self._cancel_event = cancel_event
 
@@ -410,10 +431,17 @@ class DatasetEval(ComponentBase):
 
         def bg_worker():
             try:
-                qs_eval_data = evaluator.q_space_eval_mp(progress_carrier=progress_carrier,
-                                                         cancel_event=cancel_event)
-                if not cancel_event.is_set():
-                    self.current_result.result_carrier.received_result.emit(qs_eval_data)
+                next_selection = queue.pop_next()
+                selection_idx = 0
+                while next_selection is not None and not cancel_event.is_set():
+                    selection_idx += 1
+                    logging.info(f"Evaluating selection {selection_idx} ({len(next_selection.sams)} measurement(s))")
+                    qs_eval_data = evaluator.q_space_eval_mp(next_selection,
+                                                             progress_carrier=progress_carrier,
+                                                             cancel_event=cancel_event)
+                    if not cancel_event.is_set():
+                        self.current_result.result_carrier.received_result.emit(qs_eval_data)
+                    next_selection = queue.pop_next()
             except OptimizationCancelled:
                 logging.info("Optimization cancelled")
             except Exception:

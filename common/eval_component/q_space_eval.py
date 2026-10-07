@@ -22,7 +22,7 @@ from common.eval_component.t_fit_global import spline_transmission_optimization
 
 
 class OptimizationCancelled(Exception):
-    """Raised inside the evaluation thread when the user cancels the optimization."""
+    """Raised inside the evaluation thread when the optimization is canceled."""
 
 
 def kill_process_pool(executor):
@@ -62,10 +62,6 @@ class QSpaceEval:
         self.opt_state["q_min"] = np.inf
 
     @property
-    def selected_measurements(self):
-        return self.dataset_eval.dataset.measurement_selector.selected_measurements
-
-    @property
     def freq_axis(self):
         return self.dataset_eval.freq_axis
 
@@ -73,48 +69,35 @@ class QSpaceEval:
     def freq_idx(self):
         return self.dataset_eval.f_idx
 
-    @property
-    def ref_fd_dict(self):
-        ref_list = self.dataset_eval.dataset.measurement_selector.get_matching_refs(self.selected_measurements)
-        ref_fd = self.dataset_eval.dataset.get_multi_data(ref_list)
-
-        ref_fd = ref_fd[:, self.freq_idx]
-
+    def ref_fd_dict(self, selection):
+        ref_list = list(selection.refs)
+        ref_fd = self.dataset_eval.dataset.get_multi_data(ref_list)[:, self.freq_idx]
         return format_meas_dict(ref_list, ref_fd, self.dataset_eval.only_eval_avg)
 
-    @property
-    def t_exp_dict(self):
-        meas_list = self.selected_measurements
-
-        t_exp = self.dataset_eval.dataset.transmission(meas_list)
-
+    def t_exp_dict(self, selection):
+        meas_list = list(selection.sams)
+        t_exp = self.dataset_eval.dataset.transmission(meas_list, list(selection.refs))
         f_axis_tile = np.tile(self.freq_axis, (len(meas_list), 1))
-        arrays = (f_axis_tile, t_exp[:, self.freq_idx], np.zeros_like(f_axis_tile))
-        t_exp_stacked = np.stack(arrays, axis=2)
-
+        t_exp_stacked = np.stack((f_axis_tile, t_exp[:, self.freq_idx], np.zeros_like(f_axis_tile)), axis=2)
         return format_meas_dict(meas_list, t_exp_stacked, self.dataset_eval.only_eval_avg)
 
-    @property
-    def n_guess(self):
-        meas_list = self.selected_measurements
+    def n_guess(self, selection):
+        meas_list = list(selection.sams)
         d_init = np.mean(self.dataset_eval.d_opt_axis_bounds.magnitude)
-        ref_idx = self.dataset_eval.dataset.refractive_index_estimate(meas_list, d_init)
-
+        ref_idx = self.dataset_eval.dataset.refractive_index_estimate(meas_list, ref_meas_=list(selection.refs),
+                                                                      d=d_init)
         f_axis_tile = np.tile(self.freq_axis, (len(meas_list), 1))
-        arrays = (f_axis_tile, ref_idx[:, self.freq_idx], np.zeros_like(f_axis_tile))
-        ref_idx_stacked = np.stack(arrays, axis=2)
-
+        ref_idx_stacked = np.stack((f_axis_tile, ref_idx[:, self.freq_idx], np.zeros_like(f_axis_tile)), axis=2)
         return format_meas_dict(meas_list, ref_idx_stacked, self.dataset_eval.only_eval_avg)
 
-    def calc_uncertainties(self, opt_res: SingleResultData, meas_list):
-        meas_list = [meas for meas in meas_list if meas != "Average"]
-        ref_list = self.dataset_eval.dataset.measurement_selector.get_matching_refs(meas_list)
+    def calc_uncertainties(self, opt_res: SingleResultData, selection):
+        meas_list, ref_list = list(selection.sams), list(selection.refs)
 
         sam_fd = self.dataset_eval.dataset.get_multi_data(meas_list, Domain.Frequency)
         ref_fd = self.dataset_eval.dataset.get_multi_data(ref_list, Domain.Frequency)
 
-        t_exp_amp = self.dataset_eval.dataset.amplitude_transmission(meas_list)
-        t_exp_phi = self.dataset_eval.dataset.phase_difference(meas_list)
+        t_exp_amp = self.dataset_eval.dataset.amplitude_transmission(meas_list, ref_list)
+        t_exp_phi = self.dataset_eval.dataset.phase_difference(meas_list, ref_list)
 
         freq_tile = np.tile(self.freq_axis, (len(meas_list), 1))
         t_exp_amp = np.stack((freq_tile, t_exp_amp[:, self.freq_idx], np.zeros_like(freq_tile)), axis=2)
@@ -214,7 +197,7 @@ class QSpaceEval:
 
         return q_val
 
-    def q_space_eval_mp(self, progress_carrier=None, cancel_event=None) -> EvalResultData:
+    def q_space_eval_mp(self, selection, progress_carrier=None, cancel_event=None) -> EvalResultData:
         t_model_kwargs = self.dataset_eval.get_t_model_kwargs()
 
         iteration_count = self.dataset_eval.iteration_count
@@ -222,11 +205,12 @@ class QSpaceEval:
 
         sas = (self.settings.eval_opt.smoothing_avg_n, self.settings.eval_opt.smoothing_avg_iters)
 
-        ref_fd_dict = self.ref_fd_dict
-        ref_sam_map = self.dataset_eval.dataset.measurement_selector.sam_ref_meas_map
-        sel_meas_list = self.selected_measurements
-        t_exp_dict = self.t_exp_dict
-        n_guess = self.n_guess
+        ref_fd_dict = self.ref_fd_dict(selection)
+        ref_sam_map = selection.ref_map
+        sel_meas_list = list(selection.sams)
+        t_exp_dict = self.t_exp_dict(selection)
+        n_guess = self.n_guess(selection)
+
         common_opt_params = {
             "freq_axis": self.freq_axis,
             "transmission_model": self.transmission_model.value,
@@ -277,14 +261,13 @@ class QSpaceEval:
                 raise OptimizationCancelled()
 
         def get_result(future):
-            # Poll instead of blocking in future.result(), so a cancel request is noticed quickly
             while not future.done():
                 check_cancel()
                 futures_wait([future], timeout=0.2)
             try:
                 return future.result()
             except BrokenProcessPool:
-                check_cancel()  # workers were killed because of a cancel -> not a real error
+                check_cancel()
                 raise
 
         def process_tasks(tasks, opt_config, iteration_progress=None):
@@ -364,7 +347,7 @@ class QSpaceEval:
             for opt_res in opt_results:
                 opt_res.measurement = meas.filepath.name if isinstance(meas, Measurement) else str(meas)
                 if meas == "Average":
-                    self.calc_uncertainties(opt_res, sel_meas_list)
+                    self.calc_uncertainties(opt_res, selection)
 
                 t_model_kwargs["shift"] = opt_res.shift.magnitude
                 t_model_kwargs["d"] = opt_res.d.magnitude

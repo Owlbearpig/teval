@@ -52,6 +52,7 @@ def action(name=None, help=None, check_init=False, **kwargs):
             else:
                 return method(self, *args, **kwargs_fn)
 
+        wrapper.enable_checker = kwargs.get("enable_checker", None)
         wrapper._isAction = True
         wrapper.metadata = kwargs
         wrapper.help = help
@@ -113,7 +114,14 @@ class ComponentBase(HasTraits):
 
     @property
     def actions(self):
-        return self.__actions
+        action_list = []
+        for name, act in self.__actions:
+            enable_checker = getattr(act, "enable_checker", None)
+            if enable_checker is None:
+                action_list.append((name, act))
+            elif bool(enable_checker(self)):
+                action_list.append((name, act))
+        return action_list
 
     @property
     def attributes(self):

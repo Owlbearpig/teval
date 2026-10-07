@@ -1,15 +1,16 @@
+from __future__ import annotations
+from dataclasses import dataclass
+import threading
 import logging
-
 import numpy as np
-from common.components import ComponentBase
+from common.components import ComponentBase, action
 from common.settings import Settings
-from common.traits import MultiPathSelection, ValueRange, MultiPathClass
+from common.traits import MultiPathSelection, ValueRange, MultiPathClass, StrListSelection, StrList
 from common.units import Q_
 from common.default_appsettings import Dist
-from traitlets import Enum as TEnum, Unicode, Bool, Int
+from traitlets import Enum as TEnum, Unicode, Bool, Int, Instance, observe
 from enum import Enum
 from common.measurements import timestamp2id, Measurement
-
 from types import TracebackType
 
 
@@ -52,6 +53,90 @@ class ReferenceSelection(Enum):
     closest_distance = "Closest distance"
     fix_ref = "Use fixed index reference"
 
+
+@dataclass(frozen=True)
+class Selection:
+    sams: tuple[Measurement, ...]
+    refs: tuple[Measurement, ...]
+
+    @property
+    def ref_map(self):
+        d = dict(zip(self.sams, self.refs))
+        return lambda meas: d[meas] if isinstance(meas, Measurement) else meas
+
+    @property
+    def label(self) -> str:
+        meas = self.sams or self.refs
+        if not meas:
+            return "empty"
+        extra = f" (+{len(meas) - 1})" if len(meas) > 1 else ""
+        return f"{meas[0].filepath.name}{extra}"
+
+    def info(self) -> str:
+        lines = [f"Samples: {len(self.sams)}",
+                 f"References: {len(self.refs)} ({len(set(self.refs))} unique)"]
+        if self.sams:
+            lines.append(f"First sample: {self.sams[0].filepath.name}")
+            if len(self.sams) > 1:
+                lines.append(f"Last sample: {self.sams[-1].filepath.name}")
+        return "\n".join(lines)
+
+    __repr__ = label.fget
+
+
+class SelectionQueue(ComponentBase):
+    queued_selections = StrListSelection(group="Queued selections", read_only=True, priority=1, fullwidth=True)
+    selection_info = Unicode("", read_only=True).tag(group="Selection info", en_save=False,
+                                                     priority=2, fullwidth=True, disable_label=True)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._queue: dict[str, Selection] = {}
+        self._counter = 0
+        self._lock = threading.RLock()
+        self.set_trait("queued_selections", StrList())
+        self.queued_selections.observe(self.on_list_selection, "selected_item")
+
+    def _update_listing(self):
+        self.queued_selections.items = list(self._queue)
+
+    def _refresh_info(self):
+        sel = self._queue.get(self.queued_selections.selected_item)
+        self.set_trait("selection_info", sel.info() if sel else "")
+
+    def on_list_selection(self, change):
+        with self._lock:
+            self._refresh_info()
+
+    def get_selection(self, label):
+        with self._lock:
+            return self._queue.get(label)
+
+    def append(self, selection):
+        with self._lock:
+            self._counter += 1
+            self._queue[f"#{self._counter} {selection.label}"] = selection
+            self._update_listing()
+
+    def pop_next(self):
+        with self._lock:
+            if not self._queue:
+                return None
+            selection = self._queue.pop(next(iter(self._queue)))
+            self._update_listing()
+            self._refresh_info()
+            return selection
+
+    def clear(self):
+        with self._lock:
+            self._queue.clear()
+            self._update_listing()
+            self._refresh_info()
+
+    def __len__(self):
+        return len(self._queue)
+
+
 class MeasurementSelection(ComponentBase):
     measurement_selection_grp = "Measurement selection"
     selection_criterion = TEnum(SelectionCriterionEnum,
@@ -78,13 +163,15 @@ class MeasurementSelection(ComponentBase):
     direct_match = Bool(False, read_only=True,
                         help="Appends or slices reference file selection if the count is "
                              "different from the measurement file selection"
-                        ).tag(name="Equal selection count", priority=2000, group=reference_matching_grp)
+                        ).tag(name="Direct file selection match", priority=2000, group=reference_matching_grp)
+
+    selection_queue = Instance(SelectionQueue, allow_none=True)
 
     reference_paths = MultiPathSelection().tag(fullwidth=False, group="Direct reference file selection", combine=True)
     sample_paths = MultiPathSelection().tag(fullwidth=False, group="Direct sample file selection", combine=True)
 
 
-    def __init__(self, dataset, **kwargs):
+    def __init__(self, dataset, en_queue=True, **kwargs):
         super().__init__(**kwargs)
 
         self.dataset = dataset
@@ -94,6 +181,9 @@ class MeasurementSelection(ComponentBase):
 
         self.reference_paths = MultiPathClass(root_path=self.dataset.data_path, shown_filenames=ref_filenames)
         self.sample_paths = MultiPathClass(root_path=self.dataset.data_path, shown_filenames=sam_filenames)
+
+        if en_queue:
+            self.selection_queue = SelectionQueue()
 
     def set_observers(self):
         self.dataset.observe(self.update_fileselection, "measurements")
@@ -144,6 +234,41 @@ class MeasurementSelection(ComponentBase):
 
         dict_map = {meas: ref_list[i] for i, meas in enumerate(meas_list)}
         return lambda meas: dict_map[meas] if isinstance(meas, Measurement) else meas
+
+    @action("Add selection to queue", enable_checker=lambda inst: inst.selection_queue is not None, priority=1)
+    def queue_selection(self):
+        selection = self.get_selection()
+        if selection is None:
+            self.dataset.logger.warning("Nothing to queue")
+            return
+        self.selection_queue.append(selection)
+        sam_s = "" if len(selection.sams) <= 1 else "s"
+        sel_s = "" if len(self.selection_queue) <= 1 else "s"
+        msg = f"Queued {len(selection.sams)} measurement{sam_s}, {len(self.selection_queue)} selection{sel_s} in queue"
+        self.dataset.logger.info(msg)
+
+    @action("Clear queue", enable_checker=lambda inst: inst.selection_queue is not None, priority=2)
+    def clear_queue(self):
+        queue_len = len(self.selection_queue)
+        self.selection_queue.clear()
+        self.dataset.logger.info(f"Cleared {queue_len} {"selection" + "s" * (queue_len - 1)} from queue")
+
+    def get_selection(self, must_match=True):
+        sams = self.get_selected_measurements()
+        if not sams:
+            self.dataset.logger.warning("No measurements selected")
+            return None
+        refs = self.get_matching_refs(sams)
+        selection = Selection(tuple(sams), tuple(refs))
+
+        if not must_match:
+            return selection
+
+        if len(refs) != len(sams):
+            self.dataset.logger.warning("Could not resolve a reference for every sample")
+            return None
+        else:
+            return selection
 
     def update_sel_cnt_info(self, change):
         change_name = change["name"]

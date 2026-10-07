@@ -446,6 +446,8 @@ def create_list_view(component, name, trait):
         list_view.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
     if "max_width" in trait.metadata:
         list_view.setMaximumWidth(trait.metadata["max_width"])
+    if "min_width" in trait.metadata:
+        list_view.setMinimumWidth(trait.metadata["min_width"])
 
     layout.addWidget(list_view)
     str_list = getattr(component, name)
@@ -589,7 +591,7 @@ def generate_component_ui(name, component):
             field_widget = create_tree_path_selector(component, name, prettyName, trait)
 
         if field_widget:
-            if isinstance(trait, (MultiPathSelection, StrListSelection)):
+            if isinstance(trait, (MultiPathSelection, StrListSelection)) or trait.metadata.get("disable_label", False):
                 label_widget = None
                 layout.addRow(field_widget)
             else:
