@@ -307,7 +307,7 @@ class QuantityEnum(Enum):
     Power = QuantityFunc("Power", domain=Domain.Frequency)
     Absorbance = QuantityFunc("Absorbance", domain=Domain.Frequency, unit="dB")
     Phase = QuantityFunc("Phase", domain=Domain.Frequency, unit="rad")
-    MeasTimeDeltaRef2Sam = QuantityFunc("Time delta Ref. to Sam.", domain=Domain.Time)
+    MeasTimeDeltaRef2Sam = QuantityFunc("Time delta Ref. to Sam.", unit="s", domain=Domain.Time)
     RefAmp = QuantityFunc("Ref. Amp", domain=Domain.Frequency)
     RefArgmax = QuantityFunc("Ref. Argmax", domain=Domain.Time)
     RefPhase = QuantityFunc("Ref. Phase", domain=Domain.Frequency, unit="rad")
@@ -434,6 +434,7 @@ class PlotOpt(ComponentBase):
     remove_t_offset = Bool(False).tag(name="Start t-axis at 0 ps")
     fig_num_ext = Unicode("").tag(name="Figure number extension")
     plot_zero_crossing = Bool(False).tag(name="Plot zero crossing")
+    add_mean_to_quant_plot = Bool(True).tag(name="Add mean value to quantity plot")
     auto_show = Bool(True).tag(name="Automatically show plots")
 
     climate_group = "Stability and climate"

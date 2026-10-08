@@ -24,8 +24,13 @@ import re
 import pandas as pd
 from matplotlib.backend_bases import MouseButton
 from PySide6.QtCore import QThread, Signal
+from enum import Enum
 
 action = partial(action, check_init=True, rc_params=mpl_style_params)
+
+class PlotType(Enum):
+    plot = 0
+    scatter = 1
 
 class GridWorker(QThread):
     progress_changed = Signal(float)
@@ -858,6 +863,17 @@ class DataSetPlotter(ComponentBase):
 
         return ax0, ax1
 
+    def plot(self, plot_data, plot_type=PlotType.plot, ax=None, is_avg=False, **kwargs):
+        if ax is None:
+            ax = plt
+        x, y, dy = plot_data[:, 0], plot_data[:, 1], plot_data[:, 2]
+        if plot_type == PlotType.plot:
+            ax.plot(x, y, **kwargs)
+        else:
+            ax.scatter(x, y, **kwargs)
+        if is_avg:
+            ax.fill_between(x, y - dy, y + dy, alpha=0.2)
+
     @action("Reference measurement", group="Plots")
     def plot_ref(self, ref_list=None):
         if ref_list is None:
@@ -895,35 +911,16 @@ class DataSetPlotter(ComponentBase):
         ax0, ax1 = self.paint_fd_plot()
 
         for ref_meas, y_fd_amp_db in plot_data_fd_amp.items():
+            is_avg_meas = not isinstance(ref_meas, Measurement)
             y_td = plot_data_td[ref_meas]
             y_fd_phi = plot_data_fd_phi[ref_meas]
-            label = f"Reference ({getattr(ref_meas, 'meas_time', 'Average')})"
+            label = "Reference (Average)" if is_avg_meas else f"Reference ({getattr(ref_meas, 'meas_time')})"
 
-            if isinstance(ref_meas, Measurement):
-                ax0.plot(y_fd_amp_db[:, 0], y_fd_amp_db[:, 1], label=label)
-                ax1.plot(y_fd_amp_db[:, 0], y_fd_phi[:, 1], label=label)
-            else:
-                ax0.plot(y_fd_amp_db[:, 0], y_fd_amp_db[:, 1], label=label)
-                ax0.fill_between(y_fd_amp_db[:, 0],
-                                 y_fd_amp_db[:, 1] - y_fd_amp_db[:, 2],
-                                 y_fd_amp_db[:, 1] + y_fd_amp_db[:, 2],
-                                 alpha=0.2)
-
-                ax1.plot(y_fd_amp_db[:, 0], y_fd_phi[:, 1], label=label)
-                ax1.fill_between(y_fd_amp_db[:, 0],
-                                 y_fd_phi[:, 1] - y_fd_phi[:, 2],
-                                 y_fd_phi[:, 1] + y_fd_phi[:, 2],
-                                 alpha=0.2)
+            self.plot(y_fd_amp_db, ax=ax0, is_avg=is_avg_meas, label=label)
+            self.plot(y_fd_phi, ax=ax1, is_avg=is_avg_meas, label=label)
 
             plt.figure(self.td_fig_num)
-            if isinstance(ref_meas, Measurement):
-                plt.plot(y_td[:, 0], y_td[:, 1], label=label)
-            else:
-                plt.plot(y_td[:, 0], y_td[:, 1], label=label)
-                plt.fill_between(y_td[:, 0],
-                                 y_td[:, 1] - y_td[:, 2],
-                                 y_td[:, 1] + y_td[:, 2],
-                                 alpha=0.2)
+            self.plot(y_td, ax=None, is_avg=is_avg_meas, label=label)
 
             if self.plot_settings.plot_zero_crossing:
                 plt.scatter(zero_crossing, 0, color="red")
@@ -990,25 +987,26 @@ class DataSetPlotter(ComponentBase):
         td_scale = self.plot_settings.td_scale
         ax0, ax1 = self.paint_fd_plot()
         for sam_meas, y_fd_db in plot_data_fd_amp.items():
+            is_avg_meas = not isinstance(sam_meas, Measurement)
             y_td = plot_data_td[sam_meas]
             y_fd_phi = plot_data_fd_phi[sam_meas]
 
             plt.figure(self.td_fig_num)
             label = self.get_legend_label(sam_meas)
-
             if not label:
-                if isinstance(sam_meas, Measurement):
+                if is_avg_meas:
+                    label = "Sample (Average)"
+                else:
                     point = sam_meas.position
                     label = f"(x,y)=({point[0]}, {point[1]})"
-                else:
-                    label = "Average"
             td_label = label
             if not np.isclose(td_scale, 1):
                 td_label += f"\n(Amplitude x {td_scale})"
-            plt.plot(y_td[:, 0], td_scale * y_td[:, 1], label=td_label)
 
-            ax0.plot(y_fd_db[:, 0], y_fd_db[:, 1], label=label)
-            ax1.plot(y_fd_phi[:, 0], y_fd_phi[:, 1], label=label)
+            y_td[:, 1] = td_scale * y_td[:, 1]
+            self.plot(y_td, is_avg=is_avg_meas, label=td_label)
+            self.plot(y_fd_db, ax=ax0, is_avg=is_avg_meas, label=label)
+            self.plot(y_fd_phi, ax=ax1, is_avg=is_avg_meas, label=label)
 
         plt.figure(self.td_fig_num)
         plt.draw()
@@ -1049,21 +1047,27 @@ class DataSetPlotter(ComponentBase):
         fig_num_ext = self.plot_settings.fig_num_ext
         for meas, phi_1meas in plot_data_phi.items():
             phi_cor_1meas = plot_data_phi_corrected[meas]
+            is_avg_meas = not isinstance(meas, Measurement)
             label = self.get_legend_label(meas)
             if not label:
-                label = str(meas.filepath.name) if isinstance(meas, Measurement) else meas
+                label = meas if is_avg_meas else str(meas.filepath.name)
 
             plt.figure("Phase correction comparison" + fig_num_ext)
-            plt.plot(self.freq_axis, phi_1meas[:, 1], label=label + " (Original)", ls="dashed")
-            plt.plot(self.freq_axis, phi_cor_1meas[:, 1], label=label + " (Corrected)")
+            plt.title("Phase correction comparison")
+            self.plot(phi_1meas, ax=None, is_avg=is_avg_meas, label=label + " (Original)", ls="dashed")
+            self.plot(phi_cor_1meas, ax=None, is_avg=is_avg_meas, label=label + " (Corrected)")
 
             plt.figure("Phase" + fig_num_ext)
-            plt.plot(self.freq_axis, phi_cor_1meas[:, 1], label=label)
+            plt.title("Phase (angle)")
+            self.plot(phi_cor_1meas, ax=None, is_avg=is_avg_meas, label=label)
 
             plt.figure("Phase slope" + fig_num_ext)
+            plt.title("Phase slope")
             df = np.diff(self.freq_axis)
             dphi = np.diff(phi_cor_1meas[:, 1])
-            plt.plot(self.freq_axis[:-1], dphi / df, label=label)
+            dphi_uncert = np.sqrt(phi_cor_1meas[1:, 2]**2 + phi_cor_1meas[:-1, 2]**2)
+            slope_data = np.array([self.freq_axis[:-1], dphi / df, dphi_uncert]).T
+            self.plot(slope_data, ax=None, is_avg=is_avg_meas, label=label)
 
         plt.figure("Phase correction comparison" + fig_num_ext)
         plt.xlabel("Frequency (THz)")
@@ -1087,13 +1091,25 @@ class DataSetPlotter(ComponentBase):
 
         sel_quant = self.selected_quantity_value
         values = sel_quant.func(meas_list)
+        mean_value = np.mean(values)
+        std_value = np.std(values)
+        unit = sel_quant.unit
 
         fignum = str(sel_quant) + fig_num_ext
-        y_label = f"{sel_quant} ({sel_quant.unit})" if sel_quant.unit else f"{sel_quant}"
+        y_label = f"{sel_quant} ({unit})" if sel_quant.unit else f"{sel_quant}"
 
         fig = plt.figure(fignum)
         pos_labels = [f"({m.position[0]:.1f}, {m.position[1]:.1f})" for m in meas_list]
-        plt.scatter(pos_labels, values)
+        if len(set(pos_labels)) == len(meas_list):
+             x_labels = pos_labels
+        else:
+            x_labels = [str(m.meas_time)[10:-7] for m in meas_list]
+
+        plt.scatter(x_labels, values)
+        if self.settings.plot_opt.add_mean_to_quant_plot:
+            plt.axhline(mean_value, color="r", linestyle="--", linewidth=1.5,
+                        label=f"Mean value [{np.round(mean_value,3)} ({unit})]")
+            plt.axhspan(mean_value - std_value, mean_value + std_value, color="red", alpha=0.2)
         plt.xticks(rotation=45, ha='right')
         plt.ylabel(y_label)
         fig.set_tight_layout(True)
@@ -1135,17 +1151,18 @@ class DataSetPlotter(ComponentBase):
         plot_value_dict = format_meas_dict(meas_list, values_stacked, self.only_plot_avg)
 
         for meas, y_values in plot_value_dict.items():
+            is_avg_meas = not isinstance(meas, Measurement)
             label = self.get_legend_label(meas)
             if not label:
-                if isinstance(meas, Measurement):
+                if is_avg_meas:
+                    label = "Average"
+                else:
                     point = meas.position
                     label = f"(x,y)=({point[0]}, {point[1]})"
-                else:
-                    label = "Average"
 
             if not is_complex:
                 plt.figure(fignum)
-                plt.plot(self.freq_axis, y_values[:, 1], label=label)
+                self.plot(y_values, is_avg=is_avg_meas, label=label)
             else:
                 if not plt.fignum_exists(fignum):
                     fig, (ax0, ax1) = plt.subplots(2, 1, num=fignum,
@@ -1153,8 +1170,9 @@ class DataSetPlotter(ComponentBase):
                 else:
                     fig = plt.figure(fignum)
                     ax0, ax1 = fig.get_axes()
-                ax0.plot(self.freq_axis, y_values[:, 1].real, label=label)
-                ax1.plot(self.freq_axis, y_values[:, 1].imag, label=label)
+                self.plot(y_values.real, ax=ax0, is_avg=is_avg_meas, label=label)
+                y_values_imag = np.column_stack((y_values[:, 0].real, y_values[:, 1:3].imag))
+                self.plot(y_values_imag, ax=ax1, is_avg=is_avg_meas, label=label)
 
         if not is_complex:
             fig = plt.figure(fignum)
@@ -1196,11 +1214,12 @@ class DataSetPlotter(ComponentBase):
         plot_meas_dict = format_meas_dict(sam_meas_list0, phi_diff_stacked, self.only_plot_avg)
 
         for meas, phi_diff_1meas in plot_meas_dict.items():
+            is_avg_meas = not isinstance(meas, Measurement)
             label = self.get_legend_label(meas)
             if not label:
-                label = str(meas.filepath.name) if isinstance(meas, Measurement) else meas
+                label = meas if is_avg_meas else str(meas.filepath.name)
             plt.figure("Phi difference")
-            plt.plot(self.freq_axis, phi_diff_1meas[:, 1], label=label)
+            self.plot(phi_diff_1meas, is_avg=is_avg_meas, label=label)
 
         plt.figure("Phi difference")
         plt.xlabel("Frequency (THz)")

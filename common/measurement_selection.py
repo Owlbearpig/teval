@@ -251,7 +251,7 @@ class MeasurementSelection(ComponentBase):
     def clear_queue(self):
         queue_len = len(self.selection_queue)
         self.selection_queue.clear()
-        self.dataset.logger.info(f"Cleared {queue_len} {"selection" + "s" * (queue_len - 1)} from queue")
+        self.dataset.logger.info(f"Cleared {queue_len} {'selection' + 's' * (queue_len - 1)} from queue")
 
     def get_selection(self, must_match=True):
         sams = self.get_selected_measurements()
@@ -505,8 +505,6 @@ class MeasurementSelection(ComponentBase):
                 ref_list.extend((ml_len - rl_len) * [ref_list[-1]])
             elif rl_len > ml_len:
                 ref_list = ref_list[:ml_len]
-
-        ref_list = [self.get_nearest_ref(meas, meas_set=ref_list) for meas in meas_list]
 
         return ref_list
 

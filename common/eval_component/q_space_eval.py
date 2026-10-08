@@ -1,10 +1,8 @@
 import logging
 import traceback
-import matplotlib.pyplot as plt
 import numpy as np
-import scipy
-from common.dataset import format_meas_dict, DataSet
-from common.default_appsettings import SimRISelection, AppSettings, Domain, QSpaceQuantity
+from common.dataset import format_meas_dict
+from common.default_appsettings import SimRISelection, Domain, QSpaceQuantity
 from common.functions import f_axis_idx_map, moving_average, do_ifft, to_db, avg_data_array
 from common.eval_component.quantity_set import QuantityDataSet
 from common.eval_component.eval_result import EvalResultData, SingleResultData
@@ -13,7 +11,6 @@ from common.units import Q_
 from common.measurements import Measurement
 from common.consts import c_thz
 from scipy.signal import iirnotch, filtfilt, detrend
-import concurrent
 from concurrent.futures import ProcessPoolExecutor, wait as futures_wait
 from concurrent.futures.process import BrokenProcessPool
 from functools import partial
