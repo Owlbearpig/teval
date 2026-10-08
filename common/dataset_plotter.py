@@ -871,7 +871,7 @@ class DataSetPlotter(ComponentBase):
             ax.plot(x, y, **kwargs)
         else:
             ax.scatter(x, y, **kwargs)
-        if is_avg:
+        if is_avg and self.settings.plot_opt.plot_standard_deviation:
             ax.fill_between(x, y - dy, y + dy, alpha=0.2)
 
     @action("Reference measurement", group="Plots")

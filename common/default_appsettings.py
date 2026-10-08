@@ -436,6 +436,7 @@ class PlotOpt(ComponentBase):
     plot_zero_crossing = Bool(False).tag(name="Plot zero crossing")
     add_mean_to_quant_plot = Bool(True).tag(name="Add mean value to quantity plot")
     auto_show = Bool(True).tag(name="Automatically show plots")
+    plot_standard_deviation = Bool(True).tag(name="Plot standard deviation")
 
     climate_group = "Stability and climate"
     add_climate_plot = Bool(False, group=climate_group).tag(name="Add climate values to stability plot")
