@@ -42,11 +42,12 @@ class EvalResultData:
 class ResultSignal(QObject):
     received_result = Signal(EvalResultData)
     result_ready = Signal(object)
+    save_selected = Signal(object, object)
 
 class EvalResult(ComponentBase):
     quantity_dict = QuantityDict().tag(name="Quantity plot")
 
-    transmission_res_grp_name = "Transmission result"
+    transmission_res_grp_name = "Transmission fit result"
     measurement = Unicode("", read_only=True,
                           group=transmission_res_grp_name).tag(priority=0, name="Measurement")
     result_type = Unicode("", read_only=True,
@@ -93,6 +94,16 @@ class EvalResult(ComponentBase):
         self.set_trait("shifts", StrList())
 
         self.set_observers()
+
+    @property
+    def _ui_control_widget(self):
+        return getattr(self, "_ui_widget_internal", None)
+
+    @_ui_control_widget.setter
+    def _ui_control_widget(self, value):
+        self._ui_widget_internal = value
+        if value:
+            self.toggle_traits([], group_filter=self.reg_result_grp_name)
 
     def select_results(self, meas=None, thickness=None, shift=None):
         if (thickness == "") or (shift == ""):
@@ -142,6 +153,25 @@ class EvalResult(ComponentBase):
         plt.legend()
         plt.grid(True)
         plt.show()
+
+    def selected_result_key(self):
+        selected = self.select_results(meas=self.measurement_list.selected_item,
+                                       thickness=self.thicknesses.selected_item,
+                                       shift=self.shifts.selected_item)
+        if not isinstance(selected, SingleResultData):
+            return None
+        return next((key for key, res in self.eval_result_data.results.items()
+                     if res is selected), None)
+
+    @action(name="Save selected result", group=transmission_res_grp_name)
+    def save_selected_result(self):
+        if self.eval_result_data is None:
+            return
+        key = self.selected_result_key()
+        if key is None:
+            logging.warning("No result selected")
+            return
+        self.result_carrier.save_selected.emit(self.eval_result_data, [key])
 
     def set_simple_traits(self, trait_values):
         trait_names = self.trait_names()

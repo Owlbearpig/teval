@@ -36,18 +36,18 @@ class GridWorker(QThread):
     progress_changed = Signal(float)
     finished = Signal(object)
 
-    def __init__(self, parent_obj, batch_size=2000):
+    def __init__(self, parent_obj: ImagePlot, batch_size=2000):
         super().__init__()
         self.p = parent_obj
         self.batch_size = batch_size
 
     def run(self):
         if self.p.only_use_sample_set:
-            meas_set = self.p.measurements["sams"]
+            meas_set = self.p.dataset.measurements["sams"]
         else:
-            meas_set = self.p.measurements["all"]
+            meas_set = self.p.dataset.measurements["all"]
         grid = self.p._get_empty_grid()
-        sel_quant = self.p.selected_quantity_value
+        sel_quant = self.p.plotter_instance.selected_quantity_value
 
         positions = np.array([m.position for m in meas_set])
         x_idxs = np.argmin(np.abs(positions[:, 0, None] - self.p.img_shape["x_coords"]), axis=1)
@@ -65,7 +65,7 @@ class GridWorker(QThread):
             if res_batch.ndim == 1:
                 grid[batch_x, batch_y] = res_batch
             elif res_batch.ndim == 2:
-                grid[batch_x, batch_y] = res_batch[:, self.p.scalar_freq_idx]
+                grid[batch_x, batch_y] = res_batch[:, self.p.plotter_instance.scalar_freq_idx]
 
             processed = min(i + self.batch_size, num_meas) / num_meas
             self.progress_changed.emit(processed)

@@ -133,7 +133,7 @@ class ResultSaver(ComponentBase):
 
         return str(save_path.joinpath(formattedName))
 
-    def _saveHDF5(self, eval_result: EvalResult):
+    def _saveHDF5(self, eval_result: EvalResult, only_keys=None):
         fileName = self._getFileName(eval_result.eval_result_data.measurement_names)
         eval_data: EvalResultData = eval_result.eval_result_data
 
@@ -160,18 +160,26 @@ class ResultSaver(ComponentBase):
                 except IndexError:
                     dset_ax.attrs["axis_label"] = ""
 
+        if only_keys is not None:
+            saved_keys = set(only_keys)
+        elif self.save_only_optimum:
+            saved_keys = set(eval_data.optimum_results.values())
+        else:
+            saved_keys = set(eval_data.results)
+
         with h5py.File(fileName, "w") as f:
             f.attrs["result_type"] = eval_data.result_type
             f.attrs["dataset_path"] = str(eval_data.dataset_path)
             f.attrs["model_name"] = eval_data.model_name
             f.attrs["measurement_quantity"] = eval_data.measurement_quantity
             f.attrs["measurement_names"] = eval_data.measurement_names
-            f.create_group("optimum_results").attrs.update(eval_data.optimum_results)
-            optimum_keys = set(eval_data.optimum_results.values())
+            f.create_group("optimum_results").attrs.update(
+                {meas: key for meas, key in eval_data.optimum_results.items() if key in saved_keys}
+            )
 
             results_group = f.create_group("results")
             for res_key in eval_data.results:
-                if self.save_only_optimum and res_key not in optimum_keys:
+                if res_key not in saved_keys:
                     continue
                 res_subgroup = results_group.create_group(res_key)
                 single_res = eval_data.results[res_key]
@@ -206,7 +214,12 @@ class ResultSaver(ComponentBase):
         if not self.enabled:
             logging.info("Data storage is disabled, not saving results.")
             return
+        eval_data = eval_result.eval_result_data
+        self.save_selection(eval_data)
 
-        filename = self._saveHDF5(eval_result)
-
-        logging.info(f"Saved result as {filename}")
+    def save_selection(self, eval_data, keys=None):
+        filename = self._saveHDF5(eval_data, only_keys=keys)
+        if keys is None:
+            logging.info(f"Saved result as {filename}")
+        else:
+            logging.info(f"Saved selected result ({keys}) as {filename}")

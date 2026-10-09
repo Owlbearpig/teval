@@ -136,6 +136,7 @@ class DatasetEval(ComponentBase):
 
         self.result_saver = self.setup_saver()
         self.current_result.result_carrier.result_ready.connect(self.result_saver.process)
+        self.current_result.result_carrier.save_selected.connect(self.result_saver.save_selection)
 
         self._cancel_event = threading.Event()
         self._thread_executor = None
