@@ -1,3 +1,4 @@
+from __future__ import annotations
 from pathlib import Path
 import matplotlib.pyplot as plt
 import h5py
@@ -18,7 +19,6 @@ action = partial(action, rc_params=mpl_style_params)
 
 @dataclass
 class SingleResultData:
-    # optimization arguments
     measurement: str = None
     d : Q_ = Q_(0, "µm")
     shift : Q_ = Q_(0, "fs")
@@ -27,7 +27,7 @@ class SingleResultData:
     # result
     regression_params: dict[str, Any] = field(default_factory=dict)  # regression params,
     optimization_info:  dict[str, Any] = field(default_factory=dict) # q_val, gof, converged, timestamp, ...
-    datasets: dict[str, "QuantityDataSet"] = field(default_factory=dict) # n0, alpha, t_exp, ...
+    datasets: dict[str, QuantityDataSet] = field(default_factory=dict) # n0, alpha, t_exp, ...
 
 @dataclass
 class EvalResultData:
@@ -36,7 +36,8 @@ class EvalResultData:
     model_name: str = ""
     measurement_quantity: str = ""
     measurement_names: list[str] = field(default_factory=list)
-    results: list[SingleResultData] = field(default_factory=list)
+    results: dict[str, SingleResultData] = field(default_factory=dict)
+    optimum_results: dict[str, str] = field(default_factory=dict)
 
 class ResultSignal(QObject):
     received_result = Signal(EvalResultData)
@@ -103,8 +104,9 @@ class EvalResult(ComponentBase):
             lambda res: np.isclose(res.shift.magnitude, float(shift)))
         meas_cond = (lambda res: True) if meas is None else (lambda res: res.measurement == meas)
 
+        opt_results = self.eval_result_data.results.values()
         selected_results = (
-            res for res in self.eval_result_data.results
+            res for res in opt_results
             if d_cond(res) and shift_cond(res) and meas_cond(res)
         )
 
@@ -150,11 +152,17 @@ class EvalResult(ComponentBase):
     def set_observers(self):
         def on_measurement_selection(change):
             selected_meas = change["new"]
-            optimization_results = [res for res in self.eval_result_data.results if res.measurement == selected_meas]
+            optimization_results = [res for res in self.eval_result_data.results.values()
+                                    if res.measurement == selected_meas]
             self.thicknesses.items = sorted(list(set([str(res.d.magnitude) for res in optimization_results])))
             self.shifts.items = sorted(list(set([str(res.shift.magnitude) for res in optimization_results])))
 
-            if self.thicknesses.items and self.shifts.items:
+            opt_res = self.eval_result_data.results.get(
+                self.eval_result_data.optimum_results.get(selected_meas))
+            if opt_res is not None:
+                self.thicknesses.selected_item = str(opt_res.d.magnitude)
+                self.shifts.selected_item = str(opt_res.shift.magnitude)
+            elif self.thicknesses.items and self.shifts.items:
                 self.thicknesses.selected_item = self.thicknesses.items[0]
                 self.shifts.selected_item = self.shifts.items[0]
 
@@ -223,7 +231,8 @@ class EvalResult(ComponentBase):
                 dataset_path=Path(f.attrs.get("dataset_path", ".")),
                 model_name=f.attrs.get("model_name", ""),
                 measurement_quantity=f.attrs.get("measurement_quantity", ""),
-                measurement_names=list(f.attrs.get("measurement_names", []))
+                measurement_names=list(f.attrs.get("measurement_names", [])),
+                optimum_results=dict(f["optimum_results"].attrs) if "optimum_results" in f else {}
             )
 
             results_grp = f.get("results", {})
@@ -252,7 +261,7 @@ class EvalResult(ComponentBase):
                 for ds_name in ds_grp.keys():
                     single_res.datasets[ds_name] = hdf5group_to_quantity_dataset(ds_grp[ds_name])
 
-                eval_result_data.results.append(single_res)
+                eval_result_data.results[res_key] = single_res
 
         return eval_result_data
 
@@ -262,7 +271,7 @@ class EvalResult(ComponentBase):
 
         self.eval_result_data = eval_result_data
         self.set_simple_traits(asdict(eval_result_data))
-        self.measurement_list.items = list(set([res.measurement for res in eval_result_data.results]))
+        self.measurement_list.items = list(set([res.measurement for res in eval_result_data.results.values()]))
         self.measurement_list.selected_item = None
         if self.measurement_list.items:
             self.measurement_list.selected_item = self.measurement_list.items[0]

@@ -2,6 +2,7 @@ import logging
 import traceback
 import numpy as np
 from common.dataset import format_meas_dict
+from common.measurement_selection import Selection
 from common.default_appsettings import SimRISelection, Domain, QSpaceQuantity
 from common.functions import f_axis_idx_map, moving_average, do_ifft, to_db, avg_data_array
 from common.eval_component.quantity_set import QuantityDataSet
@@ -16,7 +17,7 @@ from concurrent.futures.process import BrokenProcessPool
 from functools import partial
 from common.eval_component.single_opt import shgo_transmission_optimization
 from common.eval_component.t_fit_global import spline_transmission_optimization
-
+from dataclasses import dataclass, field
 
 class OptimizationCancelled(Exception):
     """Raised inside the evaluation thread when the optimization is canceled."""
@@ -34,6 +35,19 @@ def kill_process_pool(executor):
         except Exception:
             pass
 
+@dataclass(frozen=True)
+class SelectionContext:
+    selection: Selection
+    ref_fd_dict: dict
+    t_exp_dict: dict
+    n_guess: dict
+    t_model_kwargs: dict
+    smoothing: tuple
+
+    def model_kwargs_for(self, opt_res):
+        return {**self.t_model_kwargs,
+                "shift": opt_res.shift.magnitude,
+                "d": opt_res.d.magnitude}
 
 class OptimizationMethods(Enum):
     Spline = member(spline_transmission_optimization)
@@ -86,6 +100,17 @@ class QSpaceEval:
         f_axis_tile = np.tile(self.freq_axis, (len(meas_list), 1))
         ref_idx_stacked = np.stack((f_axis_tile, ref_idx[:, self.freq_idx], np.zeros_like(f_axis_tile)), axis=2)
         return format_meas_dict(meas_list, ref_idx_stacked, self.dataset_eval.only_eval_avg)
+
+    def build_context(self, selection) -> SelectionContext:
+        return SelectionContext(
+            selection=selection,
+            ref_fd_dict=self.ref_fd_dict(selection),
+            t_exp_dict=self.t_exp_dict(selection),
+            n_guess=self.n_guess(selection),
+            t_model_kwargs=self.dataset_eval.get_t_model_kwargs(),
+            smoothing=(self.settings.eval_opt.smoothing_avg_n,
+                       self.settings.eval_opt.smoothing_avg_iters),
+        )
 
     def calc_uncertainties(self, opt_res: SingleResultData, selection):
         meas_list, ref_list = list(selection.sams), list(selection.refs)
@@ -194,19 +219,13 @@ class QSpaceEval:
 
         return q_val
 
-    def q_space_eval_mp(self, selection, progress_carrier=None, cancel_event=None) -> EvalResultData:
-        t_model_kwargs = self.dataset_eval.get_t_model_kwargs()
+    def eval_selection(self, selection, progress_carrier=None, cancel_event=None) -> EvalResultData:
+        ctx = self.build_context(selection)
 
         iteration_count = self.dataset_eval.iteration_count
         is_iterative = self.dataset_eval.iterative_thickness_optimization
 
-        sas = (self.settings.eval_opt.smoothing_avg_n, self.settings.eval_opt.smoothing_avg_iters)
-
-        ref_fd_dict = self.ref_fd_dict(selection)
-        ref_sam_map = selection.ref_map
         sel_meas_list = list(selection.sams)
-        t_exp_dict = self.t_exp_dict(selection)
-        n_guess = self.n_guess(selection)
 
         common_opt_params = {
             "freq_axis": self.freq_axis,
@@ -216,15 +235,15 @@ class QSpaceEval:
             "shgo_options": self.settings.shgo_options.get_shgo_options(),
             "n": self.settings.shgo_options.n,
             "iters": self.settings.shgo_options.iters,
-            **t_model_kwargs,
+            **ctx.t_model_kwargs,
         }
         if self.dataset_eval.optimization_method == OptimizationMethods.Spline:
             common_opt_params["knot_count"] = self.settings.eval_opt.knot_cnt
             common_opt_params["reg_n"] = self.settings.eval_opt.reg_n
             common_opt_params["reg_k"] = self.settings.eval_opt.reg_k
             common_opt_params["max_nfev"] = self.settings.eval_opt.max_nfev
-        opt_configs = {meas: {**common_opt_params, "n_guess": n_guess[meas],
-                              "t_exp": t_exp_dict[meas]} for meas in t_exp_dict}
+        opt_configs = {meas: {**common_opt_params, "n_guess": ctx.n_guess[meas],
+                              "t_exp": ctx.t_exp_dict[meas]} for meas in ctx.t_exp_dict}
 
         def get_new_tasks():
             shift_bnds = self.settings.eval_opt.shift_opt_axis_bounds
@@ -277,7 +296,7 @@ class QSpaceEval:
                     progress_carrier.progress_changed.emit(0)
 
             check_cancel()
-            results = []
+            task_results = []
             with ProcessPoolExecutor(max_workers=self.dataset_eval.number_of_workers) as executor:
                 self.current_process_executor = executor
                 try:
@@ -306,17 +325,16 @@ class QSpaceEval:
                             self.opt_state["shift"] = res.shift
                             self.opt_state["q_min"] = q_val
 
-                        results.append(res)
+                        task_results.append(res)
                 except BaseException:
-                    # cancel or crash: never leave orphaned workers running
                     kill_process_pool(executor)
                     raise
                 finally:
                     self.current_process_executor = None
 
-            results = sorted(results, key=lambda res_: res_.d)
+            task_results = sorted(task_results, key=lambda res_: res_.d)
 
-            return results
+            return task_results
 
         eval_result_data = EvalResultData()
         eval_result_data.result_type = "Transmission fit"
@@ -325,11 +343,10 @@ class QSpaceEval:
         eval_result_data.model_name = self.transmission_model.name
         eval_result_data.measurement_quantity = "Transmission"
 
-        for meas in t_exp_dict:
+        for meas_idx, meas in enumerate(ctx.t_exp_dict):
             check_cancel()
             if meas != "Average":
                 logging.info(f"Evaluating measurement {meas.filepath.name}")
-            ref_meas = ref_sam_map(meas)
             self.reset_opt_state()
 
             opt_results: list[SingleResultData] = []
@@ -341,44 +358,12 @@ class QSpaceEval:
                 if not is_iterative:
                     break
 
-            for opt_res in opt_results:
-                opt_res.measurement = meas.filepath.name if isinstance(meas, Measurement) else str(meas)
-                if meas == "Average":
-                    self.calc_uncertainties(opt_res, selection)
+            ready_results = self.prepare_results(meas, opt_results, ctx)
+            meas_results = {f"result_{meas_idx}_{res_idx:03d}": res for res_idx, res in enumerate(ready_results)}
+            eval_result_data.results.update(meas_results)
 
-                t_model_kwargs["shift"] = opt_res.shift.magnitude
-                t_model_kwargs["d"] = opt_res.d.magnitude
-
-                t_mod_ = self.transmission_model.value(opt_res.datasets["n"].data.magnitude,
-                                                       opt_res.freq_axis.magnitude,
-                                                       **t_model_kwargs)
-                sam_mod_db = to_db(ref_fd_dict[ref_meas][:, 1] * t_mod_)
-                residual = opt_res.datasets["t_exp"].data.magnitude - t_mod_
-                opt_res.datasets["t_mod"] = QuantityDataSet(axes=[opt_res.freq_axis],
-                                                            data=Q_(t_mod_, ""),
-                                                            axes_labels=["Frequency"],
-                                                            data_label="Transmission coefficient model")
-                opt_res.datasets["sam_mod"] = QuantityDataSet(axes=[opt_res.freq_axis],
-                                                              data=Q_(sam_mod_db, "dB"),
-                                                              axes_labels=["Frequency"],
-                                                              data_label="Sample spectrum")
-                opt_res.datasets["residual"] = QuantityDataSet(axes=[opt_res.freq_axis],
-                                                               data=Q_(residual, ""),
-                                                               axes_labels=["Frequency"],
-                                                               data_label="Residual")
-
-                if self.settings.eval_opt.add_sim_to_res:
-                    opt_res.datasets.update(self.calc_sim(t_model_kwargs, ref_fd_dict[ref_meas]))
-
-                smoothed_quantities = ["n", "alpha"]
-                for q in smoothed_quantities:
-                    if not self.settings.eval_opt.smoothing_avg_en:
-                        continue
-                    if q in opt_res.datasets:
-                        smoothed_data = moving_average(opt_res.datasets[q].data.magnitude, *sas)
-                        opt_res.datasets[q].data = Q_(smoothed_data, opt_res.datasets[q].data.units)
-
-            eval_result_data.results.extend(self.prepare_results(opt_results))
+            best_key = min(meas_results, key=lambda k: meas_results[k].optimization_info["q_val"])
+            eval_result_data.optimum_results[ready_results[0].measurement] = best_key
 
         return eval_result_data
 
@@ -410,7 +395,7 @@ class QSpaceEval:
         else:
             n = n_sub
 
-        t_sim = model(freq_axis, n, **model_kwargs)
+        t_sim = model(n, freq_axis, **model_kwargs)
 
         sam_sim_fd = np.array([freq_axis, t_sim * ref_fd[:, 1]], dtype=complex).T
 
@@ -425,44 +410,92 @@ class QSpaceEval:
 
         return sim_res
 
-    def prepare_results(self, opt_results: list[SingleResultData]):
-        norm_q_vals = self.settings.eval_opt.normalize_q_vals
-        q_vals = [opt_res.optimization_info["q_val"] for opt_res in opt_results]
-        for opt_res in opt_results:
-            q_val = opt_res.optimization_info["q_val"]
-            opt_res.optimization_info["q_val"] = q_val / np.max(q_vals) if norm_q_vals else q_val
-
-            split_datasets = {}
-            for dataset_label, dataset in opt_res.datasets.items():
-                if np.iscomplex(dataset.data).any():
+    def prepare_results(self, meas, opt_results: list[SingleResultData], ctx: SelectionContext):
+        def split_datasets(datasets):
+            returned_split_datasets = {}
+            for dataset_label, dataset in datasets.items():
+                if np.iscomplexobj(dataset.data.magnitude):
                     if "t_" in dataset_label:
                         q_abs = Q_(np.abs(dataset.data.magnitude), dataset.data.units)
+                        q_abs_uncert = Q_(np.abs(dataset.uncert.magnitude), dataset.data.units)
                         q_phi = Q_(np.angle(dataset.data.magnitude), "rad")
-                        split_datasets[f"{dataset_label}_abs"] = (
-                            QuantityDataSet(axes=dataset.axes,
-                                            data=q_abs,
+                        q_phi_uncert = Q_(np.angle(dataset.uncert.magnitude), dataset.data.units)
+                        returned_split_datasets[f"{dataset_label}_abs"] = (
+                            QuantityDataSet(axes=dataset.axes, data=q_abs,
+                                            uncert=q_abs_uncert,
                                             axes_labels=dataset.axes_labels,
                                             data_label=dataset.data_label + " (Magnitude)"))
-                        split_datasets[f"{dataset_label}_phi"] = (
-                            QuantityDataSet(axes=dataset.axes,
-                                            data=q_phi,
+                        returned_split_datasets[f"{dataset_label}_phi"] = (
+                            QuantityDataSet(axes=dataset.axes, data=q_phi,
+                                            uncert=q_phi_uncert,
                                             axes_labels=dataset.axes_labels,
                                             data_label=dataset.data_label + " (Angle)"))
                     else:
                         q_real = Q_(np.real(dataset.data.magnitude), dataset.data.units)
                         q_imag = Q_(np.imag(dataset.data.magnitude), dataset.data.units)
-                        split_datasets[f"{dataset_label}_real"] = (
-                            QuantityDataSet(axes=dataset.axes,
-                                            data=q_real,
+                        returned_split_datasets[f"{dataset_label}_real"] = (
+                            QuantityDataSet(axes=dataset.axes, data=q_real,
+                                            uncert=Q_(np.real(dataset.uncert.magnitude), dataset.uncert.units),
                                             axes_labels=dataset.axes_labels,
                                             data_label=dataset.data_label + " (Real)"))
-                        split_datasets[f"{dataset_label}_imag"] = (
-                            QuantityDataSet(axes=dataset.axes,
-                                            data=q_imag,
+                        returned_split_datasets[f"{dataset_label}_imag"] = (
+                            QuantityDataSet(axes=dataset.axes, data=q_imag,
+                                            uncert=Q_(np.imag(dataset.uncert.magnitude), dataset.uncert.units),
                                             axes_labels=dataset.axes_labels,
                                             data_label=dataset.data_label + " (Imag)"))
                 else:
-                    split_datasets[dataset_label] = dataset
-            opt_res.datasets = split_datasets
+                    returned_split_datasets[dataset_label] = dataset
+
+            return returned_split_datasets
+
+        is_avg_meas = not isinstance(meas, Measurement)
+
+        ref_meas = ctx.selection.ref_map(meas)
+        ref_fd = ctx.ref_fd_dict[ref_meas]
+
+        norm_q_vals = self.settings.eval_opt.normalize_q_vals
+        q_vals = [opt_res.optimization_info["q_val"] for opt_res in opt_results]
+        for opt_res in opt_results:
+            opt_res.measurement = str(meas) if is_avg_meas else meas.filepath.name
+
+            q_val = opt_res.optimization_info["q_val"]
+            opt_res.optimization_info["q_val"] = q_val / np.max(q_vals) if norm_q_vals else q_val
+
+            if is_avg_meas:
+                self.calc_uncertainties(opt_res, ctx.selection)
+
+            t_model_kwargs = ctx.model_kwargs_for(opt_res)
+
+            t_mod_ = self.transmission_model.value(opt_res.datasets["n"].data.magnitude,
+                                                   opt_res.freq_axis.magnitude,
+                                                   **t_model_kwargs)
+            sam_mod_db = to_db(ref_fd[:, 1] * t_mod_)
+
+            residual = opt_res.datasets["t_exp"].data.magnitude - t_mod_
+            opt_res.datasets["t_mod"] = QuantityDataSet(axes=[opt_res.freq_axis],
+                                                        data=Q_(t_mod_, ""),
+                                                        axes_labels=["Frequency"],
+                                                        data_label="Transmission coefficient model")
+            opt_res.datasets["sam_mod"] = QuantityDataSet(axes=[opt_res.freq_axis],
+                                                          data=Q_(sam_mod_db, "dB"),
+                                                          axes_labels=["Frequency"],
+                                                          data_label="Sample spectrum")
+            opt_res.datasets["residual"] = QuantityDataSet(axes=[opt_res.freq_axis],
+                                                           data=Q_(residual, ""),
+                                                           axes_labels=["Frequency"],
+                                                           data_label="Residual")
+
+            if self.settings.eval_opt.add_sim_to_res:
+                opt_res.datasets.update(self.calc_sim(t_model_kwargs, ref_fd))
+
+            smoothed_quantities = ["n", "alpha"]
+            for q in smoothed_quantities:
+                if not self.settings.eval_opt.smoothing_avg_en:
+                    continue
+                if q in opt_res.datasets:
+                    smoothed_data = moving_average(opt_res.datasets[q].data.magnitude, *ctx.smoothing)
+                    opt_res.datasets[q].data = Q_(smoothed_data, opt_res.datasets[q].data.units)
+
+            opt_res.datasets = split_datasets(opt_res.datasets)
 
         return opt_results

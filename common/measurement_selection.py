@@ -121,11 +121,12 @@ class SelectionQueue(ComponentBase):
     def pop_next(self):
         with self._lock:
             if not self._queue:
-                return None
-            selection = self._queue.pop(next(iter(self._queue)))
+                return None, None
+            queue_id = next(iter(self._queue))
+            selection = self._queue.pop(queue_id)
             self._update_listing()
             self._refresh_info()
-            return selection
+            return queue_id, selection
 
     def clear(self):
         with self._lock:

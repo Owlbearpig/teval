@@ -334,7 +334,7 @@ class DatasetEval(ComponentBase):
             except KeyError:
                 raise Exception("Substrate result required for two layer model optimization")
             model_kwargs["n_sub"] = n_sub
-            if np.array_equal(n_sub_real_dataset.data.axis[0], self.freq_axis):
+            if not np.array_equal(n_sub_real_dataset.axes[0], self.freq_axis):
                 raise Exception("Frequency axis must equal substrate result frequency axis")
 
         return model_kwargs
@@ -431,17 +431,15 @@ class DatasetEval(ComponentBase):
 
         def bg_worker():
             try:
-                next_selection = queue.pop_next()
-                selection_idx = 0
+                queue_id, next_selection = queue.pop_next()
                 while next_selection is not None and not cancel_event.is_set():
-                    selection_idx += 1
-                    logging.info(f"Evaluating selection {selection_idx} ({len(next_selection.sams)} measurement(s))")
-                    qs_eval_data = evaluator.q_space_eval_mp(next_selection,
-                                                             progress_carrier=progress_carrier,
-                                                             cancel_event=cancel_event)
+                    logging.info(f"Evaluating selection {queue_id}")
+                    qs_eval_data = evaluator.eval_selection(next_selection,
+                                                            progress_carrier=progress_carrier,
+                                                            cancel_event=cancel_event)
                     if not cancel_event.is_set():
                         self.current_result.result_carrier.received_result.emit(qs_eval_data)
-                    next_selection = queue.pop_next()
+                    queue_id, next_selection = queue.pop_next()
             except OptimizationCancelled:
                 logging.info("Optimization cancelled")
             except Exception:

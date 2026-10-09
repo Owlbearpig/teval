@@ -475,6 +475,26 @@ def create_list_view(component, name, trait):
 
     list_view.selectionModel().selectionChanged.connect(lambda *args: update_trait_selection())
 
+    def update_list_selection(change):
+        new_item = change["new"]
+        if new_item is None:
+            list_view.selectionModel().clearSelection()
+            return
+
+        items = str_list.items
+        if new_item in items:
+            row = items.index(new_item)
+            selected_item_index = model.index(row, 0)
+
+            list_view.selectionModel().blockSignals(True)
+            list_view.selectionModel().setCurrentIndex(
+                selected_item_index,
+                QtCore.QItemSelectionModel.ClearAndSelect
+            )
+            list_view.selectionModel().blockSignals(False)
+
+    str_list.observe(update_list_selection, "selected_item")
+
     return container
 
 def create_plot_area(component, name, prettyName, trait):

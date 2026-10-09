@@ -46,7 +46,6 @@ class ResultSaver(ComponentBase):
 
     base_path = PathTrait(default_value=result_dir, is_file=False, must_exist=False).tag(name="Path")
 
-    textFileWithHeaders = Bool(False).tag(name="Write header to text files")
     fileNameTemplate = Unicode('{date}-{name}-{result_type}',
                                help="File name template, valid identifiers "
                                     "are:\n"
@@ -54,7 +53,7 @@ class ResultSaver(ComponentBase):
                                     "{date}: The current date and time").tag(
                                name="File name template")
     mainFileName = Unicode("data").tag(name="Main file name", fullwidth=True)
-
+    save_only_optimum = Bool(False).tag(name="Save only optimum result")
     enabled = Bool(True, help="Whether data storage is enabled").tag(
                          name="Enabled")
 
@@ -167,11 +166,15 @@ class ResultSaver(ComponentBase):
             f.attrs["model_name"] = eval_data.model_name
             f.attrs["measurement_quantity"] = eval_data.measurement_quantity
             f.attrs["measurement_names"] = eval_data.measurement_names
+            f.create_group("optimum_results").attrs.update(eval_data.optimum_results)
+            optimum_keys = set(eval_data.optimum_results.values())
 
             results_group = f.create_group("results")
-
-            for idx, single_res in enumerate(eval_data.results):
-                res_subgroup = results_group.create_group(f"result_{idx}")
+            for res_key in eval_data.results:
+                if self.save_only_optimum and res_key not in optimum_keys:
+                    continue
+                res_subgroup = results_group.create_group(res_key)
+                single_res = eval_data.results[res_key]
 
                 res_subgroup.attrs["measurement"] = single_res.measurement or ""
                 write_quantity(res_subgroup, "d", single_res.d)
@@ -206,4 +209,4 @@ class ResultSaver(ComponentBase):
 
         filename = self._saveHDF5(eval_result)
 
-        logging.info("Saved result as {}".format(filename))
+        logging.info(f"Saved result as {filename}")
