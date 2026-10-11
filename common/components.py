@@ -72,7 +72,6 @@ class ComponentBase(HasTraits):
             self.object_name = type(self).__name__
 
         self.__ui_control_widget = None
-        self._pending_trait_toggles = {}
 
         self.__actions = []
         for name, memb in _dumb_list_of_actions(self):
@@ -96,7 +95,7 @@ class ComponentBase(HasTraits):
         return False
 
     def override(self, **kwargs):
-        class _OverrideContext:
+        class OverrideContext:
 
             def __enter__(ctx_self):
                 ctx_self.og_state = {
@@ -110,7 +109,7 @@ class ComponentBase(HasTraits):
                 for name, value in ctx_self.og_state.items():
                     setattr(self, name, value)
 
-        return _OverrideContext()
+        return OverrideContext()
 
     @property
     def actions(self):

@@ -191,8 +191,8 @@ def create_progressbar(component, name, trait):
     return progressBar
 
 
-def create_checkbox(component, name, prettyName, trait):
-    checkbox = QtWidgets.QCheckBox(prettyName)
+def create_checkbox(component, name, trait):
+    checkbox = QtWidgets.QCheckBox()
     checkbox.setChecked(trait.get(component))
     checkbox.setEnabled(not trait.read_only)
     checkbox.setToolTip(trait.help)
@@ -597,7 +597,7 @@ def generate_component_ui(name, component):
             else:
                 field_widget = create_number_entry(component, name, trait)
         elif isinstance(trait, Bool):
-            field_widget = create_checkbox(component, name, prettyName, trait)
+            field_widget = create_checkbox(component, name, trait)
         elif isinstance(trait, Unicode):
             if trait.read_only:
                 field_widget = create_label(component, name, trait)
@@ -611,7 +611,8 @@ def generate_component_ui(name, component):
             field_widget = create_tree_path_selector(component, name, prettyName, trait)
 
         if field_widget:
-            if isinstance(trait, (MultiPathSelection, StrListSelection)) or trait.metadata.get("disable_label", False):
+            disable_label = trait.metadata.get("disable_label", False)
+            if isinstance(trait, (MultiPathSelection, StrListSelection)) or disable_label:
                 label_widget = None
                 layout.addRow(field_widget)
             else:

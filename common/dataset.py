@@ -1,12 +1,13 @@
+from __future__ import annotations
 import traceback
 import matplotlib.pyplot as plt
-
 from common.components import ComponentBase
 from common.default_appsettings import Dist, ReferenceClassification, Domain, QuantityEnum, WindowTypes
 from common.settings import Settings
 from common.measurement_selection import MeasurementSelection, get_coordinate_line
 from pathlib import Path
 import numpy as np
+from functools import partial
 from common.functions import (butter_filt, do_fft, f_axis_idx_map,
                               remove_offset, avg_data_array, calculate_bandwidth, to_db)
 from common.measurements import Measurement
@@ -79,7 +80,6 @@ class WindowEvalResult:
         self.phi_corrected = kwargs.get("phi_corrected", None)
 
 class DataSetInfoPane(ComponentBase):
-
     max_amp_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Max amplitude measurement")
     first_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="First measurement")
     last_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Last measurement")
@@ -212,9 +212,14 @@ class DataSet(ComponentBase):
                     QuantityEnum.RefractiveIdx: self.refractive_idx,  # 2D (N_meas, Freq_slice)
                     QuantityEnum.AbsorptionCoe: self.absorption_coef,  # 2D (N_meas, Freq_slice)
                     QuantityEnum.Conductivity: self.conductivity,  # 2D (N_meas, Freq_slice)
-
                     }
         return func_map
+
+    def quantity_func(self, quantity: QuantityEnum, freq_range=None):
+        func_map = self.func_map
+        func_map[QuantityEnum.PowerInt] = partial(self.power_int, freq_range=freq_range) # 1D (N_meas)
+        func_map[QuantityEnum.PeakCnt] = partial(self.simple_peak_cnt, threshold=2.5) # 1D (N_meas)
+        return func_map[quantity]
 
     @cached_property
     def shape_properties(self):
@@ -274,6 +279,8 @@ class DataSet(ComponentBase):
         win_enum = pp_opt.type
         sym = pp_opt.symmetric
         win_width = pp_opt.win_width
+        win_start = pp_opt.win_start
+        center_window = pp_opt.center_on_pulse
         shift = pp_opt.shift
         en_plot = pp_opt.en_plot
 
@@ -295,15 +302,19 @@ class DataSet(ComponentBase):
         }
         win_param = (win_enum.name, *param_map.get(win_enum, ()))
 
-        win_width = int(win_width / dt)
+        win_width = int(win_width.magnitude / dt)
+
 
         if win_width > len(y):
             win_width = len(y)
 
         win_arr = get_window(win_param, win_width, fftbins=not sym)
 
-        win_center = np.argmax(np.abs(y))
-        win_start = win_center - int(win_width / 2)
+        if center_window:
+            win_center = np.argmax(np.abs(y))
+            win_start = win_center - int(win_width / 2)
+        else:
+            win_start = int(win_start.magnitude / dt)
 
         window_mask = np.zeros_like(y)
         window_mask[:win_width] = win_arr
@@ -312,7 +323,7 @@ class DataSet(ComponentBase):
         if win_start < 0:
             window_mask[len(y) + win_start:] = 0
 
-        window_mask = np.roll(window_mask, int(shift / dt))
+        window_mask = np.roll(window_mask, int(shift.magnitude / dt))
 
         y_win = y * window_mask
 
@@ -405,6 +416,7 @@ class DataSet(ComponentBase):
         if data_path is None:
             return
 
+        self.set_trait("is_initialized", False)
         signal_carrier = ParsingSignalCarrier()
         signal_carrier.progress_signal.connect(self.update_cache_progress)
         signal_carrier.initialization_complete_signal.connect(self.set_trait)
@@ -503,22 +515,6 @@ class DataSet(ComponentBase):
 
         y_extrema_str = f"{np.min(shape['y_coords'])}, {np.max(shape['y_coords'])}"
         self.info_pane.set_trait("y_coord_extrema", y_extrema_str)
-
-    def find_climate_log_file(self, climate_log_file):
-        log_file = Path(climate_log_file)
-
-        target_log_file = log_file.name
-
-        checked_dirs = [self.data_path, self.data_path.parent]
-        log_files = []
-        log_files.extend([file for file in checked_dirs[0].iterdir() if "log" in file.name])
-        log_files.extend([file for file in checked_dirs[1].iterdir() if "log" in file.name])
-
-        for log_file in log_files:
-            if str(target_log_file) in log_file.name:
-                return log_file
-
-        return None
 
     def _read_data_dir(self):
         glob = self.data_path.glob("**/*.txt")
@@ -664,7 +660,7 @@ class DataSet(ComponentBase):
     def windowing_eval(self, meas_) -> WindowEvalResult:
         ref_meas = self.measurement_selector.get_matching_refs(meas_)
 
-        with self.settings.pp_opt.override(window_enabled=True, win_width=10):
+        with self.settings.pp_opt.override(window_enabled=True, win_width=Q_(10, "ps")):
             ref_fd = self.get_multi_data(ref_meas, Domain.Frequency)
             sam_fd = self.get_multi_data(meas_, Domain.Frequency)
 
@@ -940,7 +936,7 @@ class DataSet(ComponentBase):
         w = 2 * np.pi * self.freq_axis
         w = np.where(w == 0, w[1] if len(w) > 1 else 1e-12, w)
 
-        with self.settings.pp_opt.override(window_enabled=True, win_width=10):
+        with self.settings.pp_opt.override(window_enabled=True, win_width=Q_(10, "ps")):
             t_amp = self.amplitude_transmission(meas_, ref_list)
             phi_diff = np.abs(self.phase_difference(meas_, ref_list))
 

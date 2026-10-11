@@ -288,40 +288,37 @@ class ColorMaps(Enum):
     gist_yerg_r = "gist_yerg_r"
     Grays_r = "Grays_r"
 
-class QuantityFunc:
-    def __init__(self, label="label", func=None, domain=None, unit=""):
+class DerivedQuantity:
+    def __init__(self, label="label", domain=None, unit="", uses_range=False):
         self.label = label
         self.domain = Domain.Time if domain is None else domain
-        self.func = func if func is not None else lambda x: x
         self.unit = unit
+        self.uses_range = uses_range
 
     def __repr__(self):
         return self.label
 
-    def __call__(self, *args, **kwargs):
-        return self.func(*args, **kwargs)
-
 class QuantityEnum(Enum):
-    P2P = QuantityFunc("Peak to peak", domain=Domain.Time)
-    PowerInt = QuantityFunc("Integrated power", domain=Domain.Frequency)
-    Power = QuantityFunc("Power", domain=Domain.Frequency)
-    Absorbance = QuantityFunc("Absorbance", domain=Domain.Frequency, unit="dB")
-    Phase = QuantityFunc("Phase", domain=Domain.Frequency, unit="rad")
-    MeasTimeDeltaRef2Sam = QuantityFunc("Time delta Ref. to Sam.", unit="s", domain=Domain.Time)
-    RefAmp = QuantityFunc("Ref. Amp", domain=Domain.Frequency)
-    RefArgmax = QuantityFunc("Ref. Argmax", domain=Domain.Time)
-    RefPhase = QuantityFunc("Ref. Phase", domain=Domain.Frequency, unit="rad")
-    PeakCnt = QuantityFunc("Peak Cnt", domain=Domain.Time)
-    ZeroCrossing = QuantityFunc("Zero Crossing", domain=Domain.Time, unit="ps")
-    TimeOfFlight = QuantityFunc("Time of Flight", domain=Domain.Time, unit="ps")
-    PhaseToF = QuantityFunc("Phase slope ToF", domain=Domain.Time, unit="ps")
-    RIEstimate = QuantityFunc("Refractive index estimate", domain=Domain.Time)
-    Transmission = QuantityFunc("Transmission", domain=Domain.Frequency)
-    TransmissionAmp = QuantityFunc("Amplitude transmission", domain=Domain.Frequency)
-    TransmissionPhase = QuantityFunc("Phase transmission", domain=Domain.Frequency, unit="rad")
-    RefractiveIdx = QuantityFunc("Refractive idx", domain=Domain.Frequency)
-    AbsorptionCoe = QuantityFunc("Absorption coe", domain=Domain.Frequency, unit="1/cm")
-    Conductivity = QuantityFunc("Conductivity", domain=Domain.Frequency, unit="S/cm")
+    P2P = DerivedQuantity("Peak to peak", domain=Domain.Time)
+    PowerInt = DerivedQuantity("Integrated power", domain=Domain.Frequency, uses_range=True)
+    Power = DerivedQuantity("Power", domain=Domain.Frequency)
+    Absorbance = DerivedQuantity("Absorbance", domain=Domain.Frequency, unit="dB")
+    Phase = DerivedQuantity("Phase", domain=Domain.Frequency, unit="rad")
+    MeasTimeDeltaRef2Sam = DerivedQuantity("Time delta Ref. to Sam.", unit="s", domain=Domain.Time)
+    RefAmp = DerivedQuantity("Ref. Amp", domain=Domain.Frequency)
+    RefArgmax = DerivedQuantity("Ref. Argmax", domain=Domain.Time)
+    RefPhase = DerivedQuantity("Ref. Phase", domain=Domain.Frequency, unit="rad")
+    PeakCnt = DerivedQuantity("Peak Cnt", domain=Domain.Time)
+    ZeroCrossing = DerivedQuantity("Zero Crossing", domain=Domain.Time, unit="ps")
+    TimeOfFlight = DerivedQuantity("Time of Flight", domain=Domain.Time, unit="ps")
+    PhaseToF = DerivedQuantity("Phase slope ToF", domain=Domain.Time, unit="ps")
+    RIEstimate = DerivedQuantity("Refractive index estimate", domain=Domain.Time)
+    Transmission = DerivedQuantity("Transmission", domain=Domain.Frequency)
+    TransmissionAmp = DerivedQuantity("Amplitude transmission", domain=Domain.Frequency)
+    TransmissionPhase = DerivedQuantity("Phase transmission", domain=Domain.Frequency, unit="rad")
+    RefractiveIdx = DerivedQuantity("Refractive idx", domain=Domain.Frequency)
+    AbsorptionCoe = DerivedQuantity("Absorption coe.", domain=Domain.Frequency, unit="1/cm")
+    Conductivity = DerivedQuantity("Conductivity", domain=Domain.Frequency, unit="S/cm")
 
 
 class EvalOpt(ComponentBase):
@@ -384,9 +381,11 @@ class PpOpt(ComponentBase):
     normalize_data = Bool(False).tag(name="Normalize waveform")
 
     window_group = "Window options"
-    window_enabled = Bool(False, group=window_group, name="Enabled").tag(name="Enable window")
-    win_width = Int(10, group=window_group).tag(name="Window width").tag(name="Window width")
-    shift = Float(0, group=window_group).tag(name="Window shift").tag(name="Window shift")
+    window_enabled = Bool(False, group=window_group).tag(name="Enable window")
+    win_width = TQuantity(Q_(10, "ps"), group=window_group).tag(name="Window width")
+    win_start = TQuantity(Q_(0, "ps"), group=window_group).tag(name="Window start")
+    center_on_pulse = Bool(True, group=window_group).tag(name="Center window on pulse")
+    shift = TQuantity(Q_(0, "ps"), group=window_group).tag(name="Window shift")
     en_plot = Bool(False, group=window_group).tag(name="Enable window plot")
     type = TEnum(WindowTypes, default_value=WindowTypes.tukey, group=window_group).tag(name="Window type")
     symmetric = Bool(True, group=window_group).tag(name="Symmetric window")
@@ -426,8 +425,6 @@ class SaveSettings(ComponentBase):
     only_save_plots = Bool(False).tag(name="Hide plots (only save if enabled)")
 
 class PlotOpt(ComponentBase):
-    plot_range = ValueRange([Q_(0.05, "THz"), Q_(3.5, "THz")],
-                            metadata={"priority": 1, "readonly": False}).tag(name="Plot range")
     shift_sam2ref = Bool(False).tag(name="Shift sample pulse to ref")
     sub_noise_floor = Bool(False).tag(name="Subtract spectrum noise floor")
     td_scale = Float(1.0).tag(name="Scale waveform")

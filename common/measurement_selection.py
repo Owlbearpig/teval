@@ -236,7 +236,8 @@ class MeasurementSelection(ComponentBase):
         dict_map = {meas: ref_list[i] for i, meas in enumerate(meas_list)}
         return lambda meas: dict_map[meas] if isinstance(meas, Measurement) else meas
 
-    @action("Add selection to queue", enable_checker=lambda inst: inst.selection_queue is not None, priority=1)
+    @action("Add selection to queue", enable_checker=lambda inst: inst.selection_queue is not None, priority=1,
+            group="Queue actions")
     def queue_selection(self):
         selection = self.get_selection()
         if selection is None:
@@ -248,7 +249,8 @@ class MeasurementSelection(ComponentBase):
         msg = f"Queued {len(selection.sams)} measurement{sam_s}, {len(self.selection_queue)} selection{sel_s} in queue"
         self.dataset.logger.info(msg)
 
-    @action("Clear queue", enable_checker=lambda inst: inst.selection_queue is not None, priority=2)
+    @action("Clear queue", enable_checker=lambda inst: inst.selection_queue is not None, priority=2,
+            group="Queue actions")
     def clear_queue(self):
         queue_len = len(self.selection_queue)
         self.selection_queue.clear()

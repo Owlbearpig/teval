@@ -24,8 +24,6 @@ class OptimizationCancelled(Exception):
 
 
 def kill_process_pool(executor):
-    """Hard-stop a ProcessPoolExecutor: drop queued work and SIGKILL running workers."""
-    # shutdown() sets executor._processes to None, so grab the workers first
     procs = list((getattr(executor, "_processes", None) or {}).values())
     executor.shutdown(wait=False, cancel_futures=True)
     for proc in procs:
@@ -55,7 +53,6 @@ class OptimizationMethods(Enum):
 
 
 class QSpaceEval:
-
     def __init__(self, dataset_eval):
         self.dataset_eval = dataset_eval
         self.settings = dataset_eval.dataset.settings

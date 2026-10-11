@@ -93,7 +93,7 @@ class DatasetEval(ComponentBase):
                                                                        priority=5, en_save=False)
 
     reg_grp_name = "Regression"
-    selected_meas_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.TransmissionAmp,
+    sel_meas_quantity_enum = TEnum(QuantityEnum, default_value=QuantityEnum.TransmissionAmp,
                                    group=reg_grp_name).tag(name="Measurement quantity")
     selected_reg_model = TEnum(RegressionModels, default_value=RegressionModels.drude,
                                group=reg_grp_name).tag(name="Selected regression model")
@@ -165,19 +165,13 @@ class DatasetEval(ComponentBase):
         return f_axis_idx_map(self.dataset.freq_axis, self.settings.eval_opt.fit_range)
 
     @property
-    def meas_quantity(self):
-        meas_quantity = self.selected_meas_quantity
-        meas_quantity.value.func = self.dataset.func_map[meas_quantity]
-
-        return meas_quantity
-
-    @property
     def y_meas_dict(self):
         selection = self.dataset.measurement_selector.get_selection()
         if selection is None:
             return None
         meas_list = selection.sams
-        y_meas = self.meas_quantity.value.func(meas_list)
+        meas_quant_func = self.dataset.func_map[self.sel_meas_quantity_enum]
+        y_meas = meas_quant_func(meas_list)
 
         y_sub = y_meas[:, self.f_idx]
 
@@ -222,7 +216,7 @@ class DatasetEval(ComponentBase):
             return None
         conf_dict = {"measurements": {meas.identifier: meas for meas in selection.sams},
                      "freq_axis": self.freq_axis,
-                     "meas_quantity": self.meas_quantity,
+                     "meas_quantity": self.sel_meas_quantity_enum,
                      "y_meas_dict": self.y_meas_dict,
                      "model": self.set_reg_model_freq,
                      "model_name": self.selected_reg_model.name,

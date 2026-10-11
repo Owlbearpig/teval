@@ -258,7 +258,7 @@ def f_axis_idx_map(freqs, freq_range=None):
         if isinstance(freq_range[0], Q_):
             freq_range = [freq_range[0].magnitude, freq_range[1].magnitude]
 
-        sign = np.sign(freq_range[1] - freq_range[0])
+        sign = np.sign(freq_range[1] - freq_range[0]) or 1
         f0_idx = int(np.argmin(np.abs(freqs - freq_range[0])))
         f1_idx = int(np.argmin(np.abs(freqs - freq_range[1])))
         f_idx = np.arange(f0_idx, f1_idx + 1, sign, dtype=int)

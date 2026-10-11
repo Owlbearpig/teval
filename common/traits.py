@@ -18,7 +18,7 @@ You should have received a copy of the GNU General Public License
 along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 """
 import typing as t
-
+import numbers
 import traitlets
 from common.eval_component.quantity_set import QuantityDataSetDict
 from traitlets import TraitError, Undefined, TraitType, List, Float, Integer, Instance, HasTraits, Unicode
@@ -178,6 +178,16 @@ class QuantityList(list):
             for v in self
         ]
 
+    def to(self, unit):
+        return QuantityList([
+            v.to(unit) if hasattr(v, "to") else v
+            for v in self
+        ])
+
+    @property
+    def units(self):
+        return getattr(self[0], "units", "")
+
 class ValueRange(TraitTypePatched):
     info_text = 'a value range'
     default_value = QuantityList([Q_(0, ""), Q_(0, "")])
@@ -201,9 +211,31 @@ class ValueRange(TraitTypePatched):
 
         v0, v1 = value[0], value[1]
 
-        if type(v0) != type(v1):
+        both_real = isinstance(v0, numbers.Real) and isinstance(v1, numbers.Real)
+        if not both_real and type(v0) != type(v1):
             self.error(obj, value)
         if hasattr(v0, "units") and hasattr(v1, "units") and v0.units != v1.units:
             self.error(obj, value)
 
+        for v in value:
+            self._check_bounds(obj, v)
+
         return QuantityList(value)
+
+    def _check_bounds(self, obj, v):
+        try:
+            if hasattr(v, "to"):
+                lo = self.min.to(v.units).magnitude if self.min is not None else None
+                hi = self.max.to(v.units).magnitude if self.max is not None else None
+                val = v.magnitude
+            else:
+                lo = getattr(self.min, "magnitude", self.min)
+                hi = getattr(self.max, "magnitude", self.max)
+                val = v
+        except Exception:
+            self.error(obj, v)
+
+        if (hi is not None and val > hi) or (lo is not None and val < lo):
+            raise TraitError(
+                f"The value of the '{self.name}' trait of {class_of(obj)} instance should "
+                f"be between {self.min} and {self.max}, but a value of {v} was specified")

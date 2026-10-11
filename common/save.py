@@ -108,7 +108,7 @@ class ResultSaver(ComponentBase):
             if match:
                 return match.group(0)
 
-        return main_fn
+        return next(set(no_time_names)) if no_time_names else meas_names[0]
 
     def _getFileName(self, meas_names):
 
