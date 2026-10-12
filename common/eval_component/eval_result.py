@@ -19,7 +19,7 @@ action = partial(action, rc_params=mpl_style_params)
 
 @dataclass
 class SingleResultData:
-    measurement: str = None
+    measurement: str = ""
     d : Q_ = Q_(0, "µm")
     shift : Q_ = Q_(0, "fs")
     freq_axis : Q_ = Q_(np.array(0), "THz")
@@ -38,11 +38,6 @@ class EvalResultData:
     measurement_names: list[str] = field(default_factory=list)
     results: dict[str, SingleResultData] = field(default_factory=dict)
     optimum_results: dict[str, str] = field(default_factory=dict)
-
-class ResultSignal(QObject):
-    received_result = Signal(EvalResultData)
-    result_ready = Signal(object)
-    save_selected = Signal(object, object)
 
 class EvalResult(ComponentBase):
     quantity_dict = QuantityDict().tag(name="Quantity plot")
@@ -83,11 +78,10 @@ class EvalResult(ComponentBase):
     thicknesses = StrListSelection(group="Thicknesses (µm)", read_only=True).tag(max_width=70, combine=True, priority=2)
     shifts = StrListSelection(group="Pulse shifts (fs)", read_only=True).tag(max_width=70, combine=True, priority=3)
 
-    def __init__(self, **kwargs):
+    def __init__(self, result_carrier=None, **kwargs):
         super().__init__(**kwargs)
-        self.eval_result_data: EvalResultData = None
-        self.result_carrier = ResultSignal()
-        self.result_carrier.received_result.connect(self.parse_eval_result_data)
+        self.eval_result_data: EvalResultData = EvalResultData()
+        self.result_carrier = result_carrier
 
         self.set_trait("measurement_list", StrList())
         self.set_trait("thicknesses", StrList())
@@ -171,7 +165,10 @@ class EvalResult(ComponentBase):
         if key is None:
             logging.warning("No result selected")
             return
-        self.result_carrier.save_selected.emit(self.eval_result_data, [key])
+        if self.result_carrier is not None:
+            self.result_carrier.save_selected.emit(self.eval_result_data, [key])
+        else:
+            logging.warning("Result carrier not connected")
 
     def set_simple_traits(self, trait_values):
         trait_names = self.trait_names()
@@ -220,7 +217,7 @@ class EvalResult(ComponentBase):
 
     def load_result(self, res_path):
         eval_result_data = self.parse_hdf5(res_path)
-        self.parse_eval_result_data(eval_result_data, is_loading=True)
+        self.parse_eval_result_data(eval_result_data)
 
         logging.info(f"Loaded {res_path}")
 
@@ -295,10 +292,9 @@ class EvalResult(ComponentBase):
 
         return eval_result_data
 
-    def parse_eval_result_data(self, eval_result_data: EvalResultData, is_loading=False):
+    def parse_eval_result_data(self, eval_result_data: EvalResultData):
         if not eval_result_data:
             return
-
         self.eval_result_data = eval_result_data
         self.set_simple_traits(asdict(eval_result_data))
         self.measurement_list.items = list(set([res.measurement for res in eval_result_data.results.values()]))
@@ -311,6 +307,3 @@ class EvalResult(ComponentBase):
             self.toggle_traits(active_parameters, group_filter=self.transmission_res_grp_name)
         elif eval_result_data.result_type == "Transmission fit":
             self.toggle_traits([], group_filter=self.reg_result_grp_name)
-
-        if not is_loading:
-            self.result_carrier.result_ready.emit(self)

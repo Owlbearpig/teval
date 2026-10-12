@@ -1,8 +1,7 @@
 import numpy as np
 from common.consts import c_thz
 from common.eval_component.tmm_impl import coh_tmm_wrapper
-
-# n is the free parameter of the unknown layer
+from enum import Enum, member
 
 def layer_cnt_decorator(layer_cnt=1):
     def mark_layer_cnt(func):
@@ -255,6 +254,15 @@ def dtdd(n, d, freq):
     dfdd = f*b/d
 
     return (dfdd*g-f*dgdd) / (g*g)
+
+class TransmissionModels(Enum):
+    tmm_1layer = member(t_tmm_model_1layer)
+    tmm_2layer = member(t_tmm_model_2layer)
+    model_1layer_inf = member(model_1layer_inf)
+    model_1layer_fp = member(model_1layer_fp)
+    model_2layer = member(model_2layer)
+    t_model_2layer = member(_t_model_2layer)
+
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt

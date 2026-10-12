@@ -1,4 +1,5 @@
 import logging
+
 from traitlets import HasTraits, Unicode, Bool, Int, Instance
 import traitlets
 from PySide6 import QtWidgets
@@ -169,3 +170,4 @@ class ComponentBase(HasTraits):
                 return True
 
         return False
+

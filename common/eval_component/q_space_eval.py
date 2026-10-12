@@ -1,6 +1,8 @@
 import logging
 import traceback
 import numpy as np
+from common.eval_component.transfer_functions import TransmissionModels
+from common.eval_component.eval_component_base import EvalComponentBase
 from common.dataset import format_meas_dict
 from common.measurement_selection import Selection
 from common.default_appsettings import SimRISelection, Domain, QSpaceQuantity
@@ -18,6 +20,16 @@ from functools import partial
 from common.eval_component.single_opt import shgo_transmission_optimization
 from common.eval_component.t_fit_global import spline_transmission_optimization
 from dataclasses import dataclass, field
+from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance
+from common.traits import Quantity, Q_, ValueRange, Path as TPath
+from common.measurement_selection import SelectionQueue
+from common.components import action
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+
+action = partial(action, check_init=True)
+
 
 class OptimizationCancelled(Exception):
     """Raised inside the evaluation thread when the optimization is canceled."""
@@ -52,13 +64,25 @@ class OptimizationMethods(Enum):
     SHGO = member(shgo_transmission_optimization)
 
 
-class QSpaceEval:
-    def __init__(self, dataset_eval):
-        self.dataset_eval = dataset_eval
-        self.settings = dataset_eval.dataset.settings
+class QSpaceEval(EvalComponentBase):
+    t_fit_grp_name = "Transmission q-space fit"
+    optimization_method = TEnum(OptimizationMethods, default_value=OptimizationMethods.Spline,
+                                group=t_fit_grp_name).tag(name="Optimization method", priority=-2)
+    transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.tmm_1layer,
+                               group=t_fit_grp_name).tag(name="Selected transmission model", priority=-1)
 
-        self.cost_fun = self.dataset_eval.selected_cost_fun.value
-        self.transmission_model = self.dataset_eval.transmission_model
+    d_opt_axis_bounds = ValueRange([Q_(500, "µm"), Q_(580, "µm", )],
+                                   group=t_fit_grp_name).tag(name="Custom thickness axis bounds", priority=0)
+    d_opt_axis_step = Quantity(Q_(10, "µm"), group=t_fit_grp_name).tag(name="Custom thickness axis step", priority=1)
+    iterative_thickness_optimization = Bool(True,
+                                            group=t_fit_grp_name).tag(name="Optimize thickness iteratively", priority=2)
+    iteration_count = Integer(3, group=t_fit_grp_name).tag(name="Iteration count", priority=3)
+    bound_shrink_factor = Float(0.20, group=t_fit_grp_name).tag(name="Thickness bounds shrink factor",
+                                                                priority=4)
+
+
+    def __init__(self, dataset, **kwargs):
+        super().__init__(dataset, **kwargs)
 
         self.current_process_executor = None
 
@@ -69,58 +93,94 @@ class QSpaceEval:
         self.opt_state["shift"] = Q_(0, "fs")
         self.opt_state["q_min"] = np.inf
 
-    @property
-    def freq_axis(self):
-        return self.dataset_eval.freq_axis
-
-    @property
-    def freq_idx(self):
-        return self.dataset_eval.f_idx
-
     def ref_fd_dict(self, selection):
         ref_list = list(selection.refs)
-        ref_fd = self.dataset_eval.dataset.get_multi_data(ref_list)[:, self.freq_idx]
-        return format_meas_dict(ref_list, ref_fd, self.dataset_eval.only_eval_avg)
+        ref_fd = self.dataset.get_multi_data(ref_list)[:, self.freq_range_idx]
+        return format_meas_dict(ref_list, ref_fd, self.only_eval_avg)
 
     def t_exp_dict(self, selection):
         meas_list = list(selection.sams)
-        t_exp = self.dataset_eval.dataset.transmission(meas_list, list(selection.refs))
+        t_exp = self.dataset.transmission(meas_list, list(selection.refs))
         f_axis_tile = np.tile(self.freq_axis, (len(meas_list), 1))
-        t_exp_stacked = np.stack((f_axis_tile, t_exp[:, self.freq_idx], np.zeros_like(f_axis_tile)), axis=2)
-        return format_meas_dict(meas_list, t_exp_stacked, self.dataset_eval.only_eval_avg)
+        t_exp_stacked = np.stack((f_axis_tile, t_exp[:, self.freq_range_idx], np.zeros_like(f_axis_tile)), axis=2)
+        return format_meas_dict(meas_list, t_exp_stacked, self.only_eval_avg)
 
     def n_guess(self, selection):
         meas_list = list(selection.sams)
-        d_init = np.mean(self.dataset_eval.d_opt_axis_bounds.magnitude)
-        ref_idx = self.dataset_eval.dataset.refractive_index_estimate(meas_list, ref_meas_=list(selection.refs),
+        d_init = np.mean(self.d_opt_axis_bounds.magnitude)
+        ref_idx = self.dataset.refractive_index_estimate(meas_list, ref_meas_=list(selection.refs),
                                                                       d=d_init)
         f_axis_tile = np.tile(self.freq_axis, (len(meas_list), 1))
-        ref_idx_stacked = np.stack((f_axis_tile, ref_idx[:, self.freq_idx], np.zeros_like(f_axis_tile)), axis=2)
-        return format_meas_dict(meas_list, ref_idx_stacked, self.dataset_eval.only_eval_avg)
+        ref_idx_stacked = np.stack((f_axis_tile, ref_idx[:, self.freq_range_idx], np.zeros_like(f_axis_tile)), axis=2)
+        return format_meas_dict(meas_list, ref_idx_stacked, self.only_eval_avg)
 
-    def build_context(self, selection) -> SelectionContext:
-        return SelectionContext(
-            selection=selection,
-            ref_fd_dict=self.ref_fd_dict(selection),
-            t_exp_dict=self.t_exp_dict(selection),
-            n_guess=self.n_guess(selection),
-            t_model_kwargs=self.dataset_eval.get_t_model_kwargs(),
-            smoothing=(self.settings.eval_opt.smoothing_avg_n,
-                       self.settings.eval_opt.smoothing_avg_iters),
-        )
+    @action("Fit transmission model", group=t_fit_grp_name)
+    def fit_unknown_layer(self):
+        selection = self.dataset.measurement_selector.get_selection()
+        if selection is None:
+            return
+        self._evaluate_queue(no_queue_selection=selection)
+
+    @action("Evaluate queue", group=t_fit_grp_name,
+            enable_checker=lambda self: self.dataset.measurement_selector.selection_queue is not None)
+    def evaluate_queue(self):
+        queue = self.dataset.measurement_selector.selection_queue
+        if queue is None:
+            logging.warning("Queue is not enabled")
+            return
+        if len(queue) == 0:
+            logging.warning("Queue is empty")
+            return
+        self._evaluate_queue()
+
+    def _evaluate_queue(self, no_queue_selection=None):
+        if self._active_eval is not None:
+            logging.warning("Optimization is already running")
+            return
+
+        if no_queue_selection is not None:
+            queue = SelectionQueue()
+            queue.append(no_queue_selection)
+        else:
+            queue = self.dataset.measurement_selector.selection_queue
+        self._cancel_event = threading.Event()
+
+        evaluator = self
+        self._active_eval = evaluator
+
+        def bg_worker():
+            try:
+                queue_id, next_selection = queue.pop_next()
+                while next_selection is not None and not self._cancel_event.is_set():
+                    logging.info(f"Evaluating selection {queue_id}")
+                    qs_eval_data = evaluator.eval_selection(next_selection)
+                    if not self._cancel_event.is_set():
+                        self._result_ready(qs_eval_data)
+                    queue_id, next_selection = queue.pop_next()
+            except OptimizationCancelled:
+                logging.info("Optimization cancelled")
+            except Exception:
+                traceback.print_exc()
+            finally:
+                if self._active_eval is evaluator:
+                    self._active_eval = None
+
+        if self._thread_executor is None:
+            self._thread_executor = ThreadPoolExecutor(max_workers=1)
+        self._thread_executor.submit(bg_worker)
 
     def calc_uncertainties(self, opt_res: SingleResultData, selection):
         meas_list, ref_list = list(selection.sams), list(selection.refs)
 
-        sam_fd = self.dataset_eval.dataset.get_multi_data(meas_list, Domain.Frequency)
-        ref_fd = self.dataset_eval.dataset.get_multi_data(ref_list, Domain.Frequency)
+        sam_fd = self.dataset.get_multi_data(meas_list, Domain.Frequency)
+        ref_fd = self.dataset.get_multi_data(ref_list, Domain.Frequency)
 
-        t_exp_amp = self.dataset_eval.dataset.amplitude_transmission(meas_list, ref_list)
-        t_exp_phi = self.dataset_eval.dataset.phase_difference(meas_list, ref_list)
+        t_exp_amp = self.dataset.amplitude_transmission(meas_list, ref_list)
+        t_exp_phi = self.dataset.phase_difference(meas_list, ref_list)
 
         freq_tile = np.tile(self.freq_axis, (len(meas_list), 1))
-        t_exp_amp = np.stack((freq_tile, t_exp_amp[:, self.freq_idx], np.zeros_like(freq_tile)), axis=2)
-        t_exp_phi = np.stack((freq_tile, t_exp_phi[:, self.freq_idx], np.zeros_like(freq_tile)), axis=2)
+        t_exp_amp = np.stack((freq_tile, t_exp_amp[:, self.freq_range_idx], np.zeros_like(freq_tile)), axis=2)
+        t_exp_phi = np.stack((freq_tile, t_exp_phi[:, self.freq_range_idx], np.zeros_like(freq_tile)), axis=2)
 
         sam_fd_avg = avg_data_array(sam_fd)
         ref_fd_avg = avg_data_array(ref_fd)
@@ -216,25 +276,36 @@ class QSpaceEval:
 
         return q_val
 
-    def eval_selection(self, selection, progress_carrier=None, cancel_event=None) -> EvalResultData:
+    def build_context(self, selection) -> SelectionContext:
+        return SelectionContext(
+            selection=selection,
+            ref_fd_dict=self.ref_fd_dict(selection),
+            t_exp_dict=self.t_exp_dict(selection),
+            n_guess=self.n_guess(selection),
+            t_model_kwargs=self.get_t_model_kwargs(),
+            smoothing=(self.settings.eval_opt.smoothing_avg_n,
+                       self.settings.eval_opt.smoothing_avg_iters),
+        )
+
+    def eval_selection(self, selection) -> EvalResultData:
         ctx = self.build_context(selection)
 
-        iteration_count = self.dataset_eval.iteration_count
-        is_iterative = self.dataset_eval.iterative_thickness_optimization
+        iteration_count = self.iteration_count
+        is_iterative = self.iterative_thickness_optimization
 
         sel_meas_list = list(selection.sams)
 
         common_opt_params = {
             "freq_axis": self.freq_axis,
             "transmission_model": self.transmission_model.value,
-            "cost_fun": self.cost_fun,
+            "cost_fun": self.selected_cost_fun.value,
             "minimizer_kwargs": self.settings.shgo_options.get_minimizer_kwargs(),
             "shgo_options": self.settings.shgo_options.get_shgo_options(),
             "n": self.settings.shgo_options.n,
             "iters": self.settings.shgo_options.iters,
             **ctx.t_model_kwargs,
         }
-        if self.dataset_eval.optimization_method == OptimizationMethods.Spline:
+        if self.optimization_method == OptimizationMethods.Spline:
             common_opt_params["knot_count"] = self.settings.eval_opt.knot_cnt
             common_opt_params["reg_n"] = self.settings.eval_opt.reg_n
             common_opt_params["reg_k"] = self.settings.eval_opt.reg_k
@@ -252,13 +323,13 @@ class QSpaceEval:
                 shift_axis = [0]
 
             tasks = []
-            if not self.dataset_eval.iterative_thickness_optimization:
-                bnds = self.dataset_eval.d_opt_axis_bounds
-                step = self.dataset_eval.d_opt_axis_step
+            if not self.iterative_thickness_optimization:
+                bnds = self.d_opt_axis_bounds
+                step = self.d_opt_axis_step
                 num_steps = int(round((bnds[1].magnitude - bnds[0].magnitude) / step.magnitude)) + 1
                 d_axis = np.linspace(bnds[0].magnitude, bnds[1].magnitude, num_steps)
             else:
-                shrink_factor = self.dataset_eval.bound_shrink_factor
+                shrink_factor = self.bound_shrink_factor
                 d0 = self.opt_state["d"].magnitude
                 d_min, d_max = d0 * (1 + shrink_factor), d0 * (1 - shrink_factor)
                 d_axis = np.linspace(d_min, d_max, 5)
@@ -270,7 +341,7 @@ class QSpaceEval:
             return tasks
 
         def check_cancel():
-            if cancel_event is not None and cancel_event.is_set():
+            if self._cancel_event is not None and self._cancel_event.is_set():
                 raise OptimizationCancelled()
 
         def get_result(future):
@@ -289,19 +360,18 @@ class QSpaceEval:
                 logging.info(f"Thickness refinement iteration {it_idx} / {tot_it}")
             if iteration_progress is None or iteration_progress[0] == 0:
                 logging.info(f"Starting optimization")
-                if progress_carrier is not None:
-                    progress_carrier.progress_changed.emit(0)
+                self.progress_carrier.progress_changed.emit(0)
 
             check_cancel()
             task_results = []
-            with ProcessPoolExecutor(max_workers=self.dataset_eval.number_of_workers) as executor:
+            with ProcessPoolExecutor(max_workers=self.number_of_workers) as executor:
                 self.current_process_executor = executor
                 try:
-                    worker_func = partial(self.dataset_eval.optimization_method.value, config_dict=opt_config)
+                    worker_func = partial(self.optimization_method.value, config_dict=opt_config)
                     futures = [executor.submit(worker_func, d, shift) for d, shift in tasks]
                     total_tasks = len(futures)
 
-                    logging.info(f"Processing {total_tasks} tasks")
+                    logging.info(f"Processing {total_tasks} task{'s'*(total_tasks > 1)}")
                     for fut_idx, future in enumerate(futures):
                         res: SingleResultData = get_result(future)
                         completed_tasks = fut_idx + 1
@@ -313,8 +383,7 @@ class QSpaceEval:
                         info_str += f"with a shift of {res.shift}"
                         logging.info(info_str)
 
-                        if progress_carrier is not None:
-                            progress_carrier.progress_changed.emit(percentage / 100)
+                        self.progress_carrier.progress_changed.emit(percentage / 100)
 
                         q_val = self.calc_q_val(res)
                         if q_val < self.opt_state["q_min"]:
@@ -335,7 +404,7 @@ class QSpaceEval:
 
         eval_result_data = EvalResultData()
         eval_result_data.result_type = "Transmission fit"
-        eval_result_data.dataset_path = self.dataset_eval.dataset.data_path
+        eval_result_data.dataset_path = self.dataset.data_path
         eval_result_data.measurement_names = [meas.filepath.name for meas in sel_meas_list]
         eval_result_data.model_name = self.transmission_model.name
         eval_result_data.measurement_quantity = "Transmission"
@@ -385,7 +454,7 @@ class QSpaceEval:
         model_kwargs["nfp"] = self.settings.eval_opt.sim_nfp
         model_kwargs["shift"] = self.settings.eval_opt.sim_shift.magnitude
 
-        if self.dataset_eval.is_two_layer_t_model():
+        if self.is_two_layer_t_model():
             model_kwargs["n_sub"] = n_sub
             model_kwargs["h"] = self.settings.eval_opt.sim_h.magnitude
             n = n_film

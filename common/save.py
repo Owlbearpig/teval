@@ -43,7 +43,6 @@ def _getManipulatorValueInPreferredUnits(m):
     return val
 
 class ResultSaver(ComponentBase):
-
     base_path = PathTrait(default_value=result_dir, is_file=False, must_exist=False).tag(name="Path")
 
     fileNameTemplate = Unicode('{date}-{name}-{result_type}',
@@ -133,9 +132,8 @@ class ResultSaver(ComponentBase):
 
         return str(save_path.joinpath(formattedName))
 
-    def _saveHDF5(self, eval_result: EvalResult, only_keys=None):
-        fileName = self._getFileName(eval_result.eval_result_data.measurement_names)
-        eval_data: EvalResultData = eval_result.eval_result_data
+    def _saveHDF5(self, eval_data: EvalResultData, only_keys=None):
+        fileName = self._getFileName(eval_data.measurement_names)
 
         def write_quantity(group, name, quantity):
             if hasattr(quantity, "magnitude"):
@@ -210,15 +208,11 @@ class ResultSaver(ComponentBase):
 
         return fileName
 
-    def process(self, eval_result):
+    def save_result_data(self, eval_result_data: EvalResultData, keys=None):
         if not self.enabled:
             logging.info("Data storage is disabled, not saving results.")
             return
-        eval_data = eval_result.eval_result_data
-        self.save_selection(eval_data)
-
-    def save_selection(self, eval_data, keys=None):
-        filename = self._saveHDF5(eval_data, only_keys=keys)
+        filename = self._saveHDF5(eval_result_data, only_keys=keys)
         if keys is None:
             logging.info(f"Saved result as {filename}")
         else:

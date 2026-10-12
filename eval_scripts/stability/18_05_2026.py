@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 from common.settings import Settings
 from traitlets import Instance, Float
 from common.dataset_plotter import DataSetPlotter
-from common.eval_component.dataset_eval import DatasetEval
 from common.consts import c_thz, eps0_thz
 from common.components import action
 
