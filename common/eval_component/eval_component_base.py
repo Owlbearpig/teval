@@ -5,18 +5,45 @@ from common.functions import f_axis_idx_map
 import numpy as np
 import threading
 import logging
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Slot, QTimer
 from common.eval_component.transfer_functions import TransmissionModels
 from common.eval_component.cost_functions import CostFunctions
 from common.traits import Q_, ValueRange, Path as TPath
-from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance
+from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance, Unicode
 from pathlib import Path
+
+class BusyIndicator(QObject):
+    running_changed = Signal(bool)
+    frame_changed = Signal(str)
+
+    frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._idx = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(100)
+        self._timer.timeout.connect(self._tick)
+        self.running_changed.connect(self._set_running)
+
+    @Slot(bool)
+    def _set_running(self, running):
+        if running:
+            self._idx = 0
+            self._timer.start()
+        else:
+            self._timer.stop()
+            self.frame_changed.emit("Idle")
+
+    def _tick(self):
+        self._idx = (self._idx + 1) % len(self.frames)
+        self.frame_changed.emit(f"{self.frames[self._idx]} Running")
 
 class ResultSignal(QObject):
     result_ready = Signal(EvalResultData)
 
-class ProgressSignalCarrier(QObject):
-    progress_changed = Signal(float)
+class RemainingTaskCntSignal(QObject):
+    cnt_changed = Signal(int)
 
 class EvalComponentBase(ComponentBase):
     selected_result_path = TPath(Path("")).tag(name="Load result", en_save=False, priority=-100)
@@ -28,7 +55,16 @@ class EvalComponentBase(ComponentBase):
 
     only_eval_avg = Bool(True).tag(name="Only evaluate average", priority=1003)
     fit_range = ValueRange([Q_(0.50, "THz"), Q_(2.20, "THz")]).tag(name="Fit range", priority=1004)
-    optimization_progress = Float(0, min=0, max=1, read_only=True).tag(name="Progress", priority=1005, en_save=False)
+
+    prog_grp = "Progress"
+    activity = Unicode("Idle", read_only=True).tag(name="Status", group=prog_grp,
+                                                   priority=1004, en_save=False)
+    optimization_progress = Float(0, min=0, max=1, read_only=True).tag(name="Progress", group=prog_grp,
+                                                                       priority=1005, en_save=False)
+    completed_tasks = Integer(0, read_only=True).tag(name="Completed tasks",
+                                                     priority=1006, group=prog_grp, en_save=False)
+    total_tasks = Integer(0, read_only=True).tag(name="Total tasks",
+                                                 priority=1007, group=prog_grp, en_save=False)
 
     current_result = Instance(EvalResult)
     result_saver = Instance(ResultSaver)
@@ -47,12 +83,14 @@ class EvalComponentBase(ComponentBase):
         self.add_result_ready_callback(self.result_saver.save_result_data)
         self.current_result.signals.save_requested.connect(self.result_saver.save_result_data)
 
-        self.progress_carrier = ProgressSignalCarrier()
-        self.progress_carrier.progress_changed.connect(self.update_progress)
+        self.task_cnt_carrier = RemainingTaskCntSignal()
+        self.task_cnt_carrier.cnt_changed.connect(self.update_progress)
 
         self._cancel_event = threading.Event()
         self._thread_executor = None
-        self._active_eval = None
+        self.busy_indicator = BusyIndicator()
+        self.busy_indicator.frame_changed.connect(self._set_activity)
+        self._active_eval_ = None
 
     def __exit__(self, *args):
         if self.settings is not None:
@@ -62,6 +100,18 @@ class EvalComponentBase(ComponentBase):
         if self.settings is not None:
             self.settings.load_configuration(self)
         return self
+
+    def _set_activity(self, text):
+        self.set_trait("activity", text)
+
+    @property
+    def _active_eval(self):
+        return self._active_eval_
+
+    @_active_eval.setter
+    def _active_eval(self, value):
+        self._active_eval_ = value
+        self.busy_indicator.running_changed.emit(value is not None)
 
     def add_result_ready_callback(self, callback):
         self.result_carrier.result_ready.connect(callback)
@@ -75,7 +125,7 @@ class EvalComponentBase(ComponentBase):
     def _request_cancel(self):
         self._cancel_event.set()
 
-    @action("Cancel evaluation")
+    @action("Cancel evaluation", priority=1004)
     def cancel_evaluation(self):
         if self._active_eval is None:
             logging.info("Evaluation is not running")
@@ -83,8 +133,21 @@ class EvalComponentBase(ComponentBase):
         self._request_cancel()
         logging.info("Cancelling evaluation...")
 
-    def update_progress(self, progress_value):
-        self.set_trait("optimization_progress", progress_value)
+    def update_progress(self, task_cnt_change: int = 0):
+        if task_cnt_change == 0:
+            completed, total = 0, 0
+            progress = 0
+        elif task_cnt_change == 1:
+            completed, total = self.completed_tasks + task_cnt_change, self.total_tasks
+        else:
+            completed, total = 0, task_cnt_change
+            progress = 0
+
+        self.set_trait("completed_tasks", completed)
+        self.set_trait("total_tasks", total)
+
+        progress = 0 if not self.total_tasks else self.completed_tasks / self.total_tasks
+        self.set_trait("optimization_progress", progress)
 
     @property
     def freq_axis(self):

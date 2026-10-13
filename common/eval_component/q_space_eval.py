@@ -72,7 +72,7 @@ class QSpaceEval(EvalComponentBase):
                                group=t_fit_grp_name).tag(name="Selected transmission model", priority=-1)
 
     d_opt_axis_bounds = ValueRange([Q_(500, "µm"), Q_(580, "µm", )],
-                                   group=t_fit_grp_name).tag(name="Custom thickness axis bounds", priority=0)
+                                   group=t_fit_grp_name).tag(name="Thickness axis bounds", priority=0)
     d_opt_axis_step = Quantity(Q_(10, "µm"), group=t_fit_grp_name).tag(name="Custom thickness axis step", priority=1)
     iterative_thickness_optimization = Bool(True,
                                             group=t_fit_grp_name).tag(name="Optimize thickness iteratively", priority=2)
@@ -88,8 +88,9 @@ class QSpaceEval(EvalComponentBase):
 
         self.opt_state = {}
 
-    def reset_opt_state(self):
-        self.opt_state["d"] = self.settings.eval_opt.d
+    def reset_state(self):
+        self.task_cnt_carrier.cnt_changed.emit(0)
+        self.opt_state["d"] = None
         self.opt_state["shift"] = Q_(0, "fs")
         self.opt_state["q_min"] = np.inf
 
@@ -290,8 +291,8 @@ class QSpaceEval(EvalComponentBase):
     def eval_selection(self, selection) -> EvalResultData:
         ctx = self.build_context(selection)
 
-        iteration_count = self.iteration_count
         is_iterative = self.iterative_thickness_optimization
+        iteration_count = self.iteration_count if is_iterative else 1
 
         sel_meas_list = list(selection.sams)
 
@@ -322,8 +323,9 @@ class QSpaceEval(EvalComponentBase):
             if not self.settings.eval_opt.enable_shift_opt:
                 shift_axis = [0]
 
+            opt_d = self.opt_state["d"]
             tasks = []
-            if not self.iterative_thickness_optimization:
+            if not self.iterative_thickness_optimization or opt_d is None:
                 bnds = self.d_opt_axis_bounds
                 step = self.d_opt_axis_step
                 num_steps = int(round((bnds[1].magnitude - bnds[0].magnitude) / step.magnitude)) + 1
@@ -331,9 +333,9 @@ class QSpaceEval(EvalComponentBase):
             else:
                 shrink_factor = self.bound_shrink_factor
                 d0 = self.opt_state["d"].magnitude
-                d_min, d_max = d0 * (1 + shrink_factor), d0 * (1 - shrink_factor)
+                d_min = np.round(d0 * (1 - shrink_factor), 3)
+                d_max = np.round(d0 * (1 + shrink_factor), 3)
                 d_axis = np.linspace(d_min, d_max, 5)
-
             for d in d_axis:
                 for shift in shift_axis:
                     tasks.append(np.array([d, shift], dtype=float))
@@ -354,13 +356,14 @@ class QSpaceEval(EvalComponentBase):
                 check_cancel()
                 raise
 
-        def process_tasks(tasks, opt_config, iteration_progress=None):
-            if iteration_progress is not None:
-                it_idx, tot_it = iteration_progress
-                logging.info(f"Thickness refinement iteration {it_idx} / {tot_it}")
-            if iteration_progress is None or iteration_progress[0] == 0:
-                logging.info(f"Starting optimization")
-                self.progress_carrier.progress_changed.emit(0)
+        def process_tasks(tasks, opt_config, iteration_progress):
+            it_idx, tot_it = iteration_progress
+            if it_idx == 0:
+                total_tasks = len(tasks) + 5 * (tot_it - 1)
+                self.task_cnt_carrier.cnt_changed.emit(total_tasks)
+                logging.info(f"Processing a total of {total_tasks} task{'s' * (total_tasks > 1)}")
+            if tot_it != 1:
+                logging.info(f"Starting thickness refinement iteration {it_idx+1} / {tot_it}")
 
             check_cancel()
             task_results = []
@@ -369,21 +372,14 @@ class QSpaceEval(EvalComponentBase):
                 try:
                     worker_func = partial(self.optimization_method.value, config_dict=opt_config)
                     futures = [executor.submit(worker_func, d, shift) for d, shift in tasks]
-                    total_tasks = len(futures)
 
-                    logging.info(f"Processing {total_tasks} task{'s'*(total_tasks > 1)}")
-                    for fut_idx, future in enumerate(futures):
+                    for future in futures:
                         res: SingleResultData = get_result(future)
-                        completed_tasks = fut_idx + 1
-                        percentage = (completed_tasks / total_tasks) * 100
+                        self.task_cnt_carrier.cnt_changed.emit(1)
 
-                        progress_str = f"Processed task {completed_tasks}/{total_tasks} ({percentage:.1f}%)"
-                        logging.info(progress_str)
                         info_str = f"Finished optimizing thickness {np.round(res.d, 2)} "
                         info_str += f"with a shift of {res.shift}"
                         logging.info(info_str)
-
-                        self.progress_carrier.progress_changed.emit(percentage / 100)
 
                         q_val = self.calc_q_val(res)
                         if q_val < self.opt_state["q_min"]:
@@ -413,16 +409,15 @@ class QSpaceEval(EvalComponentBase):
             check_cancel()
             if meas != "Average":
                 logging.info(f"Evaluating measurement {meas.filepath.name}")
-            self.reset_opt_state()
+            self.reset_state()
 
             opt_results: list[SingleResultData] = []
             for iter_idx in range(max(1, iteration_count)):
                 check_cancel()
-                it_prog = (iter_idx, iteration_count) if is_iterative else None
                 new_tasks = get_new_tasks()
-                opt_results.extend(process_tasks(new_tasks, opt_configs[meas], iteration_progress=it_prog))
-                if not is_iterative:
-                    break
+                new_results = process_tasks(new_tasks, opt_configs[meas],
+                                            iteration_progress=(iter_idx, iteration_count))
+                opt_results.extend(new_results)
 
             ready_results = self.prepare_results(meas, opt_results, ctx)
             meas_results = {f"result_{meas_idx}_{res_idx:03d}": res for res_idx, res in enumerate(ready_results)}

@@ -114,7 +114,7 @@ class ResultSaver(ComponentBase):
 
         return no_time_names[0] if no_time_names else meas_names[0]
 
-    def _getFileName(self, eval_data: EvalResultData):
+    def _getFileName(self, eval_data: EvalResultData, saved_keys=None):
         save_path = self.base_path
         save_path.mkdir(parents=True, exist_ok=True)
 
@@ -131,13 +131,23 @@ class ResultSaver(ComponentBase):
                                                      name=self._get_main_file_name(eval_data.measurement_names),
                                                      **manipValues,
                                                      **attributeValues)
+        if saved_keys is not None and len(saved_keys) == 1:
+            d, shift = eval_data.results[next(iter(saved_keys))].d, eval_data.results[next(iter(saved_keys))].shift
+            formattedName += "-{:.3fC~}-{:.3fC~}".format(d, shift).replace(" ", "_")
         formattedName += ".hdf5"
         formattedName = formattedName.translate(self._fileNameTranslationTable)
 
         return str(save_path.joinpath(formattedName))
 
     def _saveHDF5(self, eval_data: EvalResultData, only_keys=None):
-        fileName = self._getFileName(eval_data)
+        if only_keys is not None:
+            saved_keys = set(only_keys)
+        elif self.save_only_optimum:
+            saved_keys = set(eval_data.optimum_results.values())
+        else:
+            saved_keys = set(eval_data.results)
+
+        fileName = self._getFileName(eval_data, saved_keys)
 
         def write_quantity(group, name, quantity):
             if hasattr(quantity, "magnitude"):
@@ -162,12 +172,6 @@ class ResultSaver(ComponentBase):
                 except IndexError:
                     dset_ax.attrs["axis_label"] = ""
 
-        if only_keys is not None:
-            saved_keys = set(only_keys)
-        elif self.save_only_optimum:
-            saved_keys = set(eval_data.optimum_results.values())
-        else:
-            saved_keys = set(eval_data.results)
 
         with h5py.File(fileName, "w") as f:
             f.attrs["result_type"] = eval_data.result_type

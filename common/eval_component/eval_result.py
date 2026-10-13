@@ -140,10 +140,12 @@ class EvalResult(ComponentBase):
             x_vals = np.array([res.d.magnitude for res in results], dtype=float)
             y_vals = np.array([res.optimization_info["q_val"].magnitude for res in results], dtype=float)
             sort_idx = np.argsort(x_vals)
-            plt.plot(x_vals[sort_idx], y_vals[sort_idx], label=f"shift={shift}")
-
             q_argmin = np.argmin(y_vals)
-            logging.info(f"Optimum thickness: {results[q_argmin].d} (shift: {results[q_argmin].shift})")
+            d_opt, shift_opt = np.round(results[q_argmin].d, 3), np.round(results[q_argmin].shift, 3)
+            plt.plot(x_vals[sort_idx], y_vals[sort_idx], label=f"shift={shift}", marker="o")
+            plt.scatter(x_vals[q_argmin], y_vals[q_argmin], c="red", label=f"Optimum (d={d_opt})")
+
+            logging.info(f"Optimum thickness: {d_opt} (shift: {shift_opt})")
 
         plt.xlabel("Thickness (µm)")
         plt.ylabel("Q-value")
@@ -181,8 +183,10 @@ class EvalResult(ComponentBase):
             selected_meas = change["new"]
             optimization_results = [res for res in self.eval_result_data.results.values()
                                     if res.measurement == selected_meas]
-            self.thicknesses.items = sorted(list(set([str(res.d.magnitude) for res in optimization_results])))
-            self.shifts.items = sorted(list(set([str(res.shift.magnitude) for res in optimization_results])))
+            thicknesses = sorted(list(set([res.d.magnitude for res in optimization_results])))
+            shifts = sorted(list(set([res.shift.magnitude for res in optimization_results])))
+            self.thicknesses.items = [str(d) for d in thicknesses]
+            self.shifts.items = [str(shift) for shift in shifts]
 
             opt_res = self.eval_result_data.results.get(
                 self.eval_result_data.optimum_results.get(selected_meas))
