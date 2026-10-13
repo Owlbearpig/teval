@@ -14,7 +14,6 @@ from pathlib import Path
 
 class ResultSignal(QObject):
     result_ready = Signal(EvalResultData)
-    save_selected = Signal(EvalResultData, list)
 
 class ProgressSignalCarrier(QObject):
     progress_changed = Signal(float)
@@ -24,7 +23,7 @@ class EvalComponentBase(ComponentBase):
     number_of_workers = Integer(8).tag(name="Number of cpu cores to assign", priority=2)
     transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.tmm_1layer).tag(
         name="Selected transmission model", priority=-1)
-    selected_cost_fun = TEnum(CostFunctions, default_value=CostFunctions.abs_cost,
+    selected_cost_fun = TEnum(CostFunctions, default_value=CostFunctions.combined_cost,
                               help="Model to experimental data metric").tag(name="Selected cost function", priority=3)
 
     only_eval_avg = Bool(True).tag(name="Only evaluate average", priority=1003)
@@ -39,14 +38,14 @@ class EvalComponentBase(ComponentBase):
         self.dataset = dataset
         self.result_carrier = ResultSignal()
 
-        self.current_result = EvalResult(object_name="Current result", result_carrier=self.result_carrier)
+        self.current_result = EvalResult(object_name="Current result")
 
         self.result_saver = ResultSaver()
-        self.result_saver.registerObjectAttribute(EvalResultData(), "result_type")
+        self.result_saver.registerObjectAttribute(EvalResultData, "result_type")
 
         self.add_result_ready_callback(self.current_result.parse_eval_result_data)
         self.add_result_ready_callback(self.result_saver.save_result_data)
-        self.result_carrier.save_selected.connect(self.result_saver.save_result_data)
+        self.current_result.signals.save_requested.connect(self.result_saver.save_result_data)
 
         self.progress_carrier = ProgressSignalCarrier()
         self.progress_carrier.progress_changed.connect(self.update_progress)

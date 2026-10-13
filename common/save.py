@@ -45,34 +45,39 @@ def _getManipulatorValueInPreferredUnits(m):
 class ResultSaver(ComponentBase):
     base_path = PathTrait(default_value=result_dir, is_file=False, must_exist=False).tag(name="Path")
 
-    fileNameTemplate = Unicode('{date}-{name}-{result_type}',
+    fileNameTemplate = Unicode('{date}-{name}',
                                help="File name template, valid identifiers "
                                     "are:\n"
                                     "{name}: The main file name\n"
                                     "{date}: The current date and time").tag(
-                               name="File name template")
+                               name="File name template", en_save=False)
     mainFileName = Unicode("data").tag(name="Main file name", fullwidth=True)
     save_only_optimum = Bool(False).tag(name="Save only optimum result")
     enabled = Bool(True, help="Whether data storage is enabled").tag(
                          name="Enabled")
-
-    _manipulators = {}
-    _attributes = {}
 
     # from https://msdn.microsoft.com/en-us/library/aa365247
     _forbiddenCharacters = r'"*/:<>?\|'
     _fileNameTranslationTable = str.maketrans(_forbiddenCharacters,
                                               '_' * len(_forbiddenCharacters))
 
-    def registerObjectAttribute(self, inst, attr, name=None):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._manipulators = {}
+        self._attributes = {}
+
+    def registerObjectAttribute(self, obj, attr, name=None):
         if name is None:
             name = attr
+        obj_repr = obj.__name__ if isinstance(obj, type) else str(obj)
+        self._attributes[name] = (obj, attr)
 
-        self._attributes[name] = (inst, attr)
+        placeholder = f"{{{name}}}"
+        if placeholder not in self.fileNameTemplate:
+            self.fileNameTemplate += f"-{placeholder}"
 
         trait = deepcopy(self.traits()['fileNameTemplate'])
-        additionalHelpString = ('\n{{{}}}: The value of "{}.{}"'
-                                .format(name, str(inst), attr))
+        additionalHelpString = ('\n{{{}}}: The value of "{}.{}"'.format(name, obj_repr, attr))
         trait.help += additionalHelpString
         if 'help' in trait.metadata:
             trait.metadata['help'] += additionalHelpString
@@ -107,10 +112,9 @@ class ResultSaver(ComponentBase):
             if match:
                 return match.group(0)
 
-        return next(set(no_time_names)) if no_time_names else meas_names[0]
+        return no_time_names[0] if no_time_names else meas_names[0]
 
-    def _getFileName(self, meas_names):
-
+    def _getFileName(self, eval_data: EvalResultData):
         save_path = self.base_path
         save_path.mkdir(parents=True, exist_ok=True)
 
@@ -120,11 +124,11 @@ class ResultSaver(ComponentBase):
                        .format(_getManipulatorValueInPreferredUnits(m))
                        for k, m in self._manipulators.items()}
 
-        attributeValues = {k: self._format_attribute(inst, name)
-                           for k, (inst, name) in self._attributes.items()}
-
+        type_checker = lambda obj: eval_data if isinstance(obj, type) else obj
+        attributeValues = {k: self._format_attribute(type_checker(obj), name)
+                           for k, (obj, name) in self._attributes.items()}
         formattedName = self.fileNameTemplate.format(date=date,
-                                                     name=self._get_main_file_name(meas_names),
+                                                     name=self._get_main_file_name(eval_data.measurement_names),
                                                      **manipValues,
                                                      **attributeValues)
         formattedName += ".hdf5"
@@ -133,7 +137,7 @@ class ResultSaver(ComponentBase):
         return str(save_path.joinpath(formattedName))
 
     def _saveHDF5(self, eval_data: EvalResultData, only_keys=None):
-        fileName = self._getFileName(eval_data.measurement_names)
+        fileName = self._getFileName(eval_data)
 
         def write_quantity(group, name, quantity):
             if hasattr(quantity, "magnitude"):

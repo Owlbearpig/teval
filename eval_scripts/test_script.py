@@ -20,6 +20,7 @@ redp_labels = {
 }
 
 settings_file = "18_05_2026"
+settings_file = ""
 sub_settings_file = "18_05_2026_sub"
 
 

@@ -54,7 +54,7 @@ class GridWorker(QThread):
         x_idxs = np.argmin(np.abs(positions[:, 0, None] - self.image_plot.img_shape["x_coords"]), axis=1)
         y_idxs = np.argmin(np.abs(positions[:, 1, None] - self.image_plot.img_shape["y_coords"]), axis=1)
 
-        logging.info(f"Calculating {sel_quant} grid values")
+        logging.info(f"Calculating {sel_quant.name} grid values")
         num_meas = len(meas_set)
         for i in range(0, num_meas, self.batch_size):
             batch_meas = meas_set[i : i + self.batch_size]
@@ -73,7 +73,7 @@ class GridWorker(QThread):
             processed = min(i + self.batch_size, num_meas) / num_meas
             self.progress_changed.emit(processed)
 
-        logging.info(f"Finished calculating {sel_quant} grid values")
+        logging.info(f"Finished calculating {sel_quant.name} grid values")
         self.finished.emit(grid)
 
 

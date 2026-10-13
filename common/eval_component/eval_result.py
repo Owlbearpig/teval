@@ -39,6 +39,9 @@ class EvalResultData:
     results: dict[str, SingleResultData] = field(default_factory=dict)
     optimum_results: dict[str, str] = field(default_factory=dict)
 
+class EvalResultSignals(QObject):
+    save_requested = Signal(EvalResultData, list)
+
 class EvalResult(ComponentBase):
     quantity_dict = QuantityDict().tag(name="Quantity plot")
 
@@ -78,10 +81,10 @@ class EvalResult(ComponentBase):
     thicknesses = StrListSelection(group="Thicknesses (µm)", read_only=True).tag(max_width=70, combine=True, priority=2)
     shifts = StrListSelection(group="Pulse shifts (fs)", read_only=True).tag(max_width=70, combine=True, priority=3)
 
-    def __init__(self, result_carrier=None, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.eval_result_data: EvalResultData = EvalResultData()
-        self.result_carrier = result_carrier
+        self.signals = EvalResultSignals()
 
         self.set_trait("measurement_list", StrList())
         self.set_trait("thicknesses", StrList())
@@ -165,10 +168,7 @@ class EvalResult(ComponentBase):
         if key is None:
             logging.warning("No result selected")
             return
-        if self.result_carrier is not None:
-            self.result_carrier.save_selected.emit(self.eval_result_data, [key])
-        else:
-            logging.warning("Result carrier not connected")
+        self.signals.save_requested.emit(self.eval_result_data, [key])
 
     def set_simple_traits(self, trait_values):
         trait_names = self.trait_names()
