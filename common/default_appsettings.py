@@ -323,7 +323,6 @@ class QuantityEnum(Enum):
 
 class EvalOpt(ComponentBase):
     dt = TQuantity(Q_(0.0, "fs")).tag(name="Conductivity pulse shift")
-    fit_range = ValueRange([Q_(0.50, "THz"), Q_(2.20, "THz")]).tag(name="Fit range")
     phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(name="Phase correction fit range")
 
     delta_d = TQuantity(Q_(2.0, "µm")).tag(name="Thickness uncertainty")
@@ -349,8 +348,9 @@ class EvalOpt(ComponentBase):
                             group=transmission_sim_grp).tag(name="Simulation refractive index")
 
     q_space_eval_grp = "Q-value calculation"
-    normalize_q_vals = Bool(False, group=q_space_eval_grp).tag(name="Normalize q-vals")
-    q_space_range = ValueRange([Q_(0.75, "THz"), Q_(2.00, "THz")]).tag(name="Q-space minimization range",
+    normalize_q_vals = Bool(False, group=q_space_eval_grp).tag(name="Normalize q-values")
+    use_optimization_range = Bool(True, group=q_space_eval_grp).tag(name="Use fit range for calculation")
+    q_space_range = ValueRange([Q_(0.75, "THz"), Q_(2.00, "THz")]).tag(name="Separate q-space minimization range",
                                                                        group=q_space_eval_grp)
     q_space_quantity = TEnum(QSpaceQuantity, QSpaceQuantity.n).tag(name="Quantity used for q-value calculation",
                                                                    group=q_space_eval_grp)

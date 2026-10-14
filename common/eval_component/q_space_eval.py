@@ -1,11 +1,13 @@
 import logging
 import traceback
 import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.widgets import SpanSelector
 from common.eval_component.transfer_functions import TransmissionModels
 from common.eval_component.eval_component_base import EvalComponentBase
 from common.dataset import format_meas_dict
-from common.measurement_selection import Selection
-from common.default_appsettings import SimRISelection, Domain, QSpaceQuantity
+from common.measurement_selection import Selection, SelectionQueue
+from common.default_appsettings import SimRISelection, Domain, QSpaceQuantity, AppSettings
 from common.functions import f_axis_idx_map, moving_average, do_ifft, to_db, avg_data_array
 from common.eval_component.quantity_set import QuantityDataSet
 from common.eval_component.eval_result import EvalResultData, SingleResultData
@@ -20,15 +22,16 @@ from functools import partial
 from common.eval_component.single_opt import shgo_transmission_optimization
 from common.eval_component.t_fit_global import spline_transmission_optimization
 from dataclasses import dataclass, field
-from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance
+from common.dataset_plotter import PlotterCore
+from mpl_settings import mpl_style_params
+from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance, link
 from common.traits import Quantity, Q_, ValueRange, Path as TPath
-from common.measurement_selection import SelectionQueue
-from common.components import action
+from common.components import action, ComponentBase
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
 
-action = partial(action, check_init=True)
+action = partial(action, check_init=True, rc_params=mpl_style_params)
 
 
 class OptimizationCancelled(Exception):
@@ -63,6 +66,85 @@ class OptimizationMethods(Enum):
     Spline = member(spline_transmission_optimization)
     SHGO = member(shgo_transmission_optimization)
 
+class Preprocessing(PlotterCore):
+    fig_num = "Phase correction range"
+
+    freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
+        name="Plotted frequency range", priority=1000)
+    only_use_avg = Bool(True).tag(name="Only plot average", priority=1003)
+
+    phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(
+        name="Phase extrapolation range", group="Phase correction")
+
+    def __init__(self, dataset, **kwargs):
+        super().__init__(dataset, **kwargs)
+        self._fit_range_target = None
+        self._span_fit = None
+        self._span_phi = None
+
+    def set_fit_range_target(self, target):
+        if self._fit_range_target is not None:
+            self._fit_range_target.unobserve(self._on_target_fit_range, names="fit_range")
+        self._fit_range_target = target
+        target.observe(self._on_target_fit_range, names="fit_range")
+
+    def _on_target_fit_range(self, change):
+        self._set_extents(self._span_fit, change["new"])
+
+    @observe("phi_fit_range")
+    def _on_phi_fit_range(self, change):
+        self._set_extents(self._span_phi, change["new"])
+
+    @staticmethod
+    def _set_extents(span, rng):
+        if span is None:
+            return
+        f0, f1 = (q.magnitude for q in rng)
+        if not np.allclose(span.extents, (f0, f1)):
+            span.extents = (f0, f1)
+            span.ax.figure.canvas.draw_idle()
+
+    @action("Plot spectrum and phase", group="Phase correction")
+    def plot_phase_fit_selector(self):
+        plt.close(self.td_fig_num)
+        plt.close(self.fd_fig_num)
+
+        with self.plot_settings.override(auto_show=False):
+            meas_list = self.plot_waveform_impl(only_plot_avg=self.only_use_avg)
+        if meas_list is None:
+            return
+
+        plt.close(self.td_fig_num)  # time-domain figure isn't needed here
+        fig = plt.figure(self.fd_fig_num)
+        ax0, ax1 = fig.get_axes()
+
+        def _make_selector(ax, callback, color):
+            return SpanSelector(ax, callback, "horizontal", useblit=True,
+                                interactive=True, drag_from_anywhere=True,
+                                props=dict(facecolor=color, alpha=0.2))
+
+        def _on_fit_select(xmin, xmax):
+            tgt = self._fit_range_target
+            if tgt is None or xmax - xmin <= 0:
+                return
+            unit = tgt.fit_range[0].units
+            tgt.fit_range = [Q_(float(xmin), "THz").to(unit), Q_(float(xmax), "THz").to(unit)]
+
+        def _on_phi_select(xmin, xmax):
+            if xmax - xmin <= 0:
+                return
+            self.phi_fit_range = [Q_(float(xmin), "THz"), Q_(float(xmax), "THz")]
+
+        self._span_fit = _make_selector(ax0, _on_fit_select, "tab:blue")
+        self._span_phi = _make_selector(ax1, _on_phi_select, "tab:green")
+
+        if self._fit_range_target is not None:
+            self._set_extents(self._span_fit, self._fit_range_target.fit_range)
+        self._set_extents(self._span_phi, self.phi_fit_range)
+        ax0.set_xlim(*self.freq_range.magnitude)
+
+        self.plt_show()
+
 
 class QSpaceEval(EvalComponentBase):
     t_fit_grp_name = "Transmission q-space fit"
@@ -80,11 +162,13 @@ class QSpaceEval(EvalComponentBase):
     bound_shrink_factor = Float(0.20, group=t_fit_grp_name).tag(name="Thickness bounds shrink factor",
                                                                 priority=4)
 
+    preprocessing = Instance(Preprocessing)
 
     def __init__(self, dataset, **kwargs):
         super().__init__(dataset, **kwargs)
 
         self.current_process_executor = None
+        self.preprocessing = Preprocessing(dataset)
 
         self.opt_state = {}
 
@@ -120,7 +204,7 @@ class QSpaceEval(EvalComponentBase):
         selection = self.dataset.measurement_selector.get_selection()
         if selection is None:
             return
-        self._evaluate_queue(no_queue_selection=selection)
+        self._evaluate_queue_impl(no_queue_selection=selection)
 
     @action("Evaluate queue", group=t_fit_grp_name,
             enable_checker=lambda self: self.dataset.measurement_selector.selection_queue is not None)
@@ -132,9 +216,9 @@ class QSpaceEval(EvalComponentBase):
         if len(queue) == 0:
             logging.warning("Queue is empty")
             return
-        self._evaluate_queue()
+        self._evaluate_queue_impl()
 
-    def _evaluate_queue(self, no_queue_selection=None):
+    def _evaluate_queue_impl(self, no_queue_selection=None):
         if self._active_eval is not None:
             logging.warning("Optimization is already running")
             return
@@ -223,11 +307,15 @@ class QSpaceEval(EvalComponentBase):
                                           + 1j * delta_k, "")
 
     def calc_q_val(self, res_data: SingleResultData):
-        q_space_range = self.settings.eval_opt.q_space_range
-        freq_axis = res_data.freq_axis.magnitude
-        q_space_idx_range = f_axis_idx_map(freq_axis, q_space_range)
+        if self.settings.eval_opt.use_optimization_range:
+            q_space_range = self.fit_range
+        else:
+            q_space_range = self.settings.eval_opt.q_space_range
 
-        dt = np.mean(np.diff(freq_axis[q_space_idx_range]))
+        freq_axis = res_data.freq_axis.magnitude
+        freq_range_idx = f_axis_idx_map(freq_axis, q_space_range)
+
+        dt = np.mean(np.diff(freq_axis[freq_range_idx]))
         q_space_q = self.settings.eval_opt.q_space_quantity
 
         y = res_data.datasets["n"].data.magnitude
@@ -239,7 +327,7 @@ class QSpaceEval(EvalComponentBase):
             case QSpaceQuantity.alpha:
                 y = res_data.datasets[QSpaceQuantity.alpha.name].data.magnitude
 
-        y = y[q_space_idx_range]
+        y = y[freq_range_idx]
         y = y - np.mean(y)
 
         y = detrend(y, type="linear")

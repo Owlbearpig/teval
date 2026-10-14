@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from common.settings import Settings
 from traitlets import Instance, Float
-from common.dataset_plotter import DataSetPlotter
+from common.dataset_plotter import QuantityPlots
 from common.consts import c_thz, eps0_thz
 from common.components import action
 
@@ -29,7 +29,7 @@ class AppRoot(ComponentBase):
     # settings_sub = Instance(Settings)
     dataset = Instance(DataSet, allow_none=True)
     # dataset_sub = Instance(DataSet)
-    dataset_plotter = Instance(DataSetPlotter, allow_none=True)
+    dataset_plotter = Instance(QuantityPlots, allow_none=True)
     dataset_eval = Instance(DatasetEval, allow_none=True)
 
     def __init__(self):
@@ -41,7 +41,7 @@ class AppRoot(ComponentBase):
 
         # self.dataset_sub = DataSet(self.settings_sub, object_name="Dataset substrate")
         self.dataset_sub = None
-        self.dataset_plotter = DataSetPlotter(self.dataset, object_name="Dataset Plotter")
+        self.dataset_plotter = QuantityPlots(self.dataset, object_name="Dataset Plotter")
         self.dataset_eval = DatasetEval(self.dataset, self.dataset_sub, object_name="Dataset Evaluation")
         
     @action("Take new measurement")

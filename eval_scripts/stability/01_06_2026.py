@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from functions import WindowTypes, f_axis_idx_map
 from common.settings import Settings
 from traitlets import Instance, Float
-from common.dataset_plotter import DataSetPlotter
+from common.dataset_plotter import QuantityPlots
 from common.consts import c_thz, eps0_thz
 from common.components import action
 
@@ -34,14 +34,14 @@ class AppRoot(ComponentBase):
 
     settings = Instance(Settings)
     dataset = Instance(DataSet)
-    dataset_plotter = Instance(DataSetPlotter)
+    dataset_plotter = Instance(QuantityPlots)
 
     def __init__(self):
         super().__init__()
         self.settings = Settings()
         self.settings.plot_opt.redp_sensor_labels = redp_labels
         self.dataset = DataSet(dataset_path, self.settings, object_name="Dataset")
-        self.dataset_plotter = DataSetPlotter(self.dataset, object_name="Dataset Plotter")
+        self.dataset_plotter = QuantityPlots(self.dataset, object_name="Dataset Plotter")
 
     @action("Take new measurement")
     def takeMeasurement(self):

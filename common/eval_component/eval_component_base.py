@@ -26,7 +26,6 @@ class BusyIndicator(QObject):
         self._timer.timeout.connect(self._tick)
         self.running_changed.connect(self._set_running)
 
-    @Slot(bool)
     def _set_running(self, running):
         if running:
             self._idx = 0
@@ -56,15 +55,15 @@ class EvalComponentBase(ComponentBase):
     only_eval_avg = Bool(True).tag(name="Only evaluate average", priority=1003)
     fit_range = ValueRange([Q_(0.50, "THz"), Q_(2.20, "THz")]).tag(name="Fit range", priority=1004)
 
-    prog_grp = "Progress"
-    activity = Unicode("Idle", read_only=True).tag(name="Status", group=prog_grp,
+    process_status = "Processing"
+    activity = Unicode("Idle", read_only=True).tag(name="Status", group=process_status,
                                                    priority=1004, en_save=False)
-    optimization_progress = Float(0, min=0, max=1, read_only=True).tag(name="Progress", group=prog_grp,
+    optimization_progress = Float(0, min=0, max=1, read_only=True).tag(name="Progress", group=process_status,
                                                                        priority=1005, en_save=False)
     completed_tasks = Integer(0, read_only=True).tag(name="Completed tasks",
-                                                     priority=1006, group=prog_grp, en_save=False)
+                                                     priority=1006, group=process_status, en_save=False)
     total_tasks = Integer(0, read_only=True).tag(name="Total tasks",
-                                                 priority=1007, group=prog_grp, en_save=False)
+                                                 priority=1007, group=process_status, en_save=False)
 
     current_result = Instance(EvalResult)
     result_saver = Instance(ResultSaver)
@@ -76,7 +75,7 @@ class EvalComponentBase(ComponentBase):
 
         self.current_result = EvalResult(object_name="Current result")
 
-        self.result_saver = ResultSaver()
+        self.result_saver = ResultSaver(object_name="Result saver")
         self.result_saver.registerObjectAttribute(EvalResultData, "result_type")
 
         self.add_result_ready_callback(self.current_result.parse_eval_result_data)
@@ -125,7 +124,7 @@ class EvalComponentBase(ComponentBase):
     def _request_cancel(self):
         self._cancel_event.set()
 
-    @action("Cancel evaluation", priority=1004)
+    @action("Cancel evaluation", priority=1008, group=process_status)
     def cancel_evaluation(self):
         if self._active_eval is None:
             logging.info("Evaluation is not running")

@@ -1,4 +1,7 @@
 from __future__ import annotations
+
+from tokenize import group
+
 from common.components import ComponentBase, action
 from common.dataset import DataSet, format_meas_dict
 from common.measurement_selection import ReferenceSelection
@@ -25,6 +28,7 @@ import pandas as pd
 from matplotlib.backend_bases import MouseButton
 from PySide6.QtCore import QThread, Signal
 from enum import Enum
+import matplotlib as mpl
 
 action = partial(action, check_init=True, rc_params=mpl_style_params)
 
@@ -77,12 +81,11 @@ class GridWorker(QThread):
         self.finished.emit(grid)
 
 
-class PlotterBase(ComponentBase):
-    freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(name="Frequency range",
-                                                                                    priority=1000)
-    freq = Quantity(Q_(1.000, "THz")).tag(name="Selected frequency", priority=1001)
-    selected_quantity_enum = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(name="Selected quantity",
-                                                                                     priority=1002)
+class PlotterCore(ComponentBase):
+    freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
+        name="Frequency range", priority=1000)
+    only_use_avg = Bool(True).tag(name="Only use average", priority=1003)
+    legend_label = Unicode("").tag(name="Legend label")
 
     def __init__(self, dataset: DataSet, **kwargs):
         super().__init__(**kwargs)
@@ -102,25 +105,205 @@ class PlotterBase(ComponentBase):
         return self.dataset.measurements
 
     @property
-    def selected_quantity(self):
-        return self.selected_quantity_enum.value
-
-    @property
-    def selected_quantity_func(self):
-        return self.dataset.quantity_func(self.selected_quantity_enum,
-                                          freq_range=self.freq_range.magnitude)
-
-    @property
-    def sel_freq_idx(self):
-        return int(f_axis_idx_map(self.dataset.freq_axis, self.freq)[0])
-
-    @property
     def freq_axis(self):
         return self.dataset.freq_axis[self.freq_range_idx]
 
     @property
     def freq_range_idx(self):
         return f_axis_idx_map(self.dataset.freq_axis, self.freq_range)
+
+    @property
+    def td_fig_num(self):
+        fig_num_ext = self.plot_settings.fig_num_ext
+        return "Time domain" + fig_num_ext
+
+    @property
+    def fd_fig_num(self):
+        fig_num_ext = self.plot_settings.fig_num_ext
+        return "Frequency domain" + fig_num_ext
+
+    def get_legend_label(self, meas_):
+        if len(self.legend_label) < 2 or self.legend_label[:2] != "$$":
+            return self.legend_label
+        if isinstance(meas_, str):
+            return meas_
+
+        match = re.search(self.legend_label[2:], meas_.filepath.name)
+        if match:
+            return match.group(0)
+        else:
+            return self.legend_label
+
+    def paint_fd_plot(self):
+        if not plt.fignum_exists(self.fd_fig_num):
+            fig, (ax0, ax1) = plt.subplots(2, 1, num=self.fd_fig_num,
+                                           sharex=True, gridspec_kw={'hspace': 0})
+            ax0.set_xlabel("Frequency (THz)")
+            ax0.set_ylabel("Amplitude (dB)")
+            ax1.set_ylabel("Phase (rad)")
+        else:
+            fig = plt.figure(num=self.fd_fig_num)
+            ax0, ax1 = fig.get_axes()
+
+        return ax0, ax1
+
+    def plot(self, plot_data, plot_type=PlotType.plot, ax=None, is_avg=False, **kwargs):
+        if ax is None:
+            ax = plt
+        x, y, dy = plot_data[:, 0], plot_data[:, 1], plot_data[:, 2]
+        if plot_type == PlotType.plot:
+            ax.plot(x, y, **kwargs)
+        else:
+            ax.scatter(x, y, **kwargs)
+        if is_avg and self.settings.plot_opt.plot_standard_deviation:
+            ax.fill_between(x, y - dy, y + dy, alpha=0.2)
+
+    def plot_ref_impl(self, ref_list=None, only_plot_avg=None):
+        only_plot_avg = self.only_use_avg if only_plot_avg is None else only_plot_avg
+        if ref_list is None:
+            if self.dataset.measurement_selector.ref_sel_criterion == ReferenceSelection.file_selection:
+                ref_list = self.measurement_selector.ref_file_selection_to_ref_meas()
+            else:
+                selection = self.measurement_selector.get_selection()
+                ref_list = selection.refs if selection else None
+        if not ref_list:
+            logging.info("No reference measurements selected")
+            return
+
+        zero_crossing = self.dataset.get_zero_crossing(ref_list)
+
+        ref_td = self.dataset.get_multi_data(ref_list)
+        ref_fd = self.dataset.get_multi_data(ref_list, Domain.Frequency)
+        ref_fd_db = to_db(ref_fd)
+
+        if self.plot_settings.remove_t_offset:
+            ref_td[:, :, 0] -= ref_td[:, 0, 0]
+
+        if self.plot_settings.sub_noise_floor:
+            upper_end_f_slice = self.dataset.freq_axis > 6.0
+            noise_floor_db = np.mean(ref_fd_db[:, upper_end_f_slice, 1], axis=1)[:, np.newaxis]
+            ref_fd_db[:, :, 1] -= noise_floor_db
+
+        phi = np.unwrap(np.angle(ref_fd[:, :, 1]), axis=1)
+        freq_tile = np.tile(self.dataset.freq_axis, (len(ref_list), 1))
+        phi_stack = np.stack((freq_tile, phi, np.zeros_like(freq_tile)), axis=2)
+
+        plot_data_fd_phi = format_meas_dict(ref_list, phi_stack, only_plot_avg)
+        plot_data_fd_amp = format_meas_dict(ref_list, ref_fd_db, only_plot_avg)
+        plot_data_td = format_meas_dict(ref_list, ref_td, only_plot_avg)
+
+        ax0, ax1 = self.paint_fd_plot()
+
+        for ref_meas, y_fd_amp_db in plot_data_fd_amp.items():
+            is_avg_meas = not isinstance(ref_meas, Measurement)
+            y_td = plot_data_td[ref_meas]
+            y_fd_phi = plot_data_fd_phi[ref_meas]
+            label = "Reference (Average)" if is_avg_meas else f"Reference ({getattr(ref_meas, 'meas_time')})"
+
+            self.plot(y_fd_amp_db, ax=ax0, is_avg=is_avg_meas, label=label)
+            self.plot(y_fd_phi, ax=ax1, is_avg=is_avg_meas, label=label)
+
+            plt.figure(self.td_fig_num)
+            self.plot(y_td, ax=None, is_avg=is_avg_meas, label=label)
+
+            if self.plot_settings.plot_zero_crossing:
+                plt.scatter(zero_crossing, 0, color="red")
+
+        plt.figure(self.fd_fig_num)
+        plt.draw()
+
+        plt.figure(self.td_fig_num)
+        plt.xlabel("Time (ps)")
+        plt.ylabel("Amplitude (Arb. u.)")
+        plt.draw()
+
+        if only_plot_avg:
+            logging.info(f"Plotted average of {len(ref_list)} reference measurement"+ "s"*(len(ref_list) > 1))
+        else:
+            logging.info(f"Plotted {len(plot_data_fd_amp)} reference measurement" + "s"*(len(plot_data_fd_amp) > 1))
+
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
+
+    def plot_waveform_impl(self, meas_list=None, only_plot_avg=None):
+        only_plot_avg = self.only_use_avg if only_plot_avg is None else only_plot_avg
+
+        if meas_list is None:
+            selection = self.measurement_selector.get_selection()
+            if selection is None:
+                return None
+            meas_list = selection.sams
+            ref_list = selection.refs
+        else:
+            ref_list = self.dataset.measurement_selector.get_matching_refs(meas_list)
+
+        sam_td = self.dataset.get_multi_data(meas_list)
+        sam_fd = self.dataset.get_multi_data(meas_list, Domain.Frequency)
+
+        if self.plot_settings.shift_sam2ref:
+            ref_td = self.dataset.get_multi_data(ref_list)
+            t0_sam = np.argmax(sam_td[:, :, 1], axis=1)
+            t0_ref = np.argmax(ref_td[:, :, 1], axis=1)
+
+            shift_t = np.abs(t0_ref - t0_sam)
+            sam_td[:, :, 1] = np.roll(sam_td[:, :, 1], -shift_t, axis=1)
+
+        if self.plot_settings.remove_t_offset:
+            sam_td[:, :, 0] -= sam_td[:, 0, 0]
+
+        if not plt.fignum_exists(self.td_fig_num) or not plt.fignum_exists(self.fd_fig_num):
+            self.plot_ref_impl(ref_list)
+
+        sam_fd_db = to_db(sam_fd)
+
+        if self.plot_settings.sub_noise_floor:
+            upper_end_f_slice = self.dataset.freq_axis > 6.0
+            noise_floor_db = np.mean(sam_fd_db[:, upper_end_f_slice, 1], axis=1)[:, np.newaxis]
+            sam_fd_db[:, :, 1] -= noise_floor_db
+
+        phi = np.unwrap(np.angle(sam_fd[:, :, 1]), axis=1)
+        freq_tile = np.tile(self.dataset.freq_axis, (len(meas_list), 1))
+        phi_stack = np.stack((freq_tile, phi, np.zeros_like(freq_tile)), axis=2)
+
+        plot_data_fd_phi = format_meas_dict(meas_list, phi_stack, only_plot_avg)
+        plot_data_fd_amp = format_meas_dict(meas_list, sam_fd_db, only_plot_avg)
+        plot_data_td = format_meas_dict(meas_list, sam_td, only_plot_avg)
+
+        td_scale = self.plot_settings.td_scale
+        ax0, ax1 = self.paint_fd_plot()
+        for sam_meas, y_fd_db in plot_data_fd_amp.items():
+            is_avg_meas = not isinstance(sam_meas, Measurement)
+            y_td = plot_data_td[sam_meas]
+            y_fd_phi = plot_data_fd_phi[sam_meas]
+
+            plt.figure(self.td_fig_num)
+            label = self.get_legend_label(sam_meas)
+            if not label:
+                label = "Sample (Average)" if is_avg_meas else f"(x,y)={sam_meas.position}"
+            td_label = label
+            if not np.isclose(td_scale, 1):
+                td_label += f"\n(Amplitude x {td_scale})"
+
+            y_td[:, 1] = td_scale * y_td[:, 1]
+            self.plot(y_td, is_avg=is_avg_meas, label=td_label)
+            self.plot(y_fd_db, ax=ax0, is_avg=is_avg_meas, label=label)
+            self.plot(y_fd_phi, ax=ax1, is_avg=is_avg_meas, label=label)
+
+        plt.figure(self.td_fig_num)
+        plt.draw()
+
+        plt.figure(self.fd_fig_num)
+        plt.draw()
+
+        if only_plot_avg:
+            logging.info(f"Plotted average of {len(meas_list)}  measurement" + "s" * (len(meas_list) > 1))
+        else:
+            logging.info(f"Plotted {len(plot_data_fd_amp)} measurement" + "s" * (len(plot_data_fd_amp) > 1))
+
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
+
+        return meas_list
 
     def save_fig(self, fig_num_, **kwargs):
         save_dir = self.settings.save_settings.path
@@ -197,6 +380,363 @@ class PlotterBase(ComponentBase):
 
         plt.show()
 
+class PlotterBase(PlotterCore):
+    freq = Quantity(Q_(1.000, "THz")).tag(name="Selected frequency", priority=1001)
+    selected_quantity_enum = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(name="Selected quantity",
+                                                                                     priority=1010)
+    legend_label = Unicode("").tag(name="Legend label")
+
+    def __init__(self, dataset: DataSet, **kwargs):
+        super().__init__(dataset, **kwargs)
+        self.dataset = dataset
+        self.measurement_selector = dataset.measurement_selector
+
+    @property
+    def selected_quantity(self):
+        return self.selected_quantity_enum.value
+
+    @property
+    def selected_quantity_func(self):
+        return self.dataset.quantity_func(self.selected_quantity_enum,
+                                          freq_range=self.freq_range.magnitude)
+
+    @property
+    def sel_freq_idx(self):
+        return int(f_axis_idx_map(self.dataset.freq_axis, self.freq)[0])
+
+    def plot_quantity_impl(self, meas_list=None):
+        def plot_scalar_quantity(scalar_values):
+            mean_value = np.mean(scalar_values)
+            std_value = np.std(scalar_values)
+
+            fig = plt.figure(fignum)
+            pos_labels = [f"({m.position[0]:.1f}, {m.position[1]:.1f})" for m in meas_list]
+            if len(set(pos_labels)) == len(meas_list):
+                x_labels = pos_labels
+            else:
+                x_labels = [str(m.meas_time.strftime("%H:%M:%S")) for m in meas_list]
+
+            plt.scatter(x_labels, scalar_values)
+            if self.settings.plot_opt.add_mean_to_quant_plot:
+                plt.axhline(mean_value, color="r", linestyle="--", linewidth=1.5,
+                            label=f"Mean value [{np.round(mean_value, 3)} ({unit})]")
+                plt.axhspan(mean_value - std_value, mean_value + std_value, color="red", alpha=0.2)
+            plt.xticks(rotation=45, ha='right')
+            plt.ylabel(y_label)
+            fig.set_tight_layout(True)
+
+            if self.settings.plot_opt.auto_show:
+                self.plt_show()
+
+            logging.info(f"Plotted {sel_quant} for {len(meas_list)} measurement(s)")
+
+        fig_num_ext = self.plot_settings.fig_num_ext
+        if meas_list is None:
+            selection = self.measurement_selector.get_selection()
+            if selection is None:
+                return None
+            meas_list = selection.sams
+
+        sel_quant = self.selected_quantity
+        values = self.selected_quantity_func(meas_list)
+
+        unit = sel_quant.unit
+        fignum = str(sel_quant) + fig_num_ext
+        y_label = f"{sel_quant} ({sel_quant.unit})" if sel_quant.unit else f"{sel_quant}"
+
+        if not isinstance(values, np.ndarray):
+            logging.info("Selected quantity is a scalar")
+            return []
+        if values.ndim == 1:
+            plot_scalar_quantity(values)
+            return meas_list
+        elif values.ndim != 2:
+            logging.info("Selected quantity has dim > 2")
+            return []
+
+        is_complex = np.issubdtype(values.dtype, np.complexfloating)
+
+        freq_grid = np.tile(self.freq_axis, (values.shape[0], 1))
+        stacking_arrays = (freq_grid, values[:, self.freq_range_idx], np.zeros_like(freq_grid))
+        values_stacked = np.stack(stacking_arrays, axis=2, dtype=values.dtype)
+        plot_value_dict = format_meas_dict(meas_list, values_stacked, self.only_use_avg)
+
+        for meas, y_values in plot_value_dict.items():
+            is_avg_meas = not isinstance(meas, Measurement)
+            label = self.get_legend_label(meas)
+            if not label:
+                label = "Average" if is_avg_meas else f"(x,y)={meas.position}"
+
+            if not is_complex:
+                plt.figure(fignum)
+                self.plot(y_values, is_avg=is_avg_meas, label=label)
+            else:
+                if not plt.fignum_exists(fignum):
+                    fig, (ax0, ax1) = plt.subplots(2, 1, num=fignum,
+                                                   sharex=True, gridspec_kw={'hspace': 0})
+                else:
+                    fig = plt.figure(fignum)
+                    ax0, ax1 = fig.get_axes()
+                self.plot(y_values.real, ax=ax0, is_avg=is_avg_meas, label=label)
+                y_values_imag = np.column_stack((y_values[:, 0].real, y_values[:, 1:3].imag))
+                self.plot(y_values_imag, ax=ax1, is_avg=is_avg_meas, label=label)
+
+        if not is_complex:
+            fig = plt.figure(fignum)
+            plt.xlabel("Frequency (THz)")
+            plt.ylabel(y_label)
+        else:
+            fig = plt.figure(fignum)
+            ax0, ax1 = fig.get_axes()
+            ax1.set_xlabel("Frequency (THz)")
+            ax0.set_ylabel(f"{y_label} (Real part)")
+            ax1.set_ylabel(f"{y_label} (Imag part)")
+
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
+
+        logging.info(f"Plotted {sel_quant} for {len(plot_value_dict)} measurement(s)")
+
+        return meas_list
+
+class AverageValRect(ComponentBase):
+    rect_sel_grp = "Average value rectangle"
+    rect_sel_label = Unicode("").tag(name="Rectangle label", priority=1000, group=rect_sel_grp)
+    rect_sel_bot_left = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
+        name="Bottom left rectangle selection", group=rect_sel_grp, priority=1001)
+    rect_sel_top_right = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
+        name="Top right rectangle selection", group=rect_sel_grp, priority=1002)
+
+    def __init__(self, image_plot_inst, **kwargs):
+        super().__init__(**kwargs)
+        self.image_plot_inst : ImagePlot = image_plot_inst
+
+    @action(name="Draw average value rectangle", group=rect_sel_grp, priority=2)
+    def average_area(self):
+        if self.image_plot_inst.grid_vals is None:
+            return None
+
+        pnt_bot_left = self.rect_sel_bot_left.magnitude
+        pnt_top_right = self.rect_sel_top_right.magnitude
+        assert (pnt_bot_left[0] <= pnt_top_right[0]) and (pnt_bot_left[1] <= pnt_top_right[1])
+
+        x_coords, y_coords = self.image_plot_inst.img_shape["x_coords"], self.image_plot_inst.img_shape["y_coords"]
+        pnt_bot_left = (x_coords[np.argmin(np.abs(pnt_bot_left[0] - x_coords))],
+                        y_coords[np.argmin(np.abs(pnt_bot_left[1] - y_coords))])
+        pnt_top_right = (x_coords[np.argmin(np.abs(pnt_top_right[0] - x_coords))],
+                         y_coords[np.argmin(np.abs(pnt_top_right[1] - y_coords))])
+
+        x0_idx, y0_idx = self.image_plot_inst._coords_to_idx(*pnt_bot_left)
+        x1_idx, y1_idx = self.image_plot_inst._coords_to_idx(*pnt_top_right)
+
+        grid_vals = self.image_plot_inst.grid_vals[x0_idx:x1_idx+1, y0_idx:y1_idx+1]
+        mean_val, std_val = np.mean(grid_vals), np.std(grid_vals)
+
+        mean_s, std_s = str(np.round(mean_val, 4)), str(np.round(std_val, 4))
+        min_s, max_s = str(np.round(np.min(grid_vals), 4)), str(np.round(np.max(grid_vals), 4))
+
+        label = self.rect_sel_label
+        meas_cnt = grid_vals.shape[0] * grid_vals.shape[1]
+        quant = self.image_plot_inst.selected_quantity_enum
+        logging.info(f"Average {quant.name} value of area {label} containing {meas_cnt} measurements: {mean_s}±{std_s}")
+        logging.info(f"Min: {min_s}, max: {max_s}\n")
+
+        ret = {"mean": mean_val, "std": std_val, "min": min_s, "max": max_s}
+        if not plt.fignum_exists(num=self.image_plot_inst.image_fig_num):
+            return ret
+
+        plt.figure(self.image_plot_inst.image_fig_num)
+        ax = self.image_plot_inst.img_ax
+
+        dx, dy = self.image_plot_inst.img_shape["dx"], self.image_plot_inst.img_shape["dy"]
+        pnt_bot_left = (pnt_bot_left[0] - dx / 2, pnt_bot_left[1] - dy / 2)
+        pnt_top_right = (pnt_top_right[0] + dx / 2, pnt_top_right[1] + dy / 2)
+
+        rect_width = pnt_top_right[0] - pnt_bot_left[0]
+        rect_height = pnt_top_right[1] - pnt_bot_left[1]
+        rect = patches.Rectangle(
+            pnt_bot_left,  # bottom left
+            rect_width,  # width
+            rect_height,  # height
+            linewidth=2, edgecolor="black", facecolor="none"
+        )
+        patch = ax.add_patch(rect)
+
+        img_extent = self.image_plot_inst.img_shape["extent"]
+        t_x, t_y = pnt_bot_left[0] + rect_width / 2, pnt_bot_left[1] + rect_height / 2
+        if t_x < img_extent[0] + 1:
+            t_x = pnt_bot_left[0] + rect_width + 1.5
+        if t_x > img_extent[1] - 1:
+            t_x = pnt_top_right[0] - rect_width - 1.5
+
+        t_y_below = pnt_top_right[1] - rect_height - 1.5
+        t_y_above = pnt_bot_left[1] + rect_height + 1.5
+        if t_y < img_extent[2] + 1:
+            t_y = t_y_above
+        if t_y > img_extent[3] - 1:
+            t_y = t_y_below
+
+        # if rect too small, place above or below
+        if rect_height < 3.0 or rect_width < 3.0:
+            # if in top half, place below, else place above
+            if t_y > img_extent[2] + 0.5 * abs(img_extent[3] - img_extent[2]):
+                t_y = t_y_below
+            else:
+                t_y = t_y_above
+
+        text_label = ax.text(t_x, t_y, label,
+                             color="black", fontsize=18, ha="center", va="center", fontweight="bold")
+
+        plt.draw()
+
+        self.image_plot_inst.drawn_elements["patches"].append(patch)
+        self.image_plot_inst.drawn_elements["text_labels"].append(text_label)
+
+        return ret
+
+class SlicePlots(ComponentBase):
+    line_plot_grp = "Image slice plot"
+    line_start = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
+        name="Line start point (x, y)", group=line_plot_grp, priority=1001)
+    line_end = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
+        name="Line end point (x, y)", group=line_plot_grp, priority=1002)
+
+    def __init__(self, image_plot_inst, **kwargs):
+        super().__init__(**kwargs)
+        self.image_plot_inst : ImagePlot = image_plot_inst
+
+    @action("Line plot", group=line_plot_grp)
+    def plot_line(self):
+        start = self.line_start.magnitude
+        end = self.line_end.magnitude
+        meas_on_line, meas_points = self.image_plot_inst.measurement_selector.get_arb_line(start, end)
+
+        sel_quant = self.image_plot_inst.selected_quantity
+        sel_quant_func = self.image_plot_inst.selected_quantity_func
+
+        vals = np.real(sel_quant_func(meas_on_line))
+        if vals.ndim == 2:
+            vals = vals[:, self.image_plot_inst.sel_freq_idx]
+
+        x_coords, y_coords = [p[0] for p in meas_points], [p[1] for p in meas_points]
+        if len(set(x_coords)) == len(meas_points):
+            primary_direction = Direction.Horizontal
+        else:
+            primary_direction = Direction.Vertical
+
+        if primary_direction == Direction.Horizontal:
+            fig_num = "x-slice"
+            x_label = "x (mm)"
+            x_axis_vals = x_coords
+        else:
+            fig_num = "y-slice"
+            x_label = "y (mm)"
+            x_axis_vals = y_coords
+
+        fig_num += "_" + self.image_plot_inst.quantity_label.replace(" ", "_")
+        plt.figure(fig_num)
+        plt.title(f"Line scan ({primary_direction.name})")
+        plt.xlabel(x_label)
+        plt.ylabel(self.image_plot_inst.quantity_label)
+
+        unit = self.line_start[0].units
+        line_label = f"({start[0]}, {start[1]}) to ({end[0]}, {end[1]}) {unit}"
+
+        plt.plot(x_axis_vals, vals, label=line_label)
+        plt.legend()
+        plt.draw()
+
+        self.image_plot_inst._plot_meas_on_image(meas_on_line)
+
+        logging.info(f"Plotted {sel_quant} for {len(meas_on_line)} measurement(s)")
+
+        if self.image_plot_inst.settings.plot_opt.auto_show:
+            self.image_plot_inst.plt_show()
+
+        return x_axis_vals, vals, fig_num
+
+    @action("Knife edge", group=line_plot_grp)
+    def knife_edge(self):
+        if self.image_plot_inst.selected_quantity_enum != QuantityEnum.PowerInt:
+            logging.info("Integrated power must be selected")
+            return None
+
+        coords, vals, fig_num = self.plot_line()
+
+        pos_axis = np.array(coords)
+        sort_order = np.argsort(pos_axis)
+
+        pos_axis = pos_axis[sort_order]
+        vals = np.array(vals)[sort_order]
+        max_min_step = np.argmin(vals) > np.argmax(vals)
+
+        pos_axis_ordered = pos_axis if max_min_step else np.flip(pos_axis)
+
+        def _model(x, p_max, p_offset, w, h0):
+            return p_offset + 0.5 * p_max * erfc(np.sqrt(2) * (x - h0) / w)
+
+        def _cost(p):
+            return np.sum((vals - _model(pos_axis_ordered, *p)) ** 2)
+
+        slope_pos = pos_axis_ordered[np.argmax(np.abs(np.diff(vals))) + 1]
+
+        p0 = np.array([np.max(vals), np.min(vals), 0.5, slope_pos])
+        bounds = ([p0[0] - 1, p0[0] + 1],
+                  [p0[1], p0[1] + 0.01],
+                  [p0[2] - 0.4, p0[2] + 2.0],
+                  [p0[3] - 2, p0[3] + 2])
+        opt_res = shgo(_cost, bounds=bounds)
+
+        popt, pcov = curve_fit(
+            _model,
+            pos_axis_ordered,
+            vals,
+            p0=opt_res.x,
+            bounds=([bounds[i][0] for i in range(4)], [bounds[i][1] for i in range(4)])
+        )
+
+        perr = np.sqrt(np.diag(pcov))
+
+        plt.figure(fig_num)
+        plt.scatter(pos_axis, vals, label="Measurement", s=30, c="red", zorder=3)
+        plt.plot(pos_axis, _model(pos_axis_ordered, *popt), label="Optimization result")
+        plt.plot(pos_axis, _model(pos_axis_ordered, *p0), label="Initial guess", linestyle="--")
+
+        labels = ["$P_{max}$: ", "$P_{offset}$: ", "Beam radius: ", "$h_0$: "]
+        units = ["", "", " mm", " mm"]
+        s = "\n".join([
+            f"{lbl}{val:.2f} ± {err:.2f}{unit}"
+            for lbl, val, err, unit in zip(labels, np.abs(popt), perr, units)
+        ])
+
+        bbox_props = dict(
+            boxstyle="round,pad=0.5",
+            facecolor="white",
+            edgecolor="gray",
+            alpha=0.85,
+            linewidth=1
+        )
+        box_pos = (0.05, 0.25) if max_min_step else (0.05, 0.95)
+        plt.gca().text(
+            *box_pos, s,
+            transform=plt.gca().transAxes,
+            verticalalignment="top",
+            horizontalalignment="left",
+            fontsize=18,
+            fontfamily="sans-serif",
+            bbox=bbox_props,
+            zorder=5
+        )
+
+        plt.legend()
+        plt.draw()
+
+        logging.info("Plotted knife edge evaluation")
+        if self.image_plot_inst.settings.plot_opt.auto_show:
+            self.image_plot_inst.plt_show()
+
+        return popt, pcov
+
 
 class ImagePlot(PlotterBase):
     image_grp = "General"
@@ -222,28 +762,22 @@ class ImagePlot(PlotterBase):
     grid_calc_progress = Float(0, min=0, max=1, read_only=True).tag(
         name="Grid calculation progress", group=image_calc, priority=1004)
 
-    rect_sel_grp = "Average value rectangle"
-    rect_sel_label = Unicode("").tag(name="Rectangle label", priority=1000, group=rect_sel_grp)
-    rect_sel_bot_left = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
-        name="Bottom left rectangle selection", group=rect_sel_grp, priority=1001)
-    rect_sel_top_right = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
-        name="Top right rectangle selection", group=rect_sel_grp, priority=1002)
+    waveform_grp = "On-click waveform plot"
+    legend_label = Unicode("").tag(name="Legend label", group=waveform_grp, priority=1000)
+    only_use_avg = Bool(True).tag(name="Only use average", group=waveform_grp, priority=1001)
 
-    line_plot_grp = "Image slice plot"
-    line_start = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
-        name="Line start point (x, y)", group=line_plot_grp, priority=1001)
-    line_end = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
-        name="Line end point (x, y)", group=line_plot_grp, priority=1002)
+    avg_val_rect = Instance(AverageValRect, allow_none=True)
+    slice_plots = Instance(SlicePlots, allow_none=True)
 
-    def __init__(self, dataset, plotter_instance, **kwargs):
+    def __init__(self, dataset, en_avg_rect_component=False, en_slice_plots=False, **kwargs):
         super().__init__(dataset=dataset, **kwargs)
-        self.plotter_instance = plotter_instance
-
         self.grid_vals = None
         self.img_ax = None
         self.drawn_elements = {"patches": [], "text_labels": [], "points": []}
         self.grid_thread = None
 
+        self.avg_val_rect = AverageValRect(self, object_name="Average value rectangle") if en_avg_rect_component else None
+        self.slice_plots = SlicePlots(self, object_name="Slice plots") if en_slice_plots else None
 
     @property
     def img_shape(self):
@@ -321,89 +855,6 @@ class ImagePlot(PlotterBase):
 
         return filtered_grid
 
-    @action(name="Draw average value rectangle", group=rect_sel_grp, priority=2)
-    def average_area(self):
-        if self.grid_vals is None:
-            return None
-
-        pnt_bot_left = self.rect_sel_bot_left.magnitude
-        pnt_top_right = self.rect_sel_top_right.magnitude
-        assert (pnt_bot_left[0] <= pnt_top_right[0]) and (pnt_bot_left[1] <= pnt_top_right[1])
-
-        x_coords, y_coords = self.img_shape["x_coords"], self.img_shape["y_coords"]
-        pnt_bot_left = (x_coords[np.argmin(np.abs(pnt_bot_left[0] - x_coords))],
-                        y_coords[np.argmin(np.abs(pnt_bot_left[1] - y_coords))])
-        pnt_top_right = (x_coords[np.argmin(np.abs(pnt_top_right[0] - x_coords))],
-                         y_coords[np.argmin(np.abs(pnt_top_right[1] - y_coords))])
-
-        x0_idx, y0_idx = self._coords_to_idx(*pnt_bot_left)
-        x1_idx, y1_idx = self._coords_to_idx(*pnt_top_right)
-
-        grid_vals = self.grid_vals[x0_idx:x1_idx+1, y0_idx:y1_idx+1]
-        mean_val, std_val = np.mean(grid_vals), np.std(grid_vals)
-
-        mean_s, std_s = str(np.round(mean_val, 4)), str(np.round(std_val, 4))
-        min_s, max_s = str(np.round(np.min(grid_vals), 4)), str(np.round(np.max(grid_vals), 4))
-
-        label = self.rect_sel_label
-        meas_cnt = grid_vals.shape[0] * grid_vals.shape[1]
-        quant = self.selected_quantity_enum
-        logging.info(f"Average {quant.name} value of area {label} containing {meas_cnt} measurements: {mean_s}±{std_s}")
-        logging.info(f"Min: {min_s}, max: {max_s}\n")
-
-        ret = {"mean": mean_val, "std": std_val, "min": min_s, "max": max_s}
-        if not plt.fignum_exists(num=self.image_fig_num):
-            return ret
-
-        plt.figure(self.image_fig_num)
-        ax = self.img_ax
-
-        dx, dy = self.img_shape["dx"], self.img_shape["dy"]
-        pnt_bot_left = (pnt_bot_left[0] - dx / 2, pnt_bot_left[1] - dy / 2)
-        pnt_top_right = (pnt_top_right[0] + dx / 2, pnt_top_right[1] + dy / 2)
-
-        rect_width = pnt_top_right[0] - pnt_bot_left[0]
-        rect_height = pnt_top_right[1] - pnt_bot_left[1]
-        rect = patches.Rectangle(
-            pnt_bot_left,  # bottom left
-            rect_width,  # width
-            rect_height,  # height
-            linewidth=2, edgecolor="black", facecolor="none"
-        )
-        patch = ax.add_patch(rect)
-
-        img_extent = self.img_shape["extent"]
-        t_x, t_y = pnt_bot_left[0] + rect_width / 2, pnt_bot_left[1] + rect_height / 2
-        if t_x < img_extent[0] + 1:
-            t_x = pnt_bot_left[0] + rect_width + 1.5
-        if t_x > img_extent[1] - 1:
-            t_x = pnt_top_right[0] - rect_width - 1.5
-
-        t_y_below = pnt_top_right[1] - rect_height - 1.5
-        t_y_above = pnt_bot_left[1] + rect_height + 1.5
-        if t_y < img_extent[2] + 1:
-            t_y = t_y_above
-        if t_y > img_extent[3] - 1:
-            t_y = t_y_below
-
-        # if rect too small, place above or below
-        if rect_height < 3.0 or rect_width < 3.0:
-            # if in top half, place below, else place above
-            if t_y > img_extent[2] + 0.5 * abs(img_extent[3] - img_extent[2]):
-                t_y = t_y_below
-            else:
-                t_y = t_y_above
-
-        text_label = ax.text(t_x, t_y, label,
-                             color="black", fontsize=18, ha="center", va="center", fontweight="bold")
-
-        plt.draw()
-
-        self.drawn_elements["patches"].append(patch)
-        self.drawn_elements["text_labels"].append(text_label)
-
-        return ret
-
     @action("Clear drawn elements", group=image_grp, priority=3)
     def clear_drawn_elements(self):
         for patch in self.drawn_elements["patches"]:
@@ -420,7 +871,7 @@ class ImagePlot(PlotterBase):
         if plt.fignum_exists(num=self.image_fig_num):
             plt.draw()
 
-
+    @mpl.rc_context(mpl_style_params())
     def on_image_click(self, event):
         if not self.enable_img_interaction:
             return
@@ -437,9 +888,9 @@ class ImagePlot(PlotterBase):
             y = round_dx(event.ydata, dy)
             meas_list = self.measurement_selector.get_measurements_from_point(x, y)
             if self.selected_quantity_enum == QuantityEnum.P2P:
-                plotted_meas = self.plotter_instance.plot_waveform(meas_list)
+                plotted_meas = self.plot_waveform_impl(meas_list)
             else:
-                plotted_meas = self.plotter_instance.plot_quantity(meas_list, caller_inst=self)
+                plotted_meas = self.plot_quantity_impl(meas_list)
 
             self._plot_meas_on_image(plotted_meas)
 
@@ -584,152 +1035,20 @@ class ImagePlot(PlotterBase):
     def plot_refs_on_image(self):
         self._plot_meas_on_image(self.dataset.measurements["refs"])
 
-    @action("Line plot", group=line_plot_grp)
-    def plot_line(self):
-        start = self.line_start.magnitude
-        end = self.line_end.magnitude
-        meas_on_line, meas_points = self.measurement_selector.get_arb_line(start, end)
 
-        sel_quant = self.selected_quantity
-        sel_quant_func = self.selected_quantity_func
+class QuantityPlots(PlotterBase):
 
-        vals = np.real(sel_quant_func(meas_on_line))
-        if vals.ndim == 2:
-            vals = vals[:, self.sel_freq_idx]
+    quantity_value = Unicode("", read_only=True).tag(name="Quantity value", priority=1012)
+    only_use_avg = Bool(True).tag(name="Only use average", priority=1004)
 
-        x_coords, y_coords = [p[0] for p in meas_points], [p[1] for p in meas_points]
-        if len(set(x_coords)) == len(meas_points):
-            primary_direction = Direction.Horizontal
-        else:
-            primary_direction = Direction.Vertical
-
-        if primary_direction == Direction.Horizontal:
-            fig_num = "x-slice"
-            x_label = "x (mm)"
-            x_axis_vals = x_coords
-        else:
-            fig_num = "y-slice"
-            x_label = "y (mm)"
-            x_axis_vals = y_coords
-
-        fig_num += "_" + self.quantity_label.replace(" ", "_")
-        plt.figure(fig_num)
-        plt.title(f"Line scan ({primary_direction.name})")
-        plt.xlabel(x_label)
-        plt.ylabel(self.quantity_label)
-
-        unit = self.line_start[0].units
-        line_label = f"({start[0]}, {start[1]}) to ({end[0]}, {end[1]}) {unit}"
-
-        plt.plot(x_axis_vals, vals, label=line_label)
-        plt.legend()
-        plt.draw()
-
-        self._plot_meas_on_image(meas_on_line)
-
-        logging.info(f"Plotted {sel_quant} for {len(meas_on_line)} measurement(s)")
-
-        if self.settings.plot_opt.auto_show:
-            self.plt_show()
-
-        return x_axis_vals, vals, fig_num
-
-    @action("Knife edge", group=line_plot_grp)
-    def knife_edge(self):
-        if self.selected_quantity_enum != QuantityEnum.PowerInt:
-            logging.info("Integrated power must be selected")
-            return None
-
-        coords, vals, fig_num = self.plot_line()
-
-        pos_axis = np.array(coords)
-        sort_order = np.argsort(pos_axis)
-
-        pos_axis = pos_axis[sort_order]
-        vals = np.array(vals)[sort_order]
-        max_min_step = np.argmin(vals) > np.argmax(vals)
-
-        pos_axis_ordered = pos_axis if max_min_step else np.flip(pos_axis)
-
-        def _model(x, p_max, p_offset, w, h0):
-            return p_offset + 0.5 * p_max * erfc(np.sqrt(2) * (x - h0) / w)
-
-        def _cost(p):
-            return np.sum((vals - _model(pos_axis_ordered, *p)) ** 2)
-
-        slope_pos = pos_axis_ordered[np.argmax(np.abs(np.diff(vals))) + 1]
-
-        p0 = np.array([np.max(vals), np.min(vals), 0.5, slope_pos])
-        bounds = ([p0[0] - 1, p0[0] + 1],
-                  [p0[1], p0[1] + 0.01],
-                  [p0[2] - 0.4, p0[2] + 2.0],
-                  [p0[3] - 2, p0[3] + 2])
-        opt_res = shgo(_cost, bounds=bounds)
-
-        popt, pcov = curve_fit(
-            _model,
-            pos_axis_ordered,
-            vals,
-            p0=opt_res.x,
-            bounds=([bounds[i][0] for i in range(4)], [bounds[i][1] for i in range(4)])
-        )
-
-        perr = np.sqrt(np.diag(pcov))
-
-        plt.figure(fig_num)
-        plt.scatter(pos_axis, vals, label="Measurement", s=30, c="red", zorder=3)
-        plt.plot(pos_axis, _model(pos_axis_ordered, *popt), label="Optimization result")
-        plt.plot(pos_axis, _model(pos_axis_ordered, *p0), label="Initial guess", linestyle="--")
-
-        labels = ["$P_{max}$: ", "$P_{offset}$: ", "Beam radius: ", "$h_0$: "]
-        units = ["", "", " mm", " mm"]
-        s = "\n".join([
-            f"{lbl}{val:.2f} ± {err:.2f}{unit}"
-            for lbl, val, err, unit in zip(labels, np.abs(popt), perr, units)
-        ])
-
-        bbox_props = dict(
-            boxstyle="round,pad=0.5",
-            facecolor="white",
-            edgecolor="gray",
-            alpha=0.85,
-            linewidth=1
-        )
-        box_pos = (0.05, 0.25) if max_min_step else (0.05, 0.95)
-        plt.gca().text(
-            *box_pos, s,
-            transform=plt.gca().transAxes,
-            verticalalignment="top",
-            horizontalalignment="left",
-            fontsize=18,
-            fontfamily="sans-serif",
-            bbox=bbox_props,
-            zorder=5
-        )
-
-        plt.legend()
-        plt.draw()
-
-        logging.info("Plotted knife edge evaluation")
-        if self.settings.plot_opt.auto_show:
-            self.plt_show()
-
-        return popt, pcov
-
-class DataSetPlotter(PlotterBase):
     comparison_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
         name="Point for comparison (x, y)", group="Phase plots", priority=1000)
-    quantity_value = Unicode("", read_only=True).tag(name="Quantity value", priority=1003)
-    only_plot_avg = Bool(False).tag(name="Only plot average")
-    label = Unicode("").tag(name="Legend label")
-
-    image_plotter = Instance(ImagePlot, allow_none=True)
 
     def __init__(self, dataset : DataSet, en_image_plotter=True, **kwargs):
         super().__init__(dataset=dataset, **kwargs)
 
         if en_image_plotter:
-            self.image_plotter = ImagePlot(dataset, self, object_name="Image plot")
+            self.image_plotter = ImagePlot(dataset, object_name="Image plot")
 
     def __exit__(self, *args):
         self.settings.save_configuration(self)
@@ -738,28 +1057,6 @@ class DataSetPlotter(PlotterBase):
         self.settings.load_configuration(self)
 
         return self
-
-    @property
-    def td_fig_num(self):
-        fig_num_ext = self.plot_settings.fig_num_ext
-        return "Time domain" + fig_num_ext
-
-    @property
-    def fd_fig_num(self):
-        fig_num_ext = self.plot_settings.fig_num_ext
-        return "Frequency domain" + fig_num_ext
-
-    def get_legend_label(self, meas_):
-        if len(self.label) < 2 or self.label[:2] != "$$":
-            return self.label
-        if isinstance(meas_, str):
-            return meas_
-
-        match = re.search(self.label[2:], meas_.filepath.name)
-        if match:
-            return match.group(0)
-        else:
-            return self.label
 
     def find_climate_log_file(self, climate_log_file):
         log_file = Path(climate_log_file)
@@ -777,7 +1074,7 @@ class DataSetPlotter(PlotterBase):
 
         return None
 
-    @action("Calculate quantity value", priority=1002)
+    @action("Calculate quantity value", priority=1011)
     def calc_quant_value(self):
         selection = self.measurement_selector.get_selection()
         if not selection:
@@ -928,175 +1225,13 @@ class DataSetPlotter(PlotterBase):
         if self.settings.plot_opt.auto_show:
             self.plt_show()
 
-    def paint_fd_plot(self):
-        if not plt.fignum_exists(self.fd_fig_num):
-            fig, (ax0, ax1) = plt.subplots(2, 1, num=self.fd_fig_num,
-                                           sharex=True, gridspec_kw={'hspace': 0})
-            ax0.set_xlabel("Frequency (THz)")
-            ax0.set_ylabel("Amplitude (dB)")
-            ax1.set_ylabel("Phase (rad)")
-        else:
-            fig = plt.figure(num=self.fd_fig_num)
-            ax0, ax1 = fig.get_axes()
-
-        return ax0, ax1
-
-    def plot(self, plot_data, plot_type=PlotType.plot, ax=None, is_avg=False, **kwargs):
-        if ax is None:
-            ax = plt
-        x, y, dy = plot_data[:, 0], plot_data[:, 1], plot_data[:, 2]
-        if plot_type == PlotType.plot:
-            ax.plot(x, y, **kwargs)
-        else:
-            ax.scatter(x, y, **kwargs)
-        if is_avg and self.settings.plot_opt.plot_standard_deviation:
-            ax.fill_between(x, y - dy, y + dy, alpha=0.2)
-
     @action("Reference measurement", group="Plots")
     def plot_ref(self, ref_list=None):
-        if ref_list is None:
-            if self.dataset.measurement_selector.ref_sel_criterion == ReferenceSelection.file_selection:
-                ref_list = self.measurement_selector.ref_file_selection_to_ref_meas()
-            else:
-                selection = self.measurement_selector.get_selection()
-                ref_list = selection.refs if selection else None
-        if not ref_list:
-            logging.info("No reference measurements selected")
-            return
-
-        zero_crossing = self.dataset.get_zero_crossing(ref_list)
-
-        ref_td = self.dataset.get_multi_data(ref_list)
-        ref_fd = self.dataset.get_multi_data(ref_list, Domain.Frequency)
-        ref_fd_db = to_db(ref_fd)
-
-        if self.plot_settings.remove_t_offset:
-            ref_td[:, :, 0] -= ref_td[:, 0, 0]
-
-        if self.plot_settings.sub_noise_floor:
-            upper_end_f_slice = self.dataset.freq_axis > 6.0
-            noise_floor_db = np.mean(ref_fd_db[:, upper_end_f_slice, 1], axis=1)[:, np.newaxis]
-            ref_fd_db[:, :, 1] -= noise_floor_db
-
-        phi = np.unwrap(np.angle(ref_fd[:, :, 1]), axis=1)
-        freq_tile = np.tile(self.dataset.freq_axis, (len(ref_list), 1))
-        phi_stack = np.stack((freq_tile, phi, np.zeros_like(freq_tile)), axis=2)
-
-        plot_data_fd_phi = format_meas_dict(ref_list, phi_stack, self.only_plot_avg)
-        plot_data_fd_amp = format_meas_dict(ref_list, ref_fd_db, self.only_plot_avg)
-        plot_data_td = format_meas_dict(ref_list, ref_td, self.only_plot_avg)
-
-        ax0, ax1 = self.paint_fd_plot()
-
-        for ref_meas, y_fd_amp_db in plot_data_fd_amp.items():
-            is_avg_meas = not isinstance(ref_meas, Measurement)
-            y_td = plot_data_td[ref_meas]
-            y_fd_phi = plot_data_fd_phi[ref_meas]
-            label = "Reference (Average)" if is_avg_meas else f"Reference ({getattr(ref_meas, 'meas_time')})"
-
-            self.plot(y_fd_amp_db, ax=ax0, is_avg=is_avg_meas, label=label)
-            self.plot(y_fd_phi, ax=ax1, is_avg=is_avg_meas, label=label)
-
-            plt.figure(self.td_fig_num)
-            self.plot(y_td, ax=None, is_avg=is_avg_meas, label=label)
-
-            if self.plot_settings.plot_zero_crossing:
-                plt.scatter(zero_crossing, 0, color="red")
-
-        plt.figure(self.fd_fig_num)
-        plt.draw()
-
-        plt.figure(self.td_fig_num)
-        plt.xlabel("Time (ps)")
-        plt.ylabel("Amplitude (Arb. u.)")
-        plt.draw()
-
-        if self.only_plot_avg:
-            logging.info(f"Plotted average of {len(ref_list)} reference measurement"+ "s"*(len(ref_list) > 1))
-        else:
-            logging.info(f"Plotted {len(plot_data_fd_amp)} reference measurement" + "s"*(len(plot_data_fd_amp) > 1))
-
-        if self.settings.plot_opt.auto_show:
-            self.plt_show()
+        return self.plot_ref_impl(ref_list)
 
     @action("Waveform", group="Plots")
     def plot_waveform(self, meas_list=None):
-        if meas_list is None:
-            selection = self.measurement_selector.get_selection()
-            if selection is None:
-                return None
-            meas_list = selection.sams
-            ref_list = selection.refs
-        else:
-            ref_list = self.dataset.measurement_selector.get_matching_refs(meas_list)
-
-        sam_td = self.dataset.get_multi_data(meas_list)
-        sam_fd = self.dataset.get_multi_data(meas_list, Domain.Frequency)
-
-        if self.plot_settings.shift_sam2ref:
-            ref_td = self.dataset.get_multi_data(ref_list)
-            t0_sam = np.argmax(sam_td[:, :, 1], axis=1)
-            t0_ref = np.argmax(ref_td[:, :, 1], axis=1)
-
-            shift_t = np.abs(t0_ref - t0_sam)
-            sam_td[:, :, 1] = np.roll(sam_td[:, :, 1], -shift_t, axis=1)
-
-        if self.plot_settings.remove_t_offset:
-            sam_td[:, :, 0] -= sam_td[:, 0, 0]
-
-        if not plt.fignum_exists(self.td_fig_num) or not plt.fignum_exists(self.fd_fig_num):
-            self.plot_ref(ref_list)
-
-        sam_fd_db = to_db(sam_fd)
-
-        if self.plot_settings.sub_noise_floor:
-            upper_end_f_slice = self.dataset.freq_axis > 6.0
-            noise_floor_db = np.mean(sam_fd_db[:, upper_end_f_slice, 1], axis=1)[:, np.newaxis]
-            sam_fd_db[:, :, 1] -= noise_floor_db
-
-        phi = np.unwrap(np.angle(sam_fd[:, :, 1]), axis=1)
-        freq_tile = np.tile(self.dataset.freq_axis, (len(meas_list), 1))
-        phi_stack = np.stack((freq_tile, phi, np.zeros_like(freq_tile)), axis=2)
-
-        plot_data_fd_phi = format_meas_dict(meas_list, phi_stack, self.only_plot_avg)
-        plot_data_fd_amp = format_meas_dict(meas_list, sam_fd_db, self.only_plot_avg)
-        plot_data_td = format_meas_dict(meas_list, sam_td, self.only_plot_avg)
-
-        td_scale = self.plot_settings.td_scale
-        ax0, ax1 = self.paint_fd_plot()
-        for sam_meas, y_fd_db in plot_data_fd_amp.items():
-            is_avg_meas = not isinstance(sam_meas, Measurement)
-            y_td = plot_data_td[sam_meas]
-            y_fd_phi = plot_data_fd_phi[sam_meas]
-
-            plt.figure(self.td_fig_num)
-            label = self.get_legend_label(sam_meas)
-            if not label:
-                label = "Sample (Average)" if is_avg_meas else f"(x,y)={sam_meas.position}"
-            td_label = label
-            if not np.isclose(td_scale, 1):
-                td_label += f"\n(Amplitude x {td_scale})"
-
-            y_td[:, 1] = td_scale * y_td[:, 1]
-            self.plot(y_td, is_avg=is_avg_meas, label=td_label)
-            self.plot(y_fd_db, ax=ax0, is_avg=is_avg_meas, label=label)
-            self.plot(y_fd_phi, ax=ax1, is_avg=is_avg_meas, label=label)
-
-        plt.figure(self.td_fig_num)
-        plt.draw()
-
-        plt.figure(self.fd_fig_num)
-        plt.draw()
-
-        if self.only_plot_avg:
-            logging.info(f"Plotted average of {len(meas_list)}  measurement" + "s" * (len(meas_list) > 1))
-        else:
-            logging.info(f"Plotted {len(plot_data_fd_amp)} measurement" + "s" * (len(plot_data_fd_amp) > 1))
-
-        if self.settings.plot_opt.auto_show:
-            self.plt_show()
-
-        return meas_list
+        return self.plot_waveform_impl(meas_list)
 
     @action("Phase plots", group="Phase plots")
     def plot_phases(self):
@@ -1115,8 +1250,8 @@ class DataSetPlotter(PlotterBase):
         phi_stacked = np.stack((freq_tile, phi, np.zeros_like(phi)), axis=2)
         phi_corrected_stacked = np.stack((freq_tile, phi_corrected, np.zeros_like(phi_corrected)), axis=2)
 
-        plot_data_phi = format_meas_dict(meas_list, phi_stacked, self.only_plot_avg)
-        plot_data_phi_corrected = format_meas_dict(meas_list, phi_corrected_stacked, self.only_plot_avg)
+        plot_data_phi = format_meas_dict(meas_list, phi_stacked, self.only_use_avg)
+        plot_data_phi_corrected = format_meas_dict(meas_list, phi_corrected_stacked, self.only_use_avg)
 
         fig_num_ext = self.plot_settings.fig_num_ext
         for meas, phi_1meas in plot_data_phi.items():
@@ -1161,102 +1296,8 @@ class DataSetPlotter(PlotterBase):
         logging.info(f"Plotted {len(plot_data_phi)} measurement(s)")
 
     @action("Plot selected quantity", group="Plots")
-    def plot_quantity(self, meas_list=None, caller_inst=None):
-        caller_inst = self if caller_inst is None else caller_inst
-
-        def plot_scalar_quantity(scalar_values):
-            mean_value = np.mean(scalar_values)
-            std_value = np.std(scalar_values)
-
-            fig = plt.figure(fignum)
-            pos_labels = [f"({m.position[0]:.1f}, {m.position[1]:.1f})" for m in meas_list]
-            if len(set(pos_labels)) == len(meas_list):
-                x_labels = pos_labels
-            else:
-                x_labels = [str(m.meas_time.strftime("%H:%M:%S")) for m in meas_list]
-
-            plt.scatter(x_labels, scalar_values)
-            if self.settings.plot_opt.add_mean_to_quant_plot:
-                plt.axhline(mean_value, color="r", linestyle="--", linewidth=1.5,
-                            label=f"Mean value [{np.round(mean_value, 3)} ({unit})]")
-                plt.axhspan(mean_value - std_value, mean_value + std_value, color="red", alpha=0.2)
-            plt.xticks(rotation=45, ha='right')
-            plt.ylabel(y_label)
-            fig.set_tight_layout(True)
-
-            if self.settings.plot_opt.auto_show:
-                self.plt_show()
-
-            logging.info(f"Plotted {sel_quant} for {len(meas_list)} measurement(s)")
-
-        fig_num_ext = self.plot_settings.fig_num_ext
-        if meas_list is None:
-            selection = self.measurement_selector.get_selection()
-            if selection is None:
-                return None
-            meas_list = selection.sams
-
-        sel_quant = caller_inst.selected_quantity
-        values = caller_inst.selected_quantity_func(meas_list)
-
-        unit = sel_quant.unit
-        fignum = str(sel_quant) + fig_num_ext
-        y_label = f"{sel_quant} ({sel_quant.unit})" if sel_quant.unit else f"{sel_quant}"
-
-        if not isinstance(values, np.ndarray):
-            logging.info("Selected quantity is a scalar")
-            return []
-        if values.ndim == 1:
-            plot_scalar_quantity(values)
-            return meas_list
-        elif values.ndim != 2:
-            logging.info("Selected quantity has dim > 2")
-            return []
-
-        is_complex = np.issubdtype(values.dtype, np.complexfloating)
-
-        freq_grid = np.tile(caller_inst.freq_axis, (values.shape[0], 1))
-        stacking_arrays = (freq_grid, values[:, caller_inst.freq_range_idx], np.zeros_like(freq_grid))
-        values_stacked = np.stack(stacking_arrays, axis=2, dtype=values.dtype)
-        plot_value_dict = format_meas_dict(meas_list, values_stacked, self.only_plot_avg)
-
-        for meas, y_values in plot_value_dict.items():
-            is_avg_meas = not isinstance(meas, Measurement)
-            label = self.get_legend_label(meas)
-            if not label:
-                label = "Average" if is_avg_meas else f"(x,y)={meas.position}"
-
-            if not is_complex:
-                plt.figure(fignum)
-                self.plot(y_values, is_avg=is_avg_meas, label=label)
-            else:
-                if not plt.fignum_exists(fignum):
-                    fig, (ax0, ax1) = plt.subplots(2, 1, num=fignum,
-                                                   sharex=True, gridspec_kw={'hspace': 0})
-                else:
-                    fig = plt.figure(fignum)
-                    ax0, ax1 = fig.get_axes()
-                self.plot(y_values.real, ax=ax0, is_avg=is_avg_meas, label=label)
-                y_values_imag = np.column_stack((y_values[:, 0].real, y_values[:, 1:3].imag))
-                self.plot(y_values_imag, ax=ax1, is_avg=is_avg_meas, label=label)
-
-        if not is_complex:
-            fig = plt.figure(fignum)
-            plt.xlabel("Frequency (THz)")
-            plt.ylabel(y_label)
-        else:
-            fig = plt.figure(fignum)
-            ax0, ax1 = fig.get_axes()
-            ax1.set_xlabel("Frequency (THz)")
-            ax0.set_ylabel(f"{y_label} (Real part)")
-            ax1.set_ylabel(f"{y_label} (Imag part)")
-
-        if self.settings.plot_opt.auto_show:
-            self.plt_show()
-
-        logging.info(f"Plotted {sel_quant} for {len(plot_value_dict)} measurement(s)")
-
-        return meas_list
+    def plot_quantity_impl(self):
+        return self.plot_quantity_impl()
 
     @action("Phase difference", group="Phase plots")
     def plot_meas_phi_diff(self):
@@ -1277,7 +1318,7 @@ class DataSetPlotter(PlotterBase):
         freq_grid = np.tile(self.freq_axis, (phi_diff.shape[0], 1))
         phi_diff_stacked = np.stack((freq_grid, phi_diff[:, self.freq_range_idx], np.zeros_like(freq_grid)), axis=2)
 
-        plot_meas_dict = format_meas_dict(sam_meas_list0, phi_diff_stacked, self.only_plot_avg)
+        plot_meas_dict = format_meas_dict(sam_meas_list0, phi_diff_stacked, self.only_use_avg)
 
         for meas, phi_diff_1meas in plot_meas_dict.items():
             is_avg_meas = not isinstance(meas, Measurement)

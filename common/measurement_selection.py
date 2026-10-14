@@ -115,7 +115,7 @@ class SelectionQueue(ComponentBase):
     def append(self, selection):
         with self._lock:
             self._counter += 1
-            self._queue[f"#{self._counter} {selection.label}"] = selection
+            self._queue[f"#{self._counter} {selection.legend_label}"] = selection
             self._update_listing()
 
     def pop_next(self):

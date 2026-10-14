@@ -8,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from common.settings import Settings
 from traitlets import Instance, Float
-from common.dataset_plotter import DataSetPlotter
+from common.dataset_plotter import QuantityPlots, ImagePlot
 from common.consts import c_thz, eps0_thz
 from common.components import action
 
@@ -29,7 +29,8 @@ class AppRoot(ComponentBase):
     # settings_sub = Instance(Settings)
     dataset = Instance(DataSet, allow_none=True)
     # dataset_sub = Instance(DataSet)
-    dataset_plotter = Instance(DataSetPlotter, allow_none=True)
+    quantity_plotter = Instance(QuantityPlots, allow_none=True)
+    image_plot = Instance(ImagePlot, allow_none=True)
     q_space_eval = Instance(QSpaceEval, allow_none=True)
 
     def __init__(self):
@@ -41,12 +42,14 @@ class AppRoot(ComponentBase):
 
         # self.dataset_sub = DataSet(self.settings_sub, object_name="Dataset substrate")
         self.dataset_sub = None
-        self.dataset_plotter = DataSetPlotter(self.dataset, object_name="Dataset Plotter")
-        self.q_space_eval = QSpaceEval(self.dataset, object_name="Q-space Evaluation")
+        self.quantity_plotter = QuantityPlots(self.dataset, object_name="Quantity plotter")
+        self.image_plot = ImagePlot(self.dataset, en_avg_rect_component=False,
+                                    en_slice_plots=False, object_name="Image plot")
+        self.q_space_eval = QSpaceEval(self.dataset, object_name="Q-space evaluation")
 
     @action("Take new measurement")
     def takeMeasurement(self):
-        self.dataset_plotter.plot_system_stability()
-        self.dataset_plotter.plt_show()
+        self.quantity_plotter.plot_system_stability()
+        self.quantity_plotter.plt_show()
         # self.set_trait('someDataSet', dataSet)
 
