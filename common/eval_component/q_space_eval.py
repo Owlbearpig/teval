@@ -13,7 +13,7 @@ from common.eval_component.quantity_set import QuantityDataSet
 from common.eval_component.eval_result import EvalResultData, SingleResultData
 from enum import member, Enum
 from common.units import Q_
-from common.measurements import Measurement
+from common.measurements import Measurement, DataSetBase
 from common.consts import c_thz
 from scipy.signal import iirnotch, filtfilt, detrend
 from concurrent.futures import ProcessPoolExecutor, wait as futures_wait
@@ -308,7 +308,7 @@ class QSpaceEval(EvalComponentBase):
 
     def calc_q_val(self, res_data: SingleResultData):
         if self.settings.eval_opt.use_optimization_range:
-            q_space_range = self.fit_range
+            q_space_range = self.freq_range
         else:
             q_space_range = self.settings.eval_opt.q_space_range
 

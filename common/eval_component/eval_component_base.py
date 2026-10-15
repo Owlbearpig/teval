@@ -1,7 +1,7 @@
 from common.components import ComponentBase, action
 from common.eval_component.eval_result import EvalResult, EvalResultData
 from common.save import ResultSaver
-from common.functions import f_axis_idx_map
+from common.measurements import DataSetBase
 import numpy as np
 import threading
 import logging
@@ -44,16 +44,15 @@ class ResultSignal(QObject):
 class RemainingTaskCntSignal(QObject):
     cnt_changed = Signal(int)
 
-class EvalComponentBase(ComponentBase):
+class EvalComponentBase(DataSetBase):
     selected_result_path = TPath(Path("")).tag(name="Load result", en_save=False, priority=-100)
     number_of_workers = Integer(8).tag(name="Number of cpu cores to assign", priority=2)
     transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.tmm_1layer).tag(
         name="Selected transmission model", priority=-1)
     selected_cost_fun = TEnum(CostFunctions, default_value=CostFunctions.combined_cost,
                               help="Model to experimental data metric").tag(name="Selected cost function", priority=3)
-
-    only_eval_avg = Bool(True).tag(name="Only evaluate average", priority=1003)
-    fit_range = ValueRange([Q_(0.50, "THz"), Q_(2.20, "THz")]).tag(name="Fit range", priority=1004)
+    only_use_avg = Bool(True).tag(name="Only evaluate average", priority=1003)
+    freq_range = ValueRange([Q_(0.50, "THz"), Q_(2.20, "THz")]).tag(name="Fit range", priority=1004)
 
     process_status = "Processing"
     activity = Unicode("Idle", read_only=True).tag(name="Status", group=process_status,
@@ -69,8 +68,7 @@ class EvalComponentBase(ComponentBase):
     result_saver = Instance(ResultSaver)
 
     def __init__(self, dataset, **kwargs):
-        super().__init__(**kwargs)
-        self.dataset = dataset
+        super().__init__(dataset, **kwargs)
         self.result_carrier = ResultSignal()
 
         self.current_result = EvalResult(object_name="Current result")
@@ -90,15 +88,6 @@ class EvalComponentBase(ComponentBase):
         self.busy_indicator = BusyIndicator()
         self.busy_indicator.frame_changed.connect(self._set_activity)
         self._active_eval_ = None
-
-    def __exit__(self, *args):
-        if self.settings is not None:
-            self.settings.save_configuration(self)
-
-    def __enter__(self, *args):
-        if self.settings is not None:
-            self.settings.load_configuration(self)
-        return self
 
     def _set_activity(self, text):
         self.set_trait("activity", text)
@@ -147,19 +136,6 @@ class EvalComponentBase(ComponentBase):
 
         progress = 0 if not self.total_tasks else self.completed_tasks / self.total_tasks
         self.set_trait("optimization_progress", progress)
-
-    @property
-    def freq_axis(self):
-        f_axis = self.dataset.freq_axis[self.freq_range_idx]
-        return f_axis
-
-    @property
-    def freq_range_idx(self):
-        return f_axis_idx_map(self.dataset.freq_axis, self.fit_range)
-
-    @property
-    def settings(self):
-        return self.dataset.settings
 
     @observe("selected_result_path")
     def set_selected_result(self, change):

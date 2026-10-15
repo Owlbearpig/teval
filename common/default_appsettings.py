@@ -62,7 +62,6 @@ class WindowTypes(Enum):
     parzen = "parzen"
     triang = "triang"
 
-
 class ClimateQuantity(Enum):
     Temperature = 0
     Humidity = 1
@@ -84,6 +83,11 @@ class Filetype(Enum):
     pdf = ".pdf"
     png = ".png"
     jpg = ".jpg"
+
+class PlotReferenceWaveform(Enum):
+    always = "Always"
+    first = "First"
+    never = "Never"
 
 class PixelInterpolation(Enum):
     none = None
@@ -434,6 +438,8 @@ class PlotOpt(ComponentBase):
     add_mean_to_quant_plot = Bool(True).tag(name="Add mean value to quantity plot")
     auto_show = Bool(True).tag(name="Automatically show plots")
     plot_standard_deviation = Bool(True).tag(name="Plot standard deviation")
+    plot_ref_waveform = TEnum(PlotReferenceWaveform, PlotReferenceWaveform.first).tag(
+        name="Plot reference with sample")
 
     climate_group = "Stability and climate"
     add_climate_plot = Bool(False, group=climate_group).tag(name="Add climate values to stability plot")

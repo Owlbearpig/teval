@@ -1,15 +1,13 @@
 from __future__ import annotations
-
-from tokenize import group
-
 from common.components import ComponentBase, action
 from common.dataset import DataSet, format_meas_dict
 from common.measurement_selection import ReferenceSelection
+from common.measurements import DataSetBase
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
-from common.default_appsettings import Domain, Dist, Direction, ClimateQuantity, QuantityEnum
+from common.default_appsettings import Domain, PlotReferenceWaveform, Direction, ClimateQuantity, QuantityEnum, AppSettings
 from functools import partial
 from common.functions import moving_average, f_axis_idx_map, local_minima_1d, round_dx, avg_data_array, to_db
 import logging
@@ -81,15 +79,14 @@ class GridWorker(QThread):
         self.finished.emit(grid)
 
 
-class PlotterCore(ComponentBase):
+class PlotterCore(DataSetBase):
     freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
         name="Frequency range", priority=1000)
     only_use_avg = Bool(True).tag(name="Only use average", priority=1003)
     legend_label = Unicode("").tag(name="Legend label")
 
     def __init__(self, dataset: DataSet, **kwargs):
-        super().__init__(**kwargs)
-        self.dataset = dataset
+        super().__init__(dataset, **kwargs)
         self.measurement_selector = dataset.measurement_selector
 
     @property
@@ -103,14 +100,6 @@ class PlotterCore(ComponentBase):
     @property
     def measurements(self):
         return self.dataset.measurements
-
-    @property
-    def freq_axis(self):
-        return self.dataset.freq_axis[self.freq_range_idx]
-
-    @property
-    def freq_range_idx(self):
-        return f_axis_idx_map(self.dataset.freq_axis, self.freq_range)
 
     @property
     def td_fig_num(self):
@@ -225,61 +214,71 @@ class PlotterCore(ComponentBase):
         if self.settings.plot_opt.auto_show:
             self.plt_show()
 
-    def plot_waveform_impl(self, meas_list=None, only_plot_avg=None):
+    def plot_waveform_impl(self, meas_list=None, is_ref=False, only_plot_avg=None):
         only_plot_avg = self.only_use_avg if only_plot_avg is None else only_plot_avg
 
-        if meas_list is None:
-            selection = self.measurement_selector.get_selection()
-            if selection is None:
-                return None
-            meas_list = selection.sams
-            ref_list = selection.refs
-        else:
-            ref_list = self.dataset.measurement_selector.get_matching_refs(meas_list)
+        ref_list = None
+        if not is_ref:
+            if meas_list is None:
+                selection = self.measurement_selector.get_selection()
+                if selection is None:
+                    return None
+                meas_list = selection.sams
+                ref_list = selection.refs
+            else:
+                ref_list = self.dataset.measurement_selector.get_matching_refs(meas_list)
 
-        sam_td = self.dataset.get_multi_data(meas_list)
-        sam_fd = self.dataset.get_multi_data(meas_list, Domain.Frequency)
+        meas_td = self.dataset.get_multi_data(meas_list)
+        meas_fd = self.dataset.get_multi_data(meas_list, Domain.Frequency)
 
-        if self.plot_settings.shift_sam2ref:
+        if self.plot_settings.shift_sam2ref and not is_ref:
             ref_td = self.dataset.get_multi_data(ref_list)
-            t0_sam = np.argmax(sam_td[:, :, 1], axis=1)
+            t0_sam = np.argmax(meas_td[:, :, 1], axis=1)
             t0_ref = np.argmax(ref_td[:, :, 1], axis=1)
 
             shift_t = np.abs(t0_ref - t0_sam)
-            sam_td[:, :, 1] = np.roll(sam_td[:, :, 1], -shift_t, axis=1)
+            meas_td[:, :, 1] = np.roll(meas_td[:, :, 1], -shift_t, axis=1)
 
         if self.plot_settings.remove_t_offset:
-            sam_td[:, :, 0] -= sam_td[:, 0, 0]
+            meas_td[:, :, 0] -= meas_td[:, 0, 0]
 
-        if not plt.fignum_exists(self.td_fig_num) or not plt.fignum_exists(self.fd_fig_num):
-            self.plot_ref_impl(ref_list)
+        if not is_ref and not self.settings.plot_opt.plot_ref_waveform == PlotReferenceWaveform.never:
+            if self.settings.plot_opt.plot_ref_waveform == PlotReferenceWaveform.first:
+                if not plt.fignum_exists(self.td_fig_num) or not plt.fignum_exists(self.fd_fig_num):
+                    self.plot_waveform_impl(ref_list, is_ref=True)
+            elif self.settings.plot_opt.plot_ref_waveform == PlotReferenceWaveform.always:
+                self.plot_waveform_impl(ref_list, is_ref=True)
 
-        sam_fd_db = to_db(sam_fd)
+        meas_fd_db = to_db(meas_fd)
 
         if self.plot_settings.sub_noise_floor:
             upper_end_f_slice = self.dataset.freq_axis > 6.0
-            noise_floor_db = np.mean(sam_fd_db[:, upper_end_f_slice, 1], axis=1)[:, np.newaxis]
-            sam_fd_db[:, :, 1] -= noise_floor_db
+            noise_floor_db = np.mean(meas_fd_db[:, upper_end_f_slice, 1], axis=1)[:, np.newaxis]
+            meas_fd_db[:, :, 1] -= noise_floor_db
 
-        phi = np.unwrap(np.angle(sam_fd[:, :, 1]), axis=1)
+        phi = np.unwrap(np.angle(meas_fd[:, :, 1]), axis=1)
         freq_tile = np.tile(self.dataset.freq_axis, (len(meas_list), 1))
         phi_stack = np.stack((freq_tile, phi, np.zeros_like(freq_tile)), axis=2)
 
         plot_data_fd_phi = format_meas_dict(meas_list, phi_stack, only_plot_avg)
-        plot_data_fd_amp = format_meas_dict(meas_list, sam_fd_db, only_plot_avg)
-        plot_data_td = format_meas_dict(meas_list, sam_td, only_plot_avg)
+        plot_data_fd_amp = format_meas_dict(meas_list, meas_fd_db, only_plot_avg)
+        plot_data_td = format_meas_dict(meas_list, meas_td, only_plot_avg)
+        plot_data_td = self.format_meas_dict(meas_list, meas_td)
 
         td_scale = self.plot_settings.td_scale
         ax0, ax1 = self.paint_fd_plot()
-        for sam_meas, y_fd_db in plot_data_fd_amp.items():
-            is_avg_meas = not isinstance(sam_meas, Measurement)
-            y_td = plot_data_td[sam_meas]
-            y_fd_phi = plot_data_fd_phi[sam_meas]
+        for meas, y_fd_db in plot_data_fd_amp.items():
+            is_avg_meas = not isinstance(meas, Measurement)
+            y_td = plot_data_td[meas]
+            y_fd_phi = plot_data_fd_phi[meas]
 
             plt.figure(self.td_fig_num)
-            label = self.get_legend_label(sam_meas)
+            label = self.get_legend_label(meas)
             if not label:
-                label = "Sample (Average)" if is_avg_meas else f"(x,y)={sam_meas.position}"
+                if is_ref:
+                    label = "Reference (Average)" if is_avg_meas else f"Reference ({getattr(meas, 'meas_time')})"
+                else:
+                    label = "Sample (Average)" if is_avg_meas else f"(x,y)={meas.position}"
             td_label = label
             if not np.isclose(td_scale, 1):
                 td_label += f"\n(Amplitude x {td_scale})"
@@ -290,15 +289,18 @@ class PlotterCore(ComponentBase):
             self.plot(y_fd_phi, ax=ax1, is_avg=is_avg_meas, label=label)
 
         plt.figure(self.td_fig_num)
+        plt.xlabel("Time (ps)")
+        plt.ylabel("Amplitude (Arb. u.)")
         plt.draw()
 
         plt.figure(self.fd_fig_num)
         plt.draw()
 
+        type_info = "reference" if is_ref else ""
         if only_plot_avg:
-            logging.info(f"Plotted average of {len(meas_list)}  measurement" + "s" * (len(meas_list) > 1))
+            logging.info(f"Plotted average of {len(meas_list)} {type_info} measurement" + "s" * (len(meas_list) > 1))
         else:
-            logging.info(f"Plotted {len(plot_data_fd_amp)} measurement" + "s" * (len(plot_data_fd_amp) > 1))
+            logging.info(f"Plotted {len(plot_data_fd_amp)} {type_info} measurement" + "s" * (len(plot_data_fd_amp) > 1))
 
         if self.settings.plot_opt.auto_show:
             self.plt_show()
@@ -1226,8 +1228,14 @@ class QuantityPlots(PlotterBase):
             self.plt_show()
 
     @action("Reference measurement", group="Plots")
-    def plot_ref(self, ref_list=None):
-        return self.plot_ref_impl(ref_list)
+    def plot_ref(self):
+        if self.dataset.measurement_selector.ref_sel_criterion == ReferenceSelection.file_selection:
+            ref_list = self.measurement_selector.ref_file_selection_to_ref_meas()
+        else:
+            selection = self.measurement_selector.get_selection()
+            ref_list = selection.refs if selection else None
+
+        return self.plot_waveform_impl(ref_list, is_ref=True)
 
     @action("Waveform", group="Plots")
     def plot_waveform(self, meas_list=None):

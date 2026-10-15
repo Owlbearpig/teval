@@ -63,7 +63,7 @@ class Regression(EvalComponentBase):
 
         freq_grid = np.tile(self.freq_axis, (y_sub.shape[0], 1))
         y_meas_stacked = np.stack((freq_grid, y_sub, np.zeros_like(y_sub)), axis=2)
-        return format_meas_dict(meas_list, y_meas_stacked, self.only_eval_avg)
+        return format_meas_dict(meas_list, y_meas_stacked, self.only_use_avg)
 
     @property
     def _opt_conf(self):

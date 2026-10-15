@@ -181,16 +181,18 @@ class DataSet(ComponentBase):
 
         self.freq_axis = None
 
-    def __exit__(self, *args):
-        self.settings.save_configuration(self)
-
     def __enter__(self, *args):
-        self.settings.load_configuration(self)
+        if self.settings is not None:
+            self.settings.load_configuration(self)
         self._set_observers()
         self.measurement_selector.set_observers()
         self._parse_measurements()
 
         return self
+
+    def __exit__(self, *args):
+        if self.settings is not None:
+            self.settings.save_configuration(self)
 
     @property
     def func_map(self):
@@ -250,6 +252,11 @@ class DataSet(ComponentBase):
         self._parse_measurements(self.data_path)
 
         self.set_trait("caching_progress", 1)
+
+    def is_ref(self, meas: Measurement) -> bool:
+        if not isinstance(meas, Measurement):
+            return False
+        return meas in self.measurements["refs"]
 
     def _set_observers(self):
         reference_filter_trait_names = self.trait_names(group=self.reference_filter_group)
@@ -452,7 +459,7 @@ class DataSet(ComponentBase):
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(bg_worker, data_path)
 
-    def update_meas_sorting(self, ref_filter_change):
+    def update_meas_sorting(self):
         self._update_measurement_dict(self.measurements)
 
     def _update_shape_properties(self):
