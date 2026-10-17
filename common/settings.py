@@ -104,6 +104,17 @@ class Settings(AppSettings):
             return
 
         def set_trait_values(instance, dict_):
+            def set_trait(name, val, default=None):
+                if instance is None:
+                    return
+                try:
+                    instance.set_trait(name, val)
+                except TraitError:
+                    if default is None:
+                        print(f"Could not load trait {name}. Resetting to default on next load.")
+                    else:
+                        instance.set_trait(name, default)
+
             for trait_name, dict_val in dict_.items():
                 if instance is None or getattr(instance.__class__, trait_name, None) is None:
                     continue
@@ -112,10 +123,10 @@ class Settings(AppSettings):
                     instance_class = getattr(instance, trait_name)
                     set_trait_values(instance_class, dict_val)
                 elif issubclass(actual_type, (Bool, Integer, Float, Unicode)):
-                    instance.set_trait(trait_name, dict_val)
+                    set_trait(trait_name, dict_val)
                 elif issubclass(actual_type, Quantity):
                     value = getattr(instance, trait_name)
-                    instance.set_trait(trait_name, Q_(dict_val, value.units))
+                    set_trait(trait_name, Q_(dict_val, value.units))
                 elif issubclass(actual_type, TEnum):
                     trait_definition = instance.traits()[trait_name]
                     target_enum_member = None
@@ -130,14 +141,11 @@ class Settings(AppSettings):
                             target_enum_member = member
                             break
                     if target_enum_member is not None:
-                        instance.set_trait(trait_name, target_enum_member)
+                        set_trait(trait_name, target_enum_member)
                     else:
-                        instance.set_trait(trait_name, dict_val)
+                        set_trait(trait_name, dict_val)
                 elif issubclass(actual_type, TPath):
-                    try:
-                        instance.set_trait(trait_name, Path(dict_val))
-                    except TraitError:
-                        instance.set_trait(trait_name, Path("."))
+                    set_trait(trait_name, Path(dict_val), default=Path("."))
                 elif issubclass(actual_type, ValueRange):
                     value = getattr(instance, trait_name)
                     if isinstance(value[0], Q_):
@@ -145,7 +153,7 @@ class Settings(AppSettings):
                         value = [Q_(dict_val[0], unit), Q_(dict_val[1], unit)]
                     else:
                         value = dict_val
-                    instance.set_trait(trait_name, value)
+                    set_trait(trait_name, value)
                 elif issubclass(actual_type, MultiPathSelection):
                     value = getattr(instance, trait_name)
                     value.selected_paths = [Path(p) for p in dict_val]

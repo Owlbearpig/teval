@@ -1,6 +1,6 @@
 import traceback
 from datetime import datetime
-from common.dataset import DataSet, Domain, format_meas_dict
+from common.dataset import DataSet, Domain
 from common.components import ComponentBase, action
 from common.functions import f_axis_idx_map
 from common.eval_component.shgo import shgo
@@ -59,11 +59,7 @@ class Regression(EvalComponentBase):
         meas_quant_func = self.dataset.func_map[self.sel_meas_quantity_enum]
         y_meas = meas_quant_func(meas_list)
 
-        y_sub = y_meas[:, self.freq_range_idx]
-
-        freq_grid = np.tile(self.freq_axis, (y_sub.shape[0], 1))
-        y_meas_stacked = np.stack((freq_grid, y_sub, np.zeros_like(y_sub)), axis=2)
-        return format_meas_dict(meas_list, y_meas_stacked, self.only_use_avg)
+        return self.format_meas_dict(meas_list, y_meas)
 
     @property
     def _opt_conf(self):

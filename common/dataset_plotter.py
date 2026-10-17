@@ -1,6 +1,6 @@
 from __future__ import annotations
 from common.components import ComponentBase, action
-from common.dataset import DataSet, format_meas_dict
+from common.dataset import DataSet
 from common.measurement_selection import ReferenceSelection
 from common.measurements import DataSetBase
 import matplotlib.pyplot as plt
@@ -98,10 +98,6 @@ class PlotterCore(DataSetBase):
         return self.dataset.settings.plot_opt
 
     @property
-    def measurements(self):
-        return self.dataset.measurements
-
-    @property
     def td_fig_num(self):
         fig_num_ext = self.plot_settings.fig_num_ext
         return "Time domain" + fig_num_ext
@@ -111,17 +107,39 @@ class PlotterCore(DataSetBase):
         fig_num_ext = self.plot_settings.fig_num_ext
         return "Frequency domain" + fig_num_ext
 
-    def get_legend_label(self, meas_):
-        if len(self.legend_label) < 2 or self.legend_label[:2] != "$$":
-            return self.legend_label
-        if isinstance(meas_, str):
-            return meas_
+    def get_legend_label(self, meas_, is_ref=None):
+        is_avg_meas = isinstance(meas_, str)
 
-        match = re.search(self.legend_label[2:], meas_.filepath.name)
-        if match:
-            return match.group(0)
+        label = self.legend_label
+        if not is_avg_meas and len(label) > 2 and label[:2] == "$$":
+            match = re.search(label[2:], meas_.filepath.name)
+            label = label if not match else match.group(0)
         else:
-            return self.legend_label
+            label = label if not label else label + " (Reference)"*is_ref
+
+        if label:
+            return label
+
+        if is_avg_meas:
+            if is_ref:
+                label = "Reference (Average)"
+            elif is_ref is None:
+                label = "Average"
+            else:
+                label = "Sample (Average)"
+        else:
+            if is_ref:
+                label = f"Reference ({getattr(meas_, 'meas_time')})"
+            else:
+                label = f"(x,y)={meas_.position}"
+
+        return label
+
+    def paint_td_plot(self):
+        plt.figure(self.td_fig_num)
+        plt.xlabel("Time (ps)")
+        plt.ylabel("Amplitude (Arb. u.)")
+        plt.draw()
 
     def paint_fd_plot(self):
         if not plt.fignum_exists(self.fd_fig_num):
@@ -136,102 +154,44 @@ class PlotterCore(DataSetBase):
 
         return ax0, ax1
 
-    def plot(self, plot_data, plot_type=PlotType.plot, ax=None, is_avg=False, **kwargs):
+    def should_plot_ref(self, meas_list, fd_fig=None):
+        if not meas_list or self.dataset.is_ref(meas_list[0]):
+            return False
+        if fd_fig is not None:
+            axes = fd_fig.get_axes()
+            ref_is_plotted = bool(axes) and bool(axes[0].lines)
+        else:
+            ref_is_plotted = plt.fignum_exists(self.td_fig_num) or plt.fignum_exists(self.fd_fig_num)
+
+        match self.settings.plot_opt.plot_ref_waveform:
+            case PlotReferenceWaveform.never:
+                return False
+            case PlotReferenceWaveform.only_first:
+                return not ref_is_plotted
+            case PlotReferenceWaveform.always:
+                return True
+        return False
+
+    def _plot(self, plot_data, plot_type=PlotType.plot, ax=None, **kwargs):
         if ax is None:
             ax = plt
         x, y, dy = plot_data[:, 0], plot_data[:, 1], plot_data[:, 2]
         if plot_type == PlotType.plot:
-            ax.plot(x, y, **kwargs)
+            (line,) = ax.plot(x, y, **kwargs)
         else:
-            ax.scatter(x, y, **kwargs)
-        if is_avg and self.settings.plot_opt.plot_standard_deviation:
-            ax.fill_between(x, y - dy, y + dy, alpha=0.2)
+            (line,) = ax.scatter(x, y, **kwargs)
+        if self.settings.plot_opt.plot_standard_deviation:
+            ax.fill_between(x, y - dy, y + dy, alpha=0.2, color=line.get_color())
 
-    def plot_ref_impl(self, ref_list=None, only_plot_avg=None):
-        only_plot_avg = self.only_use_avg if only_plot_avg is None else only_plot_avg
-        if ref_list is None:
-            if self.dataset.measurement_selector.ref_sel_criterion == ReferenceSelection.file_selection:
-                ref_list = self.measurement_selector.ref_file_selection_to_ref_meas()
-            else:
-                selection = self.measurement_selector.get_selection()
-                ref_list = selection.refs if selection else None
-        if not ref_list:
-            logging.info("No reference measurements selected")
+    def _plot_waveform_td(self, meas_list: list | tuple):
+        if not meas_list:
             return
-
-        zero_crossing = self.dataset.get_zero_crossing(ref_list)
-
-        ref_td = self.dataset.get_multi_data(ref_list)
-        ref_fd = self.dataset.get_multi_data(ref_list, Domain.Frequency)
-        ref_fd_db = to_db(ref_fd)
-
-        if self.plot_settings.remove_t_offset:
-            ref_td[:, :, 0] -= ref_td[:, 0, 0]
-
-        if self.plot_settings.sub_noise_floor:
-            upper_end_f_slice = self.dataset.freq_axis > 6.0
-            noise_floor_db = np.mean(ref_fd_db[:, upper_end_f_slice, 1], axis=1)[:, np.newaxis]
-            ref_fd_db[:, :, 1] -= noise_floor_db
-
-        phi = np.unwrap(np.angle(ref_fd[:, :, 1]), axis=1)
-        freq_tile = np.tile(self.dataset.freq_axis, (len(ref_list), 1))
-        phi_stack = np.stack((freq_tile, phi, np.zeros_like(freq_tile)), axis=2)
-
-        plot_data_fd_phi = format_meas_dict(ref_list, phi_stack, only_plot_avg)
-        plot_data_fd_amp = format_meas_dict(ref_list, ref_fd_db, only_plot_avg)
-        plot_data_td = format_meas_dict(ref_list, ref_td, only_plot_avg)
-
-        ax0, ax1 = self.paint_fd_plot()
-
-        for ref_meas, y_fd_amp_db in plot_data_fd_amp.items():
-            is_avg_meas = not isinstance(ref_meas, Measurement)
-            y_td = plot_data_td[ref_meas]
-            y_fd_phi = plot_data_fd_phi[ref_meas]
-            label = "Reference (Average)" if is_avg_meas else f"Reference ({getattr(ref_meas, 'meas_time')})"
-
-            self.plot(y_fd_amp_db, ax=ax0, is_avg=is_avg_meas, label=label)
-            self.plot(y_fd_phi, ax=ax1, is_avg=is_avg_meas, label=label)
-
-            plt.figure(self.td_fig_num)
-            self.plot(y_td, ax=None, is_avg=is_avg_meas, label=label)
-
-            if self.plot_settings.plot_zero_crossing:
-                plt.scatter(zero_crossing, 0, color="red")
-
-        plt.figure(self.fd_fig_num)
-        plt.draw()
-
-        plt.figure(self.td_fig_num)
-        plt.xlabel("Time (ps)")
-        plt.ylabel("Amplitude (Arb. u.)")
-        plt.draw()
-
-        if only_plot_avg:
-            logging.info(f"Plotted average of {len(ref_list)} reference measurement"+ "s"*(len(ref_list) > 1))
-        else:
-            logging.info(f"Plotted {len(plot_data_fd_amp)} reference measurement" + "s"*(len(plot_data_fd_amp) > 1))
-
-        if self.settings.plot_opt.auto_show:
-            self.plt_show()
-
-    def plot_waveform_impl(self, meas_list=None, is_ref=False, only_plot_avg=None):
-        only_plot_avg = self.only_use_avg if only_plot_avg is None else only_plot_avg
-
-        ref_list = None
-        if not is_ref:
-            if meas_list is None:
-                selection = self.measurement_selector.get_selection()
-                if selection is None:
-                    return None
-                meas_list = selection.sams
-                ref_list = selection.refs
-            else:
-                ref_list = self.dataset.measurement_selector.get_matching_refs(meas_list)
-
         meas_td = self.dataset.get_multi_data(meas_list)
-        meas_fd = self.dataset.get_multi_data(meas_list, Domain.Frequency)
+        td_scale = self.plot_settings.td_scale
+        is_ref_list = self.dataset.is_ref(meas_list[0])
 
-        if self.plot_settings.shift_sam2ref and not is_ref:
+        if not is_ref_list and self.plot_settings.shift_sam2ref:
+            ref_list = self.dataset.measurement_selector.get_matching_refs(meas_list)
             ref_td = self.dataset.get_multi_data(ref_list)
             t0_sam = np.argmax(meas_td[:, :, 1], axis=1)
             t0_ref = np.argmax(ref_td[:, :, 1], axis=1)
@@ -242,12 +202,23 @@ class PlotterCore(DataSetBase):
         if self.plot_settings.remove_t_offset:
             meas_td[:, :, 0] -= meas_td[:, 0, 0]
 
-        if not is_ref and not self.settings.plot_opt.plot_ref_waveform == PlotReferenceWaveform.never:
-            if self.settings.plot_opt.plot_ref_waveform == PlotReferenceWaveform.first:
-                if not plt.fignum_exists(self.td_fig_num) or not plt.fignum_exists(self.fd_fig_num):
-                    self.plot_waveform_impl(ref_list, is_ref=True)
-            elif self.settings.plot_opt.plot_ref_waveform == PlotReferenceWaveform.always:
-                self.plot_waveform_impl(ref_list, is_ref=True)
+        self.paint_td_plot()
+
+        plot_data_td = self.format_meas_dict(meas_list, meas_td)
+        for meas, y_td in plot_data_td.items():
+            label = self.get_legend_label(meas, is_ref_list)
+            td_label = label
+            if not np.isclose(td_scale, 1):
+                td_label += f"\n(Amplitude x {td_scale})"
+                y_td[:, 1] = td_scale * y_td[:, 1]
+            self._plot(y_td, label=td_label)
+
+    def _plot_waveform_fd(self, meas_list: list | tuple, fd_fig=None):
+        if not meas_list:
+            return
+        is_ref_list = self.dataset.is_ref(meas_list[0])
+
+        meas_fd = self.dataset.get_multi_data(meas_list, Domain.Frequency)
 
         meas_fd_db = to_db(meas_fd)
 
@@ -256,54 +227,55 @@ class PlotterCore(DataSetBase):
             noise_floor_db = np.mean(meas_fd_db[:, upper_end_f_slice, 1], axis=1)[:, np.newaxis]
             meas_fd_db[:, :, 1] -= noise_floor_db
 
-        phi = np.unwrap(np.angle(meas_fd[:, :, 1]), axis=1)
-        freq_tile = np.tile(self.dataset.freq_axis, (len(meas_list), 1))
-        phi_stack = np.stack((freq_tile, phi, np.zeros_like(freq_tile)), axis=2)
-
-        plot_data_fd_phi = format_meas_dict(meas_list, phi_stack, only_plot_avg)
-        plot_data_fd_amp = format_meas_dict(meas_list, meas_fd_db, only_plot_avg)
-        plot_data_td = format_meas_dict(meas_list, meas_td, only_plot_avg)
-        plot_data_td = self.format_meas_dict(meas_list, meas_td)
-
-        td_scale = self.plot_settings.td_scale
-        ax0, ax1 = self.paint_fd_plot()
-        for meas, y_fd_db in plot_data_fd_amp.items():
-            is_avg_meas = not isinstance(meas, Measurement)
-            y_td = plot_data_td[meas]
-            y_fd_phi = plot_data_fd_phi[meas]
-
-            plt.figure(self.td_fig_num)
-            label = self.get_legend_label(meas)
-            if not label:
-                if is_ref:
-                    label = "Reference (Average)" if is_avg_meas else f"Reference ({getattr(meas, 'meas_time')})"
-                else:
-                    label = "Sample (Average)" if is_avg_meas else f"(x,y)={meas.position}"
-            td_label = label
-            if not np.isclose(td_scale, 1):
-                td_label += f"\n(Amplitude x {td_scale})"
-
-            y_td[:, 1] = td_scale * y_td[:, 1]
-            self.plot(y_td, is_avg=is_avg_meas, label=td_label)
-            self.plot(y_fd_db, ax=ax0, is_avg=is_avg_meas, label=label)
-            self.plot(y_fd_phi, ax=ax1, is_avg=is_avg_meas, label=label)
-
-        plt.figure(self.td_fig_num)
-        plt.xlabel("Time (ps)")
-        plt.ylabel("Amplitude (Arb. u.)")
-        plt.draw()
-
-        plt.figure(self.fd_fig_num)
-        plt.draw()
-
-        type_info = "reference" if is_ref else ""
-        if only_plot_avg:
-            logging.info(f"Plotted average of {len(meas_list)} {type_info} measurement" + "s" * (len(meas_list) > 1))
+        if fd_fig is not None and not is_ref_list:
+            ref_list = self.dataset.measurement_selector.get_matching_refs(meas_list)
+            phi = self.dataset.simple_phase_difference(meas_list, ref_list)
         else:
-            logging.info(f"Plotted {len(plot_data_fd_amp)} {type_info} measurement" + "s" * (len(plot_data_fd_amp) > 1))
+            phi = self.dataset.unwrapped_phase(meas_list)
 
-        if self.settings.plot_opt.auto_show:
-            self.plt_show()
+        plot_data_fd_phi = self.format_meas_dict(meas_list, phi)
+        plot_data_fd_amp = self.format_meas_dict(meas_list, meas_fd_db)
+
+        if fd_fig is None:
+            ax0, ax1 = self.paint_fd_plot()
+        else: # phase <-> amp (ax0=ax1, ax1=ax0)
+            ax1, ax0 = fd_fig.get_axes()
+        for meas, y_fd_db in plot_data_fd_amp.items():
+            label = self.get_legend_label(meas, is_ref_list)
+
+            self._plot(y_fd_db, ax=ax0, label=label)
+            if fd_fig is not None and not is_ref_list:
+                self._plot(plot_data_fd_phi[meas], ax=ax1, label=label)
+
+    def plot_waveform_impl(self, meas_list=None, fd_fig=None, plot_td=True):
+        if meas_list is None:
+            selection = self.measurement_selector.get_selection()
+            if selection is None:
+                return None
+            meas_list = selection.sams
+        if not meas_list:
+            return None
+
+        is_ref = self.dataset.is_ref(meas_list[0])
+        meas_lists = [meas_list]
+        if self.should_plot_ref(meas_list, fd_fig):
+            meas_lists.insert(0, self.dataset.measurement_selector.get_matching_refs(meas_list))
+
+        for meas_list_ in meas_lists:
+            if plot_td:
+                self._plot_waveform_td(meas_list_)
+            self._plot_waveform_fd(meas_list_, fd_fig)
+
+        line_cnt = 1 if self.only_use_avg else len(meas_list)
+        logging.info(f"Plotted {line_cnt} measurement" + "s" * (line_cnt > 1))
+
+        if fd_fig is not None:
+            fd_fig.canvas.draw_idle()
+        else:
+            plt.figure(self.fd_fig_num)
+            plt.draw()
+            if self.settings.plot_opt.auto_show:
+                self.plt_show()
 
         return meas_list
 
@@ -458,20 +430,15 @@ class PlotterBase(PlotterCore):
 
         is_complex = np.issubdtype(values.dtype, np.complexfloating)
 
-        freq_grid = np.tile(self.freq_axis, (values.shape[0], 1))
-        stacking_arrays = (freq_grid, values[:, self.freq_range_idx], np.zeros_like(freq_grid))
-        values_stacked = np.stack(stacking_arrays, axis=2, dtype=values.dtype)
-        plot_value_dict = format_meas_dict(meas_list, values_stacked, self.only_use_avg)
+        plot_value_dict = self.format_meas_dict(meas_list, values)
 
         for meas, y_values in plot_value_dict.items():
             is_avg_meas = not isinstance(meas, Measurement)
             label = self.get_legend_label(meas)
-            if not label:
-                label = "Average" if is_avg_meas else f"(x,y)={meas.position}"
 
             if not is_complex:
                 plt.figure(fignum)
-                self.plot(y_values, is_avg=is_avg_meas, label=label)
+                self._plot(y_values, label=label)
             else:
                 if not plt.fignum_exists(fignum):
                     fig, (ax0, ax1) = plt.subplots(2, 1, num=fignum,
@@ -479,9 +446,9 @@ class PlotterBase(PlotterCore):
                 else:
                     fig = plt.figure(fignum)
                     ax0, ax1 = fig.get_axes()
-                self.plot(y_values.real, ax=ax0, is_avg=is_avg_meas, label=label)
+                self._plot(y_values.real, ax=ax0, label=label)
                 y_values_imag = np.column_stack((y_values[:, 0].real, y_values[:, 1:3].imag))
-                self.plot(y_values_imag, ax=ax1, is_avg=is_avg_meas, label=label)
+                self._plot(y_values_imag, ax=ax1, label=label)
 
         if not is_complex:
             fig = plt.figure(fignum)
@@ -497,7 +464,7 @@ class PlotterBase(PlotterCore):
         if self.settings.plot_opt.auto_show:
             self.plt_show()
 
-        logging.info(f"Plotted {sel_quant} for {len(plot_value_dict)} measurement(s)")
+        logging.info(f"Plotted {sel_quant.name} for {len(plot_value_dict)} measurement(s)")
 
         return meas_list
 
@@ -1235,7 +1202,10 @@ class QuantityPlots(PlotterBase):
             selection = self.measurement_selector.get_selection()
             ref_list = selection.refs if selection else None
 
-        return self.plot_waveform_impl(ref_list, is_ref=True)
+        if not ref_list:
+            return []
+
+        return self.plot_waveform_impl(ref_list)
 
     @action("Waveform", group="Plots")
     def plot_waveform(self, meas_list=None):
@@ -1251,32 +1221,23 @@ class QuantityPlots(PlotterBase):
         phi = self.dataset.simple_phase_difference(meas_list)
         phi_corrected = self.dataset.phase_difference(meas_list)
 
-        phi = phi[:, self.freq_range_idx]
-        phi_corrected = phi_corrected[:, self.freq_range_idx]
-
-        freq_tile = np.tile(self.freq_axis, (phi.shape[0], 1))
-        phi_stacked = np.stack((freq_tile, phi, np.zeros_like(phi)), axis=2)
-        phi_corrected_stacked = np.stack((freq_tile, phi_corrected, np.zeros_like(phi_corrected)), axis=2)
-
-        plot_data_phi = format_meas_dict(meas_list, phi_stacked, self.only_use_avg)
-        plot_data_phi_corrected = format_meas_dict(meas_list, phi_corrected_stacked, self.only_use_avg)
+        plot_data_phi = self.format_meas_dict(meas_list, phi)
+        plot_data_phi_corrected = self.format_meas_dict(meas_list, phi_corrected)
 
         fig_num_ext = self.plot_settings.fig_num_ext
         for meas, phi_1meas in plot_data_phi.items():
             phi_cor_1meas = plot_data_phi_corrected[meas]
             is_avg_meas = not isinstance(meas, Measurement)
             label = self.get_legend_label(meas)
-            if not label:
-                label = meas if is_avg_meas else str(meas.filepath.name)
 
             plt.figure("Phase correction comparison" + fig_num_ext)
             plt.title("Phase correction comparison")
-            self.plot(phi_1meas, ax=None, is_avg=is_avg_meas, label=label + " (Original)", ls="dashed")
-            self.plot(phi_cor_1meas, ax=None, is_avg=is_avg_meas, label=label + " (Corrected)")
+            self._plot(phi_1meas, ax=None, label=label + " (Original)", ls="dashed")
+            self._plot(phi_cor_1meas, ax=None, label=label + " (Corrected)")
 
             plt.figure("Phase" + fig_num_ext)
             plt.title("Phase (angle)")
-            self.plot(phi_cor_1meas, ax=None, is_avg=is_avg_meas, label=label)
+            self._plot(phi_cor_1meas, ax=None, label=label)
 
             plt.figure("Phase slope" + fig_num_ext)
             plt.title("Phase slope")
@@ -1284,7 +1245,7 @@ class QuantityPlots(PlotterBase):
             dphi = np.diff(phi_cor_1meas[:, 1])
             dphi_uncert = np.sqrt(phi_cor_1meas[1:, 2]**2 + phi_cor_1meas[:-1, 2]**2)
             slope_data = np.array([self.freq_axis[:-1], dphi / df, dphi_uncert]).T
-            self.plot(slope_data, ax=None, is_avg=is_avg_meas, label=label)
+            self._plot(slope_data, ax=None, label=label)
 
         plt.figure("Phase correction comparison" + fig_num_ext)
         plt.xlabel("Frequency (THz)")
@@ -1323,18 +1284,12 @@ class QuantityPlots(PlotterBase):
         phi1 = simple_eval_res1.phi_corrected
         phi_diff = phi0 - phi1
 
-        freq_grid = np.tile(self.freq_axis, (phi_diff.shape[0], 1))
-        phi_diff_stacked = np.stack((freq_grid, phi_diff[:, self.freq_range_idx], np.zeros_like(freq_grid)), axis=2)
-
-        plot_meas_dict = format_meas_dict(sam_meas_list0, phi_diff_stacked, self.only_use_avg)
-
+        plot_meas_dict = self.format_meas_dict(sam_meas_list0, phi_diff)
         for meas, phi_diff_1meas in plot_meas_dict.items():
-            is_avg_meas = not isinstance(meas, Measurement)
             label = self.get_legend_label(meas)
-            if not label:
-                label = meas if is_avg_meas else str(meas.filepath.name)
+
             plt.figure("Phi difference")
-            self.plot(phi_diff_1meas, is_avg=is_avg_meas, label=label)
+            self._plot(phi_diff_1meas, label=label)
 
         plt.figure("Phi difference")
         plt.xlabel("Frequency (THz)")

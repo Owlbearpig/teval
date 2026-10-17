@@ -54,21 +54,6 @@ New ideas: add teralyzer evaluation (time consuming)
 [f] = THz (1/ps), [c_thz] = µm/ps
 """
 
-def format_meas_dict(meas_list, data_array, average_only=False):
-    if len(meas_list) == 1:
-        return {meas_list[0]: data_array[0]}
-
-    y_meas_dict_ = {"Average": avg_data_array(data_array)}
-
-    if not average_only:
-        individual_y_meas = {
-            meas: data_array[meas_idx]
-            for meas_idx, meas in enumerate(meas_list)
-        }
-        y_meas_dict_.update(individual_y_meas)
-
-    return y_meas_dict_
-
 class WindowEvalResult:
     def __init__(self, **kwargs):
         self.meas_list = kwargs.get("meas", None)
@@ -788,6 +773,10 @@ class DataSet(ComponentBase):
         y_fd = self.get_multi_data(meas_, domain=Domain.Frequency)
         return np.angle(y_fd[:, :, 1])
 
+    def unwrapped_phase(self, meas_: Measurement):
+        phi = self.phase(meas_)
+        return np.unwrap(phi, axis=1)
+
     def absorbance(self, meas_: Measurement, ref_meas_=None):
         return -to_db(self.power(meas_, ref_meas_)) / 20
 
@@ -863,7 +852,6 @@ class DataSet(ComponentBase):
         phi_r_m0 = np.angle(m0_fd[:, :, 1])
 
         return np.unwrap(phi_r_m0 - phi_r_m1, axis=1)
-
 
     def phase_difference(self, m0, m1=None):
         # phase unwrapping Phase Retrieval in Terahertz Time-Domain

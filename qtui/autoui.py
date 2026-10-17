@@ -7,7 +7,8 @@ from qtui.changeindicatorlineedit import ChangeIndicatorLineEdit
 from qtui.fastfilefilterproxy import FastNameFilterProxyModel
 from common.components import ComponentBase
 from traitlets import Instance
-from common.traits import Quantity, Path as PathTrait, ValueRange, MultiPathSelection, StrListSelection
+from qtui.mplcanvas import MPLCanvas, FigureCanvasWidget
+from common.traits import Quantity, Path as PathTrait, ValueRange, MultiPathSelection, StrListSelection, PlotFigure
 from pathlib import Path
 import types
 import logging
@@ -18,6 +19,7 @@ from qtui.flowlayout import FlowLayout
 from common.traits import Q_, QuantityDict
 from qtui.mplcanvas import MPLCanvas
 
+plot_traits = (QuantityDict, PlotFigure)
 
 def is_component_trait(x):
     return (isinstance(x, Instance) and issubclass(x.klass, ComponentBase))
@@ -513,6 +515,11 @@ def create_plot_area(component, name, prettyName, trait):
 
     return canvas
 
+def create_figure_area(component, name, prettyName, trait):
+    w = FigureCanvasWidget(trait.get(component))
+    w.setTitle(prettyName)
+    return w
+
 def _group(trait):
     return trait.metadata.get("group", "General")
 
@@ -562,7 +569,7 @@ def generate_component_ui(name, component):
     groups = OrderedDict()
     hasPlots = False
     for name, trait in traits:
-        if isinstance(trait, QuantityDict):
+        if isinstance(trait, plot_traits):
             hasPlots = True
             continue
 
@@ -575,7 +582,7 @@ def generate_component_ui(name, component):
 
     controlWidget.param_widgets = {}
     for name, trait in traits:
-        if isinstance(trait, QuantityDict):
+        if isinstance(trait, plot_traits):
             continue
 
         prettyName = _prettyName(trait, name)
@@ -708,11 +715,14 @@ def generate_component_ui(name, component):
     plotBox.setContentsMargins(0, 0, 0, 0)
 
     for name, trait in traits:
-        if not isinstance(trait, QuantityDict):
+        if not isinstance(trait, plot_traits):
             continue
         prettyName = _prettyName(trait, name)
 
-        plotBox.addWidget(create_plot_area(component, name, prettyName, trait))
+        if isinstance(trait, QuantityDict):
+            plotBox.addWidget(create_plot_area(component, name, prettyName, trait))
+        elif isinstance(trait, PlotFigure):
+            plotBox.addWidget(create_figure_area(component, name, prettyName, trait))
 
     hSplitter = QtWidgets.QSplitter()
     hSplitter.addWidget(plotWidget)
@@ -742,7 +752,7 @@ def generate_ui(component):
         widget = generate_component_ui(prettyName, component)
         newItem.widgetId = stack.addWidget(widget)
 
-        for name, trait in sorted(component.attributes.items(), key=lambda x: x[0]):
+        for name, trait in sorted(component.attributes.items(), key=_traitSortingKey):
             if not is_component_trait(trait):
                 continue
             cInst = getattr(component, name)

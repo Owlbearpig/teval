@@ -142,8 +142,8 @@ class EvalResult(ComponentBase):
             sort_idx = np.argsort(x_vals)
             q_argmin = np.argmin(y_vals)
             d_opt, shift_opt = np.round(results[q_argmin].d, 3), np.round(results[q_argmin].shift, 3)
-            plt.plot(x_vals[sort_idx], y_vals[sort_idx], label=f"shift={shift}", marker="o")
-            plt.scatter(x_vals[q_argmin], y_vals[q_argmin], c="red", label=f"Optimum (d={d_opt})")
+            plt.plot(x_vals[sort_idx], y_vals[sort_idx], label=f"shift={shift}", marker="o", zorder=1)
+            plt.scatter(x_vals[q_argmin], y_vals[q_argmin], c="red", label=f"Optimum (d={d_opt})", zorder=2)
 
             logging.info(f"Optimum thickness: {d_opt} (shift: {shift_opt})")
 

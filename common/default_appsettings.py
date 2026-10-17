@@ -86,7 +86,7 @@ class Filetype(Enum):
 
 class PlotReferenceWaveform(Enum):
     always = "Always"
-    first = "First"
+    only_first = "Only first"
     never = "Never"
 
 class PixelInterpolation(Enum):
@@ -438,7 +438,7 @@ class PlotOpt(ComponentBase):
     add_mean_to_quant_plot = Bool(True).tag(name="Add mean value to quantity plot")
     auto_show = Bool(True).tag(name="Automatically show plots")
     plot_standard_deviation = Bool(True).tag(name="Plot standard deviation")
-    plot_ref_waveform = TEnum(PlotReferenceWaveform, PlotReferenceWaveform.first).tag(
+    plot_ref_waveform = TEnum(PlotReferenceWaveform, PlotReferenceWaveform.only_first).tag(
         name="Plot reference with sample")
 
     climate_group = "Stability and climate"

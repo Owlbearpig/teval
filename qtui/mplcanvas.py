@@ -328,3 +328,22 @@ class MPLCanvas(QtWidgets.QGroupBox):
             self._update_combobox()
 
         self.quantity_combobox._emit_checked()
+
+class FigureCanvasWidget(QtWidgets.QGroupBox):
+    """Embeds an existing Figure (e.g. one with SpanSelectors) in the GUI."""
+    def __init__(self, figure, parent=None):
+        style_mpl()
+        super().__init__(parent)
+        self.fig = figure
+        self.fig.set_dpi(QtWidgets.QApplication.primaryScreen().logicalDotsPerInch())
+        self.fig.patch.set_alpha(0)
+        self.fig.set_layout_engine("constrained")
+
+        self.canvas = FigureCanvasQTAgg(self.fig)
+        self.toolbar = NavigationToolbar2QT(self.canvas, self)
+
+        vbox = QtWidgets.QVBoxLayout(self)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.addWidget(self.toolbar)
+        vbox.addWidget(self.canvas)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)

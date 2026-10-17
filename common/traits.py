@@ -22,6 +22,7 @@ import numbers
 import traitlets
 from common.eval_component.quantity_set import QuantityDataSetDict
 from traitlets import TraitError, Undefined, TraitType, List, Float, Integer, Instance, HasTraits, Unicode
+from matplotlib.figure import Figure
 
 if float(traitlets.__version__[0]) <= 4:
     from traitlets import class_of
@@ -46,6 +47,10 @@ class TraitTypePatched(TraitType):
                 v = self._validate(obj, self.default_value)
                 if self.name is not None:
                     self.set(obj, v)
+
+class PlotFigure(Instance):
+    def __init__(self, **kwargs):
+        super().__init__(Figure, args=(), **kwargs)
 
 class QuantityDict(TraitTypePatched):
 

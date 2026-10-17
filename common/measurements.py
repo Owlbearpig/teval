@@ -30,6 +30,10 @@ class DataSetBase(ComponentBase):
             self.settings.save_configuration(self)
 
     @property
+    def measurements(self):
+        return self.dataset.measurements
+
+    @property
     def settings(self):
         return self.dataset.settings
 
@@ -43,10 +47,13 @@ class DataSetBase(ComponentBase):
         return f_axis_idx_map(self.dataset.freq_axis, self.freq_range)
 
     def format_meas_dict(self, meas_list, data_array: np.ndarray):
-        if data_array.ndim == 2:
-            if data_array.shape[1] != len(self.freq_axis):
+        if data_array.shape[1] != len(self.freq_axis):
+            if data_array.ndim == 2:
                 data_array = data_array[:, self.freq_range_idx]
+            elif data_array.ndim == 3:
+                data_array = data_array[:, self.freq_range_idx, :]
 
+        if data_array.ndim == 2:
             freq_tile = np.tile(self.freq_axis, (len(meas_list), 1))
             data_array = np.stack((freq_tile, data_array, np.zeros_like(freq_tile)), axis=2)
 

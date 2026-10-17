@@ -2,10 +2,10 @@ import logging
 import traceback
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 from matplotlib.widgets import SpanSelector
 from common.eval_component.transfer_functions import TransmissionModels
 from common.eval_component.eval_component_base import EvalComponentBase
-from common.dataset import format_meas_dict
 from common.measurement_selection import Selection, SelectionQueue
 from common.default_appsettings import SimRISelection, Domain, QSpaceQuantity, AppSettings
 from common.functions import f_axis_idx_map, moving_average, do_ifft, to_db, avg_data_array
@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from common.dataset_plotter import PlotterCore
 from mpl_settings import mpl_style_params
 from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance, link
-from common.traits import Quantity, Q_, ValueRange, Path as TPath
+from common.traits import Quantity, Q_, ValueRange, Path as TPath, PlotFigure
 from common.components import action, ComponentBase
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -67,7 +67,7 @@ class OptimizationMethods(Enum):
     SHGO = member(shgo_transmission_optimization)
 
 class Preprocessing(PlotterCore):
-    fig_num = "Phase correction range"
+    fd_fig = PlotFigure().tag(name="Phase correction range")
 
     freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
         name="Plotted frequency range", priority=1000)
@@ -75,25 +75,32 @@ class Preprocessing(PlotterCore):
 
     phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(
         name="Phase extrapolation range", group="Phase correction")
+    fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(
+        name="Fit range", group="Fit range")
+
+    save_open_figures = None
+    close_figures = None
+    plt_show = None
 
     def __init__(self, dataset, **kwargs):
         super().__init__(dataset, **kwargs)
         self._fit_range_target = None
         self._span_fit = None
         self._span_phi = None
+        self._phi_ax = None
+        self._phi_data_lines = []
+        self._phi_fit_lines = []
 
-    def set_fit_range_target(self, target):
-        if self._fit_range_target is not None:
-            self._fit_range_target.unobserve(self._on_target_fit_range, names="fit_range")
-        self._fit_range_target = target
-        target.observe(self._on_target_fit_range, names="fit_range")
+        self.fd_fig.subplots(2, 1, sharex=True)
 
-    def _on_target_fit_range(self, change):
+    @observe("fit_range")
+    def _on_fit_range(self, change):
         self._set_extents(self._span_fit, change["new"])
 
     @observe("phi_fit_range")
     def _on_phi_fit_range(self, change):
         self._set_extents(self._span_phi, change["new"])
+        self._update_phase_fit()
 
     @staticmethod
     def _set_extents(span, rng):
@@ -104,19 +111,26 @@ class Preprocessing(PlotterCore):
             span.extents = (f0, f1)
             span.ax.figure.canvas.draw_idle()
 
-    @action("Plot spectrum and phase", group="Phase correction")
+    @action("Plot spectrum and phase", group="Phase correction",
+            rc_params=mpl.rcParamsDefault.copy())
     def plot_phase_fit_selector(self):
-        plt.close(self.td_fig_num)
-        plt.close(self.fd_fig_num)
+        fig = self.fd_fig
+        fig.clear()
+        fig.set_layout_engine("constrained")
+        fig.get_layout_engine().set(h_pad=0, hspace=0)
+        ax0, ax1 = fig.subplots(2, 1, sharex=True, gridspec_kw={'hspace': 0})
+        ax0.set_ylabel("Phase difference (rad)")
+        ax1.set_xlabel("Frequency (THz)")
+        ax1.set_ylabel("Amplitude (dB)")
 
-        with self.plot_settings.override(auto_show=False):
-            meas_list = self.plot_waveform_impl(only_plot_avg=self.only_use_avg)
+        meas_list = self.plot_waveform_impl(fd_fig=fig, plot_td=False)
         if meas_list is None:
             return
+        self._redraw_legend(fig)
 
-        plt.close(self.td_fig_num)  # time-domain figure isn't needed here
-        fig = plt.figure(self.fd_fig_num)
-        ax0, ax1 = fig.get_axes()
+        self._phi_ax = ax0
+        self._phi_data_lines = list(ax0.lines)
+        self._phi_fit_lines = []
 
         def _make_selector(ax, callback, color):
             return SpanSelector(ax, callback, "horizontal", useblit=True,
@@ -124,26 +138,52 @@ class Preprocessing(PlotterCore):
                                 props=dict(facecolor=color, alpha=0.2))
 
         def _on_fit_select(xmin, xmax):
-            tgt = self._fit_range_target
-            if tgt is None or xmax - xmin <= 0:
+            if xmax - xmin <= 0:
                 return
-            unit = tgt.fit_range[0].units
-            tgt.fit_range = [Q_(float(xmin), "THz").to(unit), Q_(float(xmax), "THz").to(unit)]
+            self.fit_range = [Q_(float(xmin), "THz"), Q_(float(xmax), "THz")]
 
         def _on_phi_select(xmin, xmax):
             if xmax - xmin <= 0:
                 return
             self.phi_fit_range = [Q_(float(xmin), "THz"), Q_(float(xmax), "THz")]
 
-        self._span_fit = _make_selector(ax0, _on_fit_select, "tab:blue")
-        self._span_phi = _make_selector(ax1, _on_phi_select, "tab:green")
+        self._span_phi = _make_selector(ax0, _on_phi_select, "tab:blue")
+        self._span_fit = _make_selector(ax1, _on_fit_select, "tab:green")
 
-        if self._fit_range_target is not None:
-            self._set_extents(self._span_fit, self._fit_range_target.fit_range)
+        self._set_extents(self._span_fit, self.fit_range)
         self._set_extents(self._span_phi, self.phi_fit_range)
         ax0.set_xlim(*self.freq_range.magnitude)
 
-        self.plt_show()
+        self._update_phase_fit()
+
+        fig.canvas.draw_idle()
+
+    def _update_phase_fit(self):
+        ax = self._phi_ax
+        if ax is None:
+            return
+        for ln in self._phi_fit_lines:
+            try:
+                ln.remove()
+            except ValueError:
+                pass
+        self._phi_fit_lines = []
+
+        f0, f1 = (q.to("THz").magnitude for q in self.phi_fit_range)
+        for line in self._phi_data_lines:
+            x = np.asarray(line.get_xdata(), dtype=float)
+            y = np.asarray(line.get_ydata(), dtype=float)
+            m = (x >= f0) & (x <= f1) & np.isfinite(y)
+            if m.sum() < 2 or np.ptp(x[m]) == 0:
+                continue
+            slope, offset = np.polyfit(x[m], y[m], 1)
+            xs = np.array([x.min(), x.max()])
+            (fit_line,) = ax.plot(xs, slope * xs + offset, ls="--", lw=1.2,
+                                  color=line.get_color(), label=f"offset: {np.round(offset, 2)} (rad)",
+                                  scalex=False, scaley=False)
+            self._phi_fit_lines.append(fit_line)
+        ax.legend()
+        ax.figure.canvas.draw_idle()
 
 
 class QSpaceEval(EvalComponentBase):
@@ -162,13 +202,14 @@ class QSpaceEval(EvalComponentBase):
     bound_shrink_factor = Float(0.20, group=t_fit_grp_name).tag(name="Thickness bounds shrink factor",
                                                                 priority=4)
 
-    preprocessing = Instance(Preprocessing)
+    preprocessing = Instance(Preprocessing).tag(priority=1)
 
     def __init__(self, dataset, **kwargs):
         super().__init__(dataset, **kwargs)
 
         self.current_process_executor = None
         self.preprocessing = Preprocessing(dataset)
+        self._fit_range_link = link((self, "freq_range"), (self.preprocessing, "fit_range"))
 
         self.opt_state = {}
 
@@ -180,24 +221,20 @@ class QSpaceEval(EvalComponentBase):
 
     def ref_fd_dict(self, selection):
         ref_list = list(selection.refs)
-        ref_fd = self.dataset.get_multi_data(ref_list)[:, self.freq_range_idx]
-        return format_meas_dict(ref_list, ref_fd, self.only_eval_avg)
+        ref_fd = self.dataset.get_multi_data(ref_list)
+        return self.format_meas_dict(ref_list, ref_fd)
 
     def t_exp_dict(self, selection):
         meas_list = list(selection.sams)
         t_exp = self.dataset.transmission(meas_list, list(selection.refs))
-        f_axis_tile = np.tile(self.freq_axis, (len(meas_list), 1))
-        t_exp_stacked = np.stack((f_axis_tile, t_exp[:, self.freq_range_idx], np.zeros_like(f_axis_tile)), axis=2)
-        return format_meas_dict(meas_list, t_exp_stacked, self.only_eval_avg)
+        return self.format_meas_dict(meas_list, t_exp)
 
     def n_guess(self, selection):
         meas_list = list(selection.sams)
         d_init = np.mean(self.d_opt_axis_bounds.magnitude)
         ref_idx = self.dataset.refractive_index_estimate(meas_list, ref_meas_=list(selection.refs),
                                                                       d=d_init)
-        f_axis_tile = np.tile(self.freq_axis, (len(meas_list), 1))
-        ref_idx_stacked = np.stack((f_axis_tile, ref_idx[:, self.freq_range_idx], np.zeros_like(f_axis_tile)), axis=2)
-        return format_meas_dict(meas_list, ref_idx_stacked, self.only_eval_avg)
+        return self.format_meas_dict(meas_list, ref_idx)
 
     @action("Fit transmission model", group=t_fit_grp_name)
     def fit_unknown_layer(self):
