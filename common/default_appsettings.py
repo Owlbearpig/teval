@@ -353,7 +353,7 @@ class EvalOpt(ComponentBase):
 
     q_space_eval_grp = "Q-value calculation"
     normalize_q_vals = Bool(False, group=q_space_eval_grp).tag(name="Normalize q-values")
-    use_optimization_range = Bool(True, group=q_space_eval_grp).tag(name="Use fit range for calculation")
+    use_separate_range = Bool(False, group=q_space_eval_grp).tag(name="Use separate range for calculation")
     q_space_range = ValueRange([Q_(0.75, "THz"), Q_(2.00, "THz")]).tag(name="Separate q-space minimization range",
                                                                        group=q_space_eval_grp)
     q_space_quantity = TEnum(QSpaceQuantity, QSpaceQuantity.n).tag(name="Quantity used for q-value calculation",

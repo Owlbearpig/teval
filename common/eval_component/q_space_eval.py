@@ -13,7 +13,7 @@ from common.eval_component.quantity_set import QuantityDataSet
 from common.eval_component.eval_result import EvalResultData, SingleResultData
 from enum import member, Enum
 from common.units import Q_
-from common.measurements import Measurement, DataSetBase
+from common.measurements import Measurement, Averaging
 from common.consts import c_thz
 from scipy.signal import iirnotch, filtfilt, detrend
 from concurrent.futures import ProcessPoolExecutor, wait as futures_wait
@@ -22,14 +22,13 @@ from functools import partial
 from common.eval_component.single_opt import shgo_transmission_optimization
 from common.eval_component.t_fit_global import spline_transmission_optimization
 from dataclasses import dataclass, field
-from common.dataset_plotter import PlotterCore
 from mpl_settings import mpl_style_params
 from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance, link
 from common.traits import Quantity, Q_, ValueRange, Path as TPath, PlotFigure
 from common.components import action, ComponentBase
 import threading
 from concurrent.futures import ThreadPoolExecutor
-
+from common.dataset_plotter import DataSetPlotter
 
 action = partial(action, check_init=True, rc_params=mpl_style_params)
 
@@ -66,12 +65,12 @@ class OptimizationMethods(Enum):
     Spline = member(spline_transmission_optimization)
     SHGO = member(shgo_transmission_optimization)
 
-class Preprocessing(PlotterCore):
+class Preprocessing(DataSetPlotter):
     fd_fig = PlotFigure().tag(name="Phase correction range")
 
     freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
         name="Plotted frequency range", priority=1000)
-    only_use_avg = Bool(True).tag(name="Only plot average", priority=1003)
+    averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Averaging", priority=1003)
 
     phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(
         name="Phase extrapolation range", group="Phase correction")
@@ -210,6 +209,8 @@ class QSpaceEval(EvalComponentBase):
         self.current_process_executor = None
         self.preprocessing = Preprocessing(dataset)
         self._fit_range_link = link((self, "freq_range"), (self.preprocessing, "fit_range"))
+        self._phi_fit_range_link = link((self.settings.eval_opt, "phi_fit_range"),
+                                        (self.preprocessing, "phi_fit_range"))
 
         self.opt_state = {}
 
@@ -344,10 +345,10 @@ class QSpaceEval(EvalComponentBase):
                                           + 1j * delta_k, "")
 
     def calc_q_val(self, res_data: SingleResultData):
-        if self.settings.eval_opt.use_optimization_range:
-            q_space_range = self.freq_range
-        else:
+        if self.settings.eval_opt.use_separate_range:
             q_space_range = self.settings.eval_opt.q_space_range
+        else:
+            q_space_range = self.freq_range
 
         freq_axis = res_data.freq_axis.magnitude
         freq_range_idx = f_axis_idx_map(freq_axis, q_space_range)

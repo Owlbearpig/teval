@@ -4,22 +4,25 @@ from datetime import datetime
 from pathlib import Path
 from common.components import ComponentBase
 from common.functions import avg_data_array, f_axis_idx_map
+from enum import Enum
+from traitlets import Enum as TEnum
 
 meas_id_func = lambda meas_datetime: int((meas_datetime - datetime.min).total_seconds() * 1e6)
 timestamp2id = lambda timestamp_str: meas_id_func(datetime.strptime(timestamp_str, "%Y-%m-%dT%H-%M-%S.%f"))
 
-
-class AverageMeasurement:
-    meas_type = None # ?
-
+class Averaging(Enum):
+    only_avg = "Average only"
+    only_individual = "Individual measurements only"
+    both = "Average and individual measurements"
 
 class DataSetBase(ComponentBase):
     freq_range = None
-    only_use_avg = None
+    averaging = TEnum(Averaging, Averaging.only_avg)
 
     def __init__(self, dataset, **kwargs):
         super().__init__(**kwargs)
         self.dataset = dataset
+        self.measurement_selector = dataset.measurement_selector
 
     def __enter__(self, *args):
         if self.settings is not None:
@@ -60,17 +63,18 @@ class DataSetBase(ComponentBase):
         if len(meas_list) == 1:
             return {meas_list[0]: data_array[0]}
 
-        y_meas_dict_ = {"Average": avg_data_array(data_array)}
-
-        if not self.only_use_avg:
-            individual_y_meas = {
-                meas: data_array[meas_idx]
-                for meas_idx, meas in enumerate(meas_list)
-            }
-            y_meas_dict_.update(individual_y_meas)
-
-        return y_meas_dict_
-
+        average_y_meas = {"Average": avg_data_array(data_array)}
+        individual_y_meas = {
+            meas: data_array[meas_idx]
+            for meas_idx, meas in enumerate(meas_list)
+        }
+        match self.averaging:
+            case Averaging.only_avg:
+                return average_y_meas
+            case Averaging.only_individual:
+                return individual_y_meas
+            case Averaging.both:
+                return {**average_y_meas, **individual_y_meas}
 
 class Measurement:
     filepath = Path()

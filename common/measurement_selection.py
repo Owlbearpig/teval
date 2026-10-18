@@ -5,14 +5,15 @@ import logging
 import numpy as np
 from common.components import ComponentBase, action
 from common.settings import Settings
-from common.traits import MultiPathSelection, ValueRange, MultiPathClass, StrListSelection, StrList
+from common.traits import MultiPathSelection, ValueRange, MultiPathClass, StrListSelection, StrList, Quantity
 from common.units import Q_
 from common.default_appsettings import Dist
-from traitlets import Enum as TEnum, Unicode, Bool, Int, Instance, observe
+from traitlets import Enum as TEnum, Unicode, Bool, Int, Instance, observe, Float
 from enum import Enum
 from common.measurements import timestamp2id, Measurement
 from types import TracebackType
 
+action_en_checker = lambda inst: inst.selection_queue is not None
 
 def get_coordinate_line(measurements, x=None, y=None):
     if not measurements:
@@ -137,6 +138,12 @@ class SelectionQueue(ComponentBase):
     def __len__(self):
         return len(self._queue)
 
+    @action(name="Remove selected selection")
+    def remove_selected_item(self):
+        sel = self.queued_selections.selected_item
+        selection = self._queue.pop(sel)
+        self._update_listing()
+        self._refresh_info()
 
 class MeasurementSelection(ComponentBase):
     measurement_selection_grp = "Measurement selection"
@@ -167,6 +174,8 @@ class MeasurementSelection(ComponentBase):
                         ).tag(name="Direct file selection match", priority=2000, group=reference_matching_grp)
 
     selection_queue = Instance(SelectionQueue, allow_none=True)
+
+    queue_grp = "Queue actions"
 
     reference_paths = MultiPathSelection().tag(fullwidth=False, group="Direct reference file selection", combine=True)
     sample_paths = MultiPathSelection().tag(fullwidth=False, group="Direct sample file selection", combine=True)
@@ -236,8 +245,7 @@ class MeasurementSelection(ComponentBase):
         dict_map = {meas: ref_list[i] for i, meas in enumerate(meas_list)}
         return lambda meas: dict_map[meas] if isinstance(meas, Measurement) else meas
 
-    @action("Add selection to queue", enable_checker=lambda inst: inst.selection_queue is not None, priority=1,
-            group="Queue actions")
+    @action("Add selection to queue", enable_checker=action_en_checker, priority=1, group=queue_grp)
     def queue_selection(self):
         selection = self.get_selection()
         if selection is None:
@@ -249,12 +257,59 @@ class MeasurementSelection(ComponentBase):
         msg = f"Queued {len(selection.sams)} measurement{sam_s}, {len(self.selection_queue)} selection{sel_s} in queue"
         self.dataset.logger.info(msg)
 
-    @action("Clear queue", enable_checker=lambda inst: inst.selection_queue is not None, priority=2,
-            group="Queue actions")
+    @action("Clear queue", enable_checker=action_en_checker, priority=2, group=queue_grp)
     def clear_queue(self):
         queue_len = len(self.selection_queue)
         self.selection_queue.clear()
-        self.dataset.logger.info(f"Cleared {queue_len} {'selection' + 's' * (queue_len - 1)} from queue")
+        self.dataset.logger.info(f"Cleared {queue_len} {'s' if queue_len != 1 else ''} from queue")
+
+    def _split_blocks(self):
+        ref_set = set(self.measurements["refs"])
+        ordered = sorted(self.measurements["all"], key=lambda m: m.meas_time)
+
+        blocks = []
+        for m in ordered:
+            key = (m in ref_set, self.cache.coord_map_key_func(m.position))
+            if blocks and blocks[-1][0] == key:
+                blocks[-1][1].append(m)
+            else:
+                blocks.append((key, [m]))
+
+        sam_blocks = [b for (is_ref, _), b in blocks if not is_ref]
+        ref_blocks = [b for (is_ref, _), b in blocks if is_ref]
+        return sam_blocks, ref_blocks
+
+    @action("Auto queue", enable_checker=action_en_checker, priority=3, group="Queue actions")
+    def auto_queue(self):
+        sam_blocks, ref_blocks = self._split_blocks()
+        if not sam_blocks:
+            self.dataset.logger.warning("No sample measurements to queue")
+            return
+
+        run_mid_time = lambda run: run[0].meas_time + (run[-1].meas_time - run[0].meas_time) / 2
+
+        use_blocks = self.ref_sel_criterion == ReferenceSelection.file_selection
+        if use_blocks and not ref_blocks:
+            self.dataset.logger.warning("No reference measurements in dataset")
+            return
+
+        n_queued = 0
+        for sam_block in sam_blocks:
+            if use_blocks:
+                t = run_mid_time(sam_block)
+                ref_block = min(ref_blocks, key=lambda b: abs(run_mid_time(b) - t))
+                refs = list(ref_block[:len(sam_block)])
+                refs += (len(sam_block) - len(refs)) * [refs[-1]]
+            else:
+                refs = self.get_matching_refs(sam_block)
+
+            if len(refs) != len(sam_block):
+                self.dataset.logger.warning(f"Skipping {sam_block[0].filepath.name}: no references resolved")
+                continue
+            self.selection_queue.append(Selection(tuple(sam_block), tuple(refs)))
+            n_queued += 1
+
+        self.dataset.logger.info(f"Auto queued {n_queued} selection{'s' if n_queued != 1 else ''}")
 
     def get_selection(self, must_match=True):
         sams = self.get_selected_measurements()

@@ -224,12 +224,23 @@ def create_combobox(component, name, trait):
 
         current_trait = component.traits()[name]
         for item in current_trait.values:
-            item_name = item.name if hasattr(item, "name") else str(item)
+            if hasattr(item, "value") and isinstance(item.value, str):
+                item_name = str(item.value)
+            elif hasattr(item, "name"):
+                item_name = item.name
+            else:
+                item_name = str(item)
             combobox.addItem(item_name, item)
 
         current_val = current_trait.get(component)
-        if hasattr(current_val, "name"):
-            combobox.setCurrentText(current_val.name)
+        if hasattr(current_val, "value") and isinstance(current_val.value, str):
+            text = str(current_val.value)
+        elif hasattr(current_val, "name"):
+            text = current_val.name
+        else:
+            text = str(current_val)
+
+        combobox.setCurrentText(text)
 
         combobox.blockSignals(False)
 
