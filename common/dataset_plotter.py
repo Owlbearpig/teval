@@ -339,7 +339,6 @@ class DataSetPlotter(DataSetFormatter):
         meas_td = self.dataset.get_multi_data(meas_list)
         td_scale = self.plot_settings.td_scale
         is_ref_list = self.dataset.is_ref(meas_list[0])
-
         if not is_ref_list and self.plot_settings.shift_sam2ref:
             ref_list = self.measurement_selector.get_matching_refs(meas_list)
             ref_td = self.dataset.get_multi_data(ref_list)
@@ -354,7 +353,7 @@ class DataSetPlotter(DataSetFormatter):
 
         self.paint_td_plot()
 
-        plot_data_td = self.format_meas_dict(meas_list, meas_td)
+        plot_data_td = self.format_meas_dict(meas_list, meas_td, is_td=True)
         for meas, y_td in plot_data_td.items():
             label = self.get_legend_label(meas, is_ref_list)
             td_label = label

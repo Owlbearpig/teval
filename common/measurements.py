@@ -49,8 +49,8 @@ class DataSetFormatter(ComponentBase):
     def freq_range_idx(self):
         return f_axis_idx_map(self.dataset.freq_axis, self.freq_range)
 
-    def format_meas_dict(self, meas_list, data_array: np.ndarray):
-        if data_array.shape[1] != len(self.freq_axis):
+    def format_meas_dict(self, meas_list, data_array: np.ndarray, is_td=False):
+        if data_array.shape[1] != len(self.freq_axis) and not is_td:
             if data_array.ndim == 2:
                 data_array = data_array[:, self.freq_range_idx]
             elif data_array.ndim == 3:

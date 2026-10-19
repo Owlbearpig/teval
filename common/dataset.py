@@ -461,7 +461,7 @@ class DataSet(ComponentBase):
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(bg_worker, data_path)
 
-    def update_meas_sorting(self):
+    def update_meas_sorting(self, change=None):
         self._update_measurement_dict(self.measurements)
 
     def _update_shape_properties(self):
@@ -623,6 +623,10 @@ class DataSet(ComponentBase):
                     self.logger.info(f"No explicit references found in the dataset based on filename ({id_str}).")
             case ReferenceClassification.single_point:
                 refs_ = self.measurement_selector.get_measurements_from_point(*self.ref_point)
+            case ReferenceClassification.max_amp:
+                refs_ = new_measurements["max_amp_meas"]
+                if isinstance(refs_, Measurement):
+                    refs_ = [refs_]
             case ReferenceClassification.above_threshold:
                 refs_ = self.max_amp_meas_filter(all_measurements, self.ref_threshold)
                 if isinstance(refs_, Measurement):

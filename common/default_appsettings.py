@@ -30,6 +30,7 @@ class ReferenceClassification(Enum):
     horizontal_line_as_ref = "Horizontal line"
     vertical_line_as_ref = "Vertical line"
     above_threshold = "Above threshold"
+    max_amp = "Maximum amplitude"
     single_point = "Single point"
 
 
