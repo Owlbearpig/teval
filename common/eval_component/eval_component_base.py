@@ -1,7 +1,7 @@
 from common.components import ComponentBase, action
 from common.eval_component.eval_result import EvalResult, EvalResultData
 from common.save import ResultSaver
-from common.measurements import DataSetBase, Averaging
+from common.measurements import DataSetFormatter, Averaging
 import numpy as np
 import threading
 import logging
@@ -44,7 +44,7 @@ class ResultSignal(QObject):
 class RemainingTaskCntSignal(QObject):
     cnt_changed = Signal(int)
 
-class EvalComponentBase(DataSetBase):
+class EvalComponentBase(DataSetFormatter):
     selected_result_path = TPath(Path("")).tag(name="Load result", en_save=False, priority=-100)
     number_of_workers = Integer(8).tag(name="Number of cpu cores to assign", priority=2)
     transmission_model = TEnum(TransmissionModels, default_value=TransmissionModels.tmm_1layer).tag(

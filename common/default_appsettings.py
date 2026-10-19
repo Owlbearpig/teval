@@ -333,7 +333,6 @@ class EvalOpt(ComponentBase):
     delta_d = TQuantity(Q_(2.0, "µm")).tag(name="Thickness uncertainty")
     fp_count = Int(0).tag(name="Number of Fabry-Perots")
     phi_offset_correction = Bool(True).tag(name="Phase offset correction")
-    printed_freqs = Unicode(default_value="1.0, 2.0").tag(name="Printed frequencies (THz)")
 
     d = TQuantity(Q_(0.0, "µm")).tag(name="Default nominal sample thickness")
     d_film = TQuantity(Q_(0.0, "µm")).tag(name="Film thickness")

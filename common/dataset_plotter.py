@@ -2,12 +2,13 @@ from __future__ import annotations
 from common.components import ComponentBase, action
 from common.dataset import DataSet
 from common.measurement_selection import ReferenceSelection
-from common.measurements import DataSetBase, Measurement, Averaging
+from common.measurements import DataSetFormatter, Measurement, Averaging
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
-from common.default_appsettings import Domain, PlotReferenceWaveform, Direction, ClimateQuantity, QuantityEnum, AppSettings
+from common.default_appsettings import Domain, PlotReferenceWaveform, Direction, ClimateQuantity, QuantityEnum, \
+    AppSettings
 from functools import partial
 from common.functions import moving_average, f_axis_idx_map, local_minima_1d, round_dx, avg_data_array, to_db
 import logging
@@ -29,9 +30,11 @@ import matplotlib as mpl
 
 action = partial(action, check_init=True, rc_params=mpl_style_params)
 
+
 class PlotType(Enum):
     plot = 0
     scatter = 1
+
 
 class GridWorker(QThread):
     progress_changed = Signal(float)
@@ -58,9 +61,9 @@ class GridWorker(QThread):
         logging.info(f"Calculating {sel_quant.name} grid values")
         num_meas = len(meas_set)
         for i in range(0, num_meas, self.batch_size):
-            batch_meas = meas_set[i : i + self.batch_size]
-            batch_x = x_idxs[i : i + self.batch_size]
-            batch_y = y_idxs[i : i + self.batch_size]
+            batch_meas = meas_set[i: i + self.batch_size]
+            batch_x = x_idxs[i: i + self.batch_size]
+            batch_y = y_idxs[i: i + self.batch_size]
 
             res_batch = sel_quant_func(batch_meas)
             if np.iscomplexobj(res_batch):
@@ -77,7 +80,8 @@ class GridWorker(QThread):
         logging.info(f"Finished calculating {sel_quant.name} grid values")
         self.finished.emit(grid)
 
-class DataSetPlotter(DataSetBase):
+
+class DataSetPlotter(DataSetFormatter):
     freq = Quantity(Q_(1.000, "THz")).tag(name="Selected frequency", priority=1001)
     selected_quantity_enum = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(name="Selected quantity",
                                                                                      priority=1010)
@@ -261,7 +265,7 @@ class DataSetPlotter(DataSetBase):
             match = re.search(label[2:], meas_.filepath.name)
             label = label if not match else match.group(0)
         else:
-            label = label if not label else label + " (Reference)"*is_ref
+            label = label if not label else label + " (Reference)" * is_ref
 
         if label:
             return label
@@ -337,7 +341,7 @@ class DataSetPlotter(DataSetBase):
         is_ref_list = self.dataset.is_ref(meas_list[0])
 
         if not is_ref_list and self.plot_settings.shift_sam2ref:
-            ref_list = self.dataset.measurement_selector.get_matching_refs(meas_list)
+            ref_list = self.measurement_selector.get_matching_refs(meas_list)
             ref_td = self.dataset.get_multi_data(ref_list)
             t0_sam = np.argmax(meas_td[:, :, 1], axis=1)
             t0_ref = np.argmax(ref_td[:, :, 1], axis=1)
@@ -374,7 +378,7 @@ class DataSetPlotter(DataSetBase):
             meas_fd_db[:, :, 1] -= noise_floor_db
 
         if fd_fig is not None and not is_ref_list:
-            ref_list = self.dataset.measurement_selector.get_matching_refs(meas_list)
+            ref_list = self.measurement_selector.get_matching_refs(meas_list)
             phi = self.dataset.simple_phase_difference(meas_list, ref_list)
         else:
             phi = self.dataset.unwrapped_phase(meas_list)
@@ -384,7 +388,7 @@ class DataSetPlotter(DataSetBase):
 
         if fd_fig is None:
             ax0, ax1 = self.paint_fd_plot()
-        else: # phase <-> amp (ax0=ax1, ax1=ax0)
+        else:  # phase <-> amp (ax0=ax1, ax1=ax0)
             ax1, ax0 = fd_fig.get_axes()
         for meas, y_fd_db in plot_data_fd_amp.items():
             label = self.get_legend_label(meas, is_ref_list)
@@ -407,7 +411,7 @@ class DataSetPlotter(DataSetBase):
         is_ref = self.dataset.is_ref(meas_list[0])
         meas_lists = [meas_list]
         if self.should_plot_ref(meas_list, fd_fig):
-            meas_lists.insert(0, self.dataset.measurement_selector.get_matching_refs(meas_list))
+            meas_lists.insert(0, self.measurement_selector.get_matching_refs(meas_list))
 
         for meas_list_ in meas_lists:
             if plot_td:
@@ -460,6 +464,7 @@ class DataSetPlotter(DataSetBase):
 
         return full_path
 
+
 class AverageValRect(ComponentBase):
     rect_sel_grp = "Average value rectangle"
     rect_sel_label = Unicode("").tag(name="Rectangle label", priority=1000, group=rect_sel_grp)
@@ -470,7 +475,7 @@ class AverageValRect(ComponentBase):
 
     def __init__(self, image_plot_inst, **kwargs):
         super().__init__(**kwargs)
-        self.image_plot_inst : ImagePlot = image_plot_inst
+        self.image_plot_inst: ImagePlot = image_plot_inst
 
     @action(name="Draw average value rectangle", group=rect_sel_grp, priority=2)
     def average_area(self):
@@ -490,7 +495,7 @@ class AverageValRect(ComponentBase):
         x0_idx, y0_idx = self.image_plot_inst._coords_to_idx(*pnt_bot_left)
         x1_idx, y1_idx = self.image_plot_inst._coords_to_idx(*pnt_top_right)
 
-        grid_vals = self.image_plot_inst.grid_vals[x0_idx:x1_idx+1, y0_idx:y1_idx+1]
+        grid_vals = self.image_plot_inst.grid_vals[x0_idx:x1_idx + 1, y0_idx:y1_idx + 1]
         mean_val, std_val = np.mean(grid_vals), np.std(grid_vals)
 
         mean_s, std_s = str(np.round(mean_val, 4)), str(np.round(std_val, 4))
@@ -555,6 +560,7 @@ class AverageValRect(ComponentBase):
 
         return ret
 
+
 class SlicePlots(ComponentBase):
     line_plot_grp = "Image slice plot"
     line_start = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
@@ -564,7 +570,7 @@ class SlicePlots(ComponentBase):
 
     def __init__(self, image_plot_inst, **kwargs):
         super().__init__(**kwargs)
-        self.image_plot_inst : ImagePlot = image_plot_inst
+        self.image_plot_inst: ImagePlot = image_plot_inst
 
     @action("Line plot", group=line_plot_grp)
     def plot_line(self):
@@ -698,6 +704,7 @@ class SlicePlots(ComponentBase):
 
         return popt, pcov
 
+
 class ImagePlot(DataSetPlotter):
     image_grp = "General"
     confine_to_extent = Bool(False,
@@ -739,7 +746,8 @@ class ImagePlot(DataSetPlotter):
         self.drawn_elements = {"patches": [], "text_labels": [], "points": []}
         self.grid_thread = None
 
-        self.avg_val_rect = AverageValRect(self, object_name="Average value rectangle") if en_avg_rect_component else None
+        self.avg_val_rect = AverageValRect(self,
+                                           object_name="Average value rectangle") if en_avg_rect_component else None
         self.slice_plots = SlicePlots(self, object_name="Slice plots") if en_slice_plots else None
 
     @property
@@ -792,7 +800,7 @@ class ImagePlot(DataSetPlotter):
         return x, y
 
     def _is_excluded(self, idx_tuple):
-        excl_areas = None # not implemented
+        excl_areas = None  # not implemented
         if excl_areas is None:
             return False
 
@@ -1000,6 +1008,7 @@ class ImagePlot(DataSetPlotter):
     def plot_refs_on_image(self):
         self._plot_meas_on_image(self.dataset.measurements["refs"])
 
+
 class QuantityPlots(DataSetPlotter):
     quantity_value = Unicode("", read_only=True).tag(name="Quantity value", priority=1012)
     freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
@@ -1007,11 +1016,13 @@ class QuantityPlots(DataSetPlotter):
     d_sample = Quantity(Q_(1.0, "µm")).tag(name="Nominal sample thickness", priority=1003)
     averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Average / individual", priority=1004)
 
-
     comparison_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
         name="Point for comparison (x, y)", group="Phase plots", priority=1000)
 
-    def __init__(self, dataset : DataSet, en_image_plotter=True, **kwargs):
+    print_eval_win_grp = "Print window eval"
+    printed_freqs = Unicode(default_value="1.0, 2.0").tag(name="Printed frequencies (THz)", group=print_eval_win_grp)
+
+    def __init__(self, dataset: DataSet, en_image_plotter=True, **kwargs):
         super().__init__(dataset=dataset, **kwargs)
 
         if en_image_plotter:
@@ -1072,7 +1083,7 @@ class QuantityPlots(DataSetPlotter):
             return
 
         if mean_std is not None:
-            s = f"{np.round(mean_value,2)}±{np.round(mean_std, 2)}"
+            s = f"{np.round(mean_value, 2)}±{np.round(mean_std, 2)}"
         else:
             s = f"{np.round(mean_value, 2)}"
 
@@ -1129,9 +1140,9 @@ class QuantityPlots(DataSetPlotter):
             "meas_times": Q_(np.zeros(n_meas), "h"),
             "ampl_arr": np.abs(fd_val),
             "zero_crossing": self.dataset.get_zero_crossing(meas_set),
-            "relative_delay": self.dataset.delay_from_phase_slope(len(meas_set)*[meas0], meas_set),
+            "relative_delay": self.dataset.delay_from_phase_slope(len(meas_set) * [meas0], meas_set),
             "angle_arr": -np.angle(fd_val),
-            "spec_similarity": self.dataset.spectral_similarity(len(meas_set)*[meas0], meas_set),
+            "spec_similarity": self.dataset.spectral_similarity(len(meas_set) * [meas0], meas_set),
         }
 
         for i, meas in enumerate(meas_set):
@@ -1145,8 +1156,8 @@ class QuantityPlots(DataSetPlotter):
         if len(self.measurements["refs"]) < 2:
             logging.warning("Cannot plot reference difference with less than 2 reference measurements")
             return
-        meas_idx = np.random.randint(len(self.measurements["refs"])-1)
-        ref1, ref2 = self.measurements["refs"][meas_idx], self.measurements["refs"][meas_idx+1]
+        meas_idx = np.random.randint(len(self.measurements["refs"]) - 1)
+        ref1, ref2 = self.measurements["refs"][meas_idx], self.measurements["refs"][meas_idx + 1]
         logging.info(f"Reference difference:")
         logging.info(f"First measurement: {ref1}")
         logging.info(f"Second measurement: {ref2}")
@@ -1169,7 +1180,7 @@ class QuantityPlots(DataSetPlotter):
 
         plt.figure("Unwrapped phases")
         plt.plot(freq, phi1_unwrap, label=f"Ref 1 ({meas_idx})")
-        plt.plot(freq, phi2_unwrap, label=f"Ref 2 ({meas_idx+1})")
+        plt.plot(freq, phi2_unwrap, label=f"Ref 2 ({meas_idx + 1})")
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Unwrapped phase (rad)")
 
@@ -1242,7 +1253,7 @@ class QuantityPlots(DataSetPlotter):
             plt.title("Phase slope")
             df = np.diff(self.freq_axis)
             dphi = np.diff(phi_cor_1meas[:, 1])
-            dphi_uncert = np.sqrt(phi_cor_1meas[1:, 2]**2 + phi_cor_1meas[:-1, 2]**2)
+            dphi_uncert = np.sqrt(phi_cor_1meas[1:, 2] ** 2 + phi_cor_1meas[:-1, 2] ** 2)
             slope_data = np.array([self.freq_axis[:-1], dphi / df, dphi_uncert]).T
             self._plot(slope_data, ax=None, label=label)
 
@@ -1275,7 +1286,7 @@ class QuantityPlots(DataSetPlotter):
         sam_meas_list0 = selection.sams
 
         sam_meas_list1 = self.dataset.measurement_selector.get_measurements_from_point(*self.comparison_point)
-        sam_meas_list1 = len(sam_meas_list0)*[sam_meas_list1[0]]
+        sam_meas_list1 = len(sam_meas_list0) * [sam_meas_list1[0]]
 
         simple_eval_res0 = self.dataset.windowing_eval(sam_meas_list0, d=self.d_sample)
         simple_eval_res1 = self.dataset.windowing_eval(sam_meas_list1, d=self.d_sample)
@@ -1385,12 +1396,12 @@ class QuantityPlots(DataSetPlotter):
         from random import choice
         idx = choice(range(len(meas_set) - 1))
         ref_fd = self.dataset.get_multi_data(meas_set, domain=Domain.Frequency)
-        phi0, phi1 = np.angle(ref_fd[idx, :, 1]), np.angle(ref_fd[idx+1, :, 1])
-        amp0, amp1 = np.abs(ref_fd[idx, :, 1]), np.abs(ref_fd[idx+1, :, 1])
+        phi0, phi1 = np.angle(ref_fd[idx, :, 1]), np.angle(ref_fd[idx + 1, :, 1])
+        amp0, amp1 = np.abs(ref_fd[idx, :, 1]), np.abs(ref_fd[idx + 1, :, 1])
         w = 2 * np.pi * self.dataset.freq_axis
 
         plt.figure("Specific pulse shift")
-        plt.title(f"Pulse shift between reference number {idx} and {idx+1}")
+        plt.title(f"Pulse shift between reference number {idx} and {idx + 1}")
         plt.plot(self.dataset.freq_axis, 1e3 * (phi0 - phi1) / w, label=idx)
         plt.xlabel("Frequency (THz)")
         plt.ylabel("Time (fs)")
@@ -1552,7 +1563,7 @@ class QuantityPlots(DataSetPlotter):
                 if temp_sensor_idx < 0:
                     temp_ = rp_data.iloc[:, 1:]
                 else:
-                    temp_ = rp_data.iloc[:, temp_sensor_idx+1]
+                    temp_ = rp_data.iloc[:, temp_sensor_idx + 1]
                 humidity_ = np.zeros_like(meas_time_)
             else:
                 def read_line(line_):
@@ -1564,7 +1575,7 @@ class QuantityPlots(DataSetPlotter):
                     for i, line in enumerate(file):
                         if "nan" in line:
                             continue
-                        if i % 15: # Sampling time: 2 sec (= 0.5 Hz) -> 300 * 2 = 600 sec
+                        if i % 15:  # Sampling time: 2 sec (= 0.5 Hz) -> 300 * 2 = 600 sec
                             continue
                         try:
                             res = read_line(line)
@@ -1607,7 +1618,7 @@ class QuantityPlots(DataSetPlotter):
             meas_time_diff = meas_time_diff[:tf_idx]
             quant = quant[:tf_idx]
 
-        sas = (40, 15) # smoothing_average_settings
+        sas = (40, 15)  # smoothing_average_settings
         quant_values = {}
         if is_rp_log:
             if quant.ndim != 1:
@@ -1645,7 +1656,7 @@ class QuantityPlots(DataSetPlotter):
                 plt.close(fig_label)
 
                 fig, (ax0, ax1, ax2) = plt.subplots(3, 1, num=fig_label,
-                                               sharex=True, gridspec_kw={'hspace': 0})
+                                                    sharex=True, gridspec_kw={'hspace': 0})
                 ax0.tick_params(bottom=False, labelbottom=False)
                 ax1.tick_params(bottom=False, labelbottom=False)
 
@@ -1721,7 +1732,7 @@ class QuantityPlots(DataSetPlotter):
 
     @action("Stability difference", group="Stability plots")
     def system_stability_diff_plot(self):
-        kw_filter_str = "" # original: "-sub-": monitoring_pulse_mod\set1
+        kw_filter_str = ""  # original: "-sub-": monitoring_pulse_mod\set1
         system_stab_res_refs = self.get_stability_data()
         x = system_stab_res_refs["meas_times"]
         y_ref = system_stab_res_refs["relative_delay"]
@@ -1757,7 +1768,7 @@ class QuantityPlots(DataSetPlotter):
 
         y_mean = (y_pulse0 + y_pulse1) / 2
 
-        residual_pulse0 = np.sum((y_pulse0 - y_ref)**2) / len(y_ref)
+        residual_pulse0 = np.sum((y_pulse0 - y_ref) ** 2) / len(y_ref)
         residual_pulse1 = np.sum((y_pulse1 - y_ref) ** 2) / len(y_ref)
         residual_mean = np.sum((y_mean - y_ref) ** 2) / len(y_ref)
         # print(residual_pulse0, residual_pulse1, residual_mean)
@@ -1778,3 +1789,50 @@ class QuantityPlots(DataSetPlotter):
 
         if self.settings.plot_opt.auto_show:
             self.plt_show()
+
+
+    @action("Print windowing eval result", group=print_eval_win_grp)
+    def print_ret(self, label=""):
+        if label:
+            self.logger.info(label)
+        meas_list = self.measurement_selector.get_selected_measurements()
+        res = self.dataset.windowing_eval(meas_list, d=self.d_sample)
+        freq_axis = self.freq_axis
+
+        res = {"n": np.real(res.refr_idx), "k": np.imag(res.refr_idx), "alpha": res.abs_coe, "d": res.d}
+
+        f_str = self.printed_freqs
+        f_str_split = f_str.replace(" ", "").split(",")
+        f_list = [float(s) for s in f_str_split]
+        f_idx_list = np.array([np.argmin(np.abs(f-freq_axis)) for f in f_list])
+
+        printed_quantities = ["d", "n", "alpha", "k"]
+        for meas in [*meas_list, "Average"]:
+            if self.averaging == Averaging.only_avg and meas != "Average":
+                continue
+            elif self.averaging == Averaging.only_individual and meas == "Average":
+                continue
+            self.logger.info(meas)
+            for quantity in printed_quantities:
+                unit = " 1/cm" if quantity == "alpha" else ""
+                unit = " µm" if quantity == "d" else unit
+                res_val = res[quantity]
+
+                if isinstance(res_val, np.ndarray):
+                    formatted_vals = self.format_meas_dict(meas_list, res_val)
+                    array = formatted_vals[meas]
+
+                    for f_idx in f_idx_list:
+                        freq = np.round(array[f_idx, 0], 2)
+                        val_ = np.round(array[f_idx, 1], 2)
+                        uncert_ = np.round(array[f_idx, 2], 2)
+
+                        msg = f"{quantity}: {val_}±{uncert_}{unit} at {freq} THz"
+                        self.logger.info(msg)
+                else:
+                    uncert_ = 0
+                    val_ = np.round(res_val, 2)
+                    msg = f"{quantity}: {val_}±{uncert_}{unit}\n"
+                    self.logger.info(msg)
+
+            self.logger.info("\n")

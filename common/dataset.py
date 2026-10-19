@@ -56,6 +56,7 @@ New ideas: add teralyzer evaluation (time consuming)
 
 class WindowEvalResult:
     def __init__(self, **kwargs):
+        super().__init__()
         self.meas_list = kwargs.get("meas", None)
         self.t = kwargs.get("t", None)
         self.freq_axis = kwargs.get("freq_axis", None)
@@ -63,6 +64,9 @@ class WindowEvalResult:
         self.abs_coe = kwargs.get("abs_coe", None)
         self.phi = kwargs.get("phi", None)
         self.phi_corrected = kwargs.get("phi_corrected", None)
+        self.d = kwargs.get("d", None)
+
+
 
 class DataSetInfoPane(ComponentBase):
     max_amp_meas_info = Unicode("", group="Dataset info", read_only=True).tag(name="Max amplitude measurement")
@@ -90,15 +94,25 @@ class DataSetInfoPane(ComponentBase):
     y_coord_extrema = Unicode("", group="Coordinate info",
                               read_only=True).tag(name="y min, max (mm)")
 
-    sampling_start = Quantity(Q_(0, "ps"), read_only=True).tag(name="Sampling start", group="Data info")
-    sampling_end = Quantity(Q_(0, "ps"), read_only=True).tag(name="Sampling end", group="Data info")
-    sampling_period = Quantity(Q_(0, "fs"), read_only=True).tag(name="Sampling period", group="Data info")
-    sample_count = Int(0, read_only=True).tag(name="Time samples", group="Data info")
-    sampling_window = Quantity(Q_(0, "ps"), read_only=True).tag(name="Sampling window", group="Data info")
+    td_info_grp = "Time domain info"
+    sampling_start = Quantity(Q_(0, "ps"), read_only=True).tag(name="Sampling start", group=td_info_grp, priority=1000)
+    sampling_end = Quantity(Q_(0, "ps"), read_only=True).tag(name="Sampling end", group=td_info_grp, priority=1001)
+    sampling_period = Quantity(Q_(0, "fs"), read_only=True).tag(name="Sampling period", group=td_info_grp,
+                                                                priority=1002)
+    sample_count = Int(0, read_only=True).tag(name="Time samples", group=td_info_grp, priority=1003)
+    sampling_window = Quantity(Q_(0, "ps"), read_only=True).tag(name="Sampling window", group=td_info_grp,
+                                                                priority=1004)
 
-    frequency_resolution = Quantity(Q_(0, "GHz"), read_only=True).tag(name="Frequency resolution", group="Data info")
-    spectral_line_cnt = Int(0, read_only=True).tag(name="Frequency samples", group="Data info")
-    nyquist_frequency = Quantity(Q_(0, "THz"), read_only=True).tag(name="Nyquist frequency", group="Data info")
+    fd_info_grp = "Frequency domain info"
+    min_freq = Quantity(Q_(0, "THz"), read_only=True).tag(name="Minimum frequency axis value", group=fd_info_grp,
+                                                          priority=1000)
+    max_freq = Quantity(Q_(0, "THz"), read_only=True).tag(name="Maximum frequency axis value", group=fd_info_grp,
+                                                          priority=1001)
+    frequency_resolution = Quantity(Q_(0, "GHz"), read_only=True).tag(name="Frequency resolution", group=fd_info_grp,
+                                                                      priority=1002)
+    spectral_line_cnt = Int(0, read_only=True).tag(name="Frequency samples", group=fd_info_grp, priority=1003)
+    nyquist_frequency = Quantity(Q_(0, "THz"), read_only=True).tag(name="Nyquist frequency", group=fd_info_grp,
+                                                                   priority=1004)
 
     peak2peak = Float(0.0,read_only=True).tag(name="Peak to peak", group="Maximum amplitude measurement")
     snr = Quantity(Q_(0.0, "dB"), read_only=True).tag(name="Signal to noise ratio",
@@ -586,6 +600,8 @@ class DataSet(ComponentBase):
         self.info_pane.set_trait("frequency_resolution", Q_(1e3*np.mean(np.diff(data_fd[0, :, 0].real)), "GHz"))
         self.info_pane.set_trait("spectral_line_cnt", data_fd.shape[1])
         self.info_pane.set_trait("nyquist_frequency", Q_(data_fd[0, -1, 0].real, "THz"))
+        self.info_pane.set_trait("min_freq", Q_(data_fd[0, 0, 0].real, "THz"))
+        self.info_pane.set_trait("max_freq", Q_(data_fd[0, -1, 0].real, "THz"))
 
         self.info_pane.set_trait("peak2peak", p2p[0])
 
@@ -684,6 +700,7 @@ class DataSet(ComponentBase):
                "refr_idx": refr_idx,
                "abs_coe": abs_coe,
                "phi_corrected": phi_corrected,
+               "d": d,
                }
 
         return WindowEvalResult(**ret)
@@ -1058,52 +1075,6 @@ class DataSet(ComponentBase):
         df = df.astype(str)
         df = df.apply(lambda col: col.str.replace(r"^\((.*)\)$", r"\1", regex=True))
         df.to_csv(save_path, index=False)
-
-    def print_ret(self, ret_, label=""):
-        if label:
-            self.logger.info(label)
-        freq_axis = ret_["freq_axis"].real
-
-        f_str = self.settings.eval_opt.printed_freqs
-        f_str_split = f_str.replace(" ", "").split(",")
-        f_list = [float(s) for s in f_str_split]
-
-        f_idx_list = np.array([np.argmin(np.abs(f-freq_axis)) for f in f_list])
-        if "k" in ret_:
-            ret_["n"] = ret_["n"] + 1j * ret_["k"]
-
-        printed_quantities = ["d", "n", "alpha"]
-        uncert_map = {"d": self.settings.eval_opt.delta_d, "n": ret_["delta_n"], "alpha": ret_["delta_alpha"]}
-        for quantity in ret_:
-            if quantity not in printed_quantities:
-                continue
-
-            val = ret_[quantity]
-            uncert = uncert_map[quantity]
-            msg = "\n"
-            if isinstance(val, np.ndarray):
-                for f_idx in f_idx_list:
-                    if val.ndim == 2:
-                        freq = val[f_idx, 0]
-                        val_ = val[f_idx, 1]
-                        uncert_ = uncert[f_idx, 1]
-                    else:
-                        freq = freq_axis[f_idx]
-                        val_ = val[f_idx]
-                        uncert_ = uncert[f_idx]
-                    val_ = np.round(val_, 2)
-                    uncert_ = np.round(uncert_, 2)
-                    freq = np.round(freq, 2)
-                    msg += f"{quantity}: {val_}±{uncert_} at {freq} THz\n"
-            else:
-                val_ = np.round(val, 2)
-                uncert_ = np.round(uncert, 2)
-                msg = f"{quantity}: {val_}±{uncert_}\n"
-
-            if quantity == list(ret_.keys())[-1]:
-                msg += "\n"
-
-            self.logger.info(msg)
 
 if __name__ == '__main__':
     options = {

@@ -15,7 +15,7 @@ class Averaging(Enum):
     only_individual = "Individual measurements only"
     both = "Average and individual measurements"
 
-class DataSetBase(ComponentBase):
+class DataSetFormatter(ComponentBase):
     freq_range = None
     averaging = None
 
