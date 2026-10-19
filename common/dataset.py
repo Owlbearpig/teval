@@ -180,7 +180,7 @@ class DataSet(ComponentBase):
             self.settings.save_configuration(self)
 
     @property
-    def func_map(self):
+    def _func_map(self):
         func_map = {QuantityEnum.P2P: self.p2p,  # 1D (N_meas)
                     QuantityEnum.Phase: self.phase,  # 2D (N_meas, Freq_slice)
                     QuantityEnum.MeasTimeDeltaRef2Sam: self.meas_time_delta,  # 0D scalar
@@ -192,20 +192,23 @@ class DataSet(ComponentBase):
                     QuantityEnum.ZeroCrossing: self.get_zero_crossing,  # 1D (N_meas)
                     QuantityEnum.TimeOfFlight: self.time_of_flight,  # 1D (N_meas)
                     QuantityEnum.PhaseToF: self.delay_from_phase_slope,  # 1D (N_meas)
-                    QuantityEnum.RIEstimate: self.refractive_index_estimate,  # 2D (N_meas, Freq_slice)
                     QuantityEnum.Transmission: self.transmission,  # 2D (N_meas, Freq_slice)
                     QuantityEnum.TransmissionAmp: self.amplitude_transmission,  # 2D (N_meas, Freq_slice)
                     QuantityEnum.TransmissionPhase: self.phase_difference,  # 2D (N_meas, Freq_slice)
-                    QuantityEnum.RefractiveIdx: self.refractive_idx,  # 2D (N_meas, Freq_slice)
-                    QuantityEnum.AbsorptionCoe: self.absorption_coef,  # 2D (N_meas, Freq_slice)
-                    QuantityEnum.Conductivity: self.conductivity,  # 2D (N_meas, Freq_slice)
                     }
         return func_map
 
-    def quantity_func(self, quantity: QuantityEnum, freq_range=None):
-        func_map = self.func_map
+    def quantity_func(self, quantity: QuantityEnum, freq_range=None, d_sam=None):
+        func_map = self._func_map
         func_map[QuantityEnum.PowerInt] = partial(self.power_int, freq_range=freq_range) # 1D (N_meas)
         func_map[QuantityEnum.PeakCnt] = partial(self.simple_peak_cnt, threshold=2.5) # 1D (N_meas)
+
+        func_map[QuantityEnum.RIEstimate] = partial(self.refractive_index_estimate, d=d_sam)  # 2D (N_meas, Freq_slice)
+        func_map[QuantityEnum.RefractiveIdx] = partial(self.refractive_idx, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
+        func_map[QuantityEnum.ExtCoe] = partial(self.extinction_coe, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
+        func_map[QuantityEnum.AbsorptionCoe] = partial(self.absorption_coef, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
+        func_map[QuantityEnum.Conductivity] = partial(self.conductivity, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
+
         return func_map[quantity]
 
     @cached_property
@@ -649,7 +652,7 @@ class DataSet(ComponentBase):
         self.sub_dataset = dataset_
         self.set_trait("sub_linked", True)
 
-    def windowing_eval(self, meas_) -> WindowEvalResult:
+    def windowing_eval(self, meas_, d=None) -> WindowEvalResult:
         ref_meas = self.measurement_selector.get_matching_refs(meas_)
 
         with self.settings.pp_opt.override(window_enabled=True, win_width=Q_(10, "ps")):
@@ -661,7 +664,11 @@ class DataSet(ComponentBase):
         freq_axis = self.freq_axis
         omega = 2 * np.pi * freq_axis
 
-        d = self.settings.eval_opt.d.magnitude
+        if d is None:
+            self.logger.warning("No sample thickness passed to windowing_eval, using settings default")
+            d = self.settings.eval_opt.d
+        d = d.magnitude if hasattr(d, "magnitude") else d
+        d = 1.0 if np.isclose(d, 0) else d
         with np.errstate(divide='ignore', invalid='ignore'):
             n = 1 + phi_corrected * c_thz / (omega * d)
             n = np.nan_to_num(n, nan=1)
@@ -681,24 +688,24 @@ class DataSet(ComponentBase):
 
         return WindowEvalResult(**ret)
 
-    def refractive_idx(self, meas_):
-        return np.real(self.windowing_eval(meas_).refr_idx)
+    def refractive_idx(self, meas_, d_sam=None):
+        return np.real(self.windowing_eval(meas_, d=d_sam).refr_idx)
 
-    def absorption_coef(self, meas_):
-        return self.windowing_eval(meas_).abs_coe
+    def absorption_coef(self, meas_, d_sam=None):
+        return self.windowing_eval(meas_, d=d_sam).abs_coe
 
-    def extinction_coe(self, meas_):
-        return np.imag(self.windowing_eval(meas_).refr_idx)
+    def extinction_coe(self, meas_, d_sam=None):
+        return np.imag(self.windowing_eval(meas_, d=d_sam).refr_idx)
 
-    def get_single_layer_properties(self):
+    def get_single_layer_properties(self, d_sam=None):
         sub_pnt = self.settings.eval_opt.sub_pnt
         if self.settings.eval_opt.use_sub_dataset:
             meas_list = self.sub_dataset.measurement_selector.get_measurements_from_point(*sub_pnt)
-            window_eval_res = self.sub_dataset.windowing_eval(meas_list)
+            window_eval_res = self.sub_dataset.windowing_eval(meas_list, d_sam)
             t = self.sub_dataset.transmission(meas_list)
         else:
             meas_list = self.measurement_selector.get_measurements_from_point(*sub_pnt)
-            window_eval_res = self.windowing_eval(meas_list)
+            window_eval_res = self.windowing_eval(meas_list, d_sam)
             t = self.transmission(meas_list)
 
         window_eval_res.meas_list = meas_list
@@ -925,7 +932,9 @@ class DataSet(ComponentBase):
         dt = self.time_of_flight(meas_, ref_list)
 
         if d is None:
-            d = self.settings.eval_opt.d.magnitude
+            self.logger.warning("No sample thickness passed to windowing_eval, using settings default")
+            d = self.settings.eval_opt.d
+        d = d.magnitude if hasattr(d, "magnitude") else d
         d = 1.0 if np.isclose(d, 0) else d
 
         w = 2 * np.pi * self.freq_axis
@@ -944,8 +953,8 @@ class DataSet(ComponentBase):
 
         return n_real + 1j * n_imag
 
-    def conductivity(self, meas_):
-        sub_properties = self.get_single_layer_properties()
+    def conductivity(self, meas_, d_sam=None):
+        sub_properties = self.get_single_layer_properties(d_sam)
 
         t_sam = self.transmission(meas_)
 

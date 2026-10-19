@@ -82,6 +82,7 @@ class DataSetPlotter(DataSetBase):
     selected_quantity_enum = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(name="Selected quantity",
                                                                                      priority=1010)
     legend_label = Unicode("").tag(name="Legend label")
+    d_sample = Quantity(Q_(1.0, "µm")).tag(name="Nominal sample thickness")
 
     def __init__(self, dataset: DataSet, **kwargs):
         super().__init__(dataset, **kwargs)
@@ -111,7 +112,9 @@ class DataSetPlotter(DataSetBase):
     def get_selected_quantity_func(self, freq_range=None):
         freq_range = self.freq_range if freq_range is None else freq_range
         freq_range = freq_range if not hasattr(freq_range, "magnitude") else freq_range.magnitude
-        func = self.dataset.quantity_func(self.selected_quantity_enum, freq_range=freq_range)
+        func = self.dataset.quantity_func(self.selected_quantity_enum,
+                                          freq_range=freq_range,
+                                          d_sam=self.d_sample)
 
         return func
 
@@ -169,7 +172,9 @@ class DataSetPlotter(DataSetBase):
             else:
                 x_labels = [str(m.meas_time.strftime("%H:%M:%S")) for m in meas_list]
 
-            plt.scatter(x_labels, scalar_values)
+            rln = range(len(x_labels))
+            plt.scatter(rln, scalar_values)
+            plt.xticks(rln, x_labels)
             if self.settings.plot_opt.add_mean_to_quant_plot:
                 plt.axhline(mean_value, color="r", linestyle="--", linewidth=1.5,
                             label=f"Mean value [{np.round(mean_value, 3)}{unit_str}]")
@@ -704,22 +709,23 @@ class ImagePlot(DataSetPlotter):
     enable_img_interaction = Bool(True, group=image_grp).tag(name="Enable image interaction")
 
     image_calc = "Image grid calculation"
+    d_sample = Quantity(Q_(1.0, "µm")).tag(name="Nominal sample thickness", group=image_calc, priority=999)
+    freq = Quantity(Q_(1.000, "THz")).tag(name="Selected frequency", group=image_calc, priority=1000)
+    grid_calc_freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
+        name="Frequency range", group=image_calc, priority=1001)
+    selected_quantity_enum = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(
+        name="Selected quantity", group=image_calc, priority=1002)
     only_use_sample_set = Bool(True, group=image_calc,
                                help="Will only use measurements classified as a sample measurement "
                                     "for the image plot, otherwise uses all measurements in the "
                                     "dataset").tag(name="Only use sample measurements for image")
 
-    grid_calc_freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
-        name="Frequency range", group=image_calc)
-    freq = Quantity(Q_(1.000, "THz")).tag(name="Selected frequency", group=image_calc)
-    selected_quantity_enum = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(
-        name="Selected quantity", group=image_calc)
     grid_calc_progress = Float(0, min=0, max=1, read_only=True).tag(
-        name="Grid calculation progress", group=image_calc, priority=1004)
+        name="Grid calculation progress", group=image_calc, priority=1003)
 
     waveform_grp = "On-click waveform plot"
     legend_label = Unicode("").tag(name="Legend label", group=waveform_grp, priority=1000)
-    averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Plot average", group=waveform_grp, priority=1001)
+    averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Average / individual", group=waveform_grp, priority=1001)
     freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
         name="Frequency range", group=waveform_grp)
 
@@ -996,7 +1002,12 @@ class ImagePlot(DataSetPlotter):
 
 class QuantityPlots(DataSetPlotter):
     quantity_value = Unicode("", read_only=True).tag(name="Quantity value", priority=1012)
-    averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Plot average", priority=1004)
+    freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
+        name="Frequency range", priority=1002)
+    d_sample = Quantity(Q_(1.0, "µm")).tag(name="Nominal sample thickness", priority=1003)
+    averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Average / individual", priority=1004)
+
+
     comparison_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
         name="Point for comparison (x, y)", group="Phase plots", priority=1000)
 
@@ -1266,8 +1277,8 @@ class QuantityPlots(DataSetPlotter):
         sam_meas_list1 = self.dataset.measurement_selector.get_measurements_from_point(*self.comparison_point)
         sam_meas_list1 = len(sam_meas_list0)*[sam_meas_list1[0]]
 
-        simple_eval_res0 = self.dataset.windowing_eval(sam_meas_list0)
-        simple_eval_res1 = self.dataset.windowing_eval(sam_meas_list1)
+        simple_eval_res0 = self.dataset.windowing_eval(sam_meas_list0, d=self.d_sample)
+        simple_eval_res1 = self.dataset.windowing_eval(sam_meas_list1, d=self.d_sample)
         phi0 = simple_eval_res0.phi_corrected
         phi1 = simple_eval_res1.phi_corrected
         phi_diff = phi0 - phi1

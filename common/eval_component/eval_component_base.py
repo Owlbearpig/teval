@@ -51,7 +51,7 @@ class EvalComponentBase(DataSetBase):
         name="Selected transmission model", priority=-1)
     selected_cost_fun = TEnum(CostFunctions, default_value=CostFunctions.combined_cost,
                               help="Model to experimental data metric").tag(name="Selected cost function", priority=3)
-    averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Averaging", priority=1003)
+    averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Average / individual", priority=1003)
     freq_range = ValueRange([Q_(0.50, "THz"), Q_(2.20, "THz")]).tag(name="Fit range", priority=1004)
 
     process_status = "Processing"

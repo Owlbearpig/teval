@@ -17,7 +17,7 @@ class Averaging(Enum):
 
 class DataSetBase(ComponentBase):
     freq_range = None
-    averaging = TEnum(Averaging, Averaging.only_avg)
+    averaging = None
 
     def __init__(self, dataset, **kwargs):
         super().__init__(**kwargs)
@@ -75,6 +75,8 @@ class DataSetBase(ComponentBase):
                 return individual_y_meas
             case Averaging.both:
                 return {**average_y_meas, **individual_y_meas}
+        return {}
+
 
 class Measurement:
     filepath = Path()

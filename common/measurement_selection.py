@@ -261,7 +261,7 @@ class MeasurementSelection(ComponentBase):
     def clear_queue(self):
         queue_len = len(self.selection_queue)
         self.selection_queue.clear()
-        self.dataset.logger.info(f"Cleared {queue_len} {'s' if queue_len != 1 else ''} from queue")
+        self.dataset.logger.info(f"Cleared {queue_len} selection{'s' if queue_len != 1 else ''} from queue")
 
     def _split_blocks(self):
         ref_set = set(self.measurements["refs"])

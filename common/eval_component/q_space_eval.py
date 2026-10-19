@@ -70,7 +70,7 @@ class Preprocessing(DataSetPlotter):
 
     freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
         name="Plotted frequency range", priority=1000)
-    averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Averaging", priority=1003)
+    averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Average / individual", priority=1003)
 
     phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(
         name="Phase extrapolation range", group="Phase correction")
@@ -233,8 +233,9 @@ class QSpaceEval(EvalComponentBase):
     def n_guess(self, selection):
         meas_list = list(selection.sams)
         d_init = np.mean(self.d_opt_axis_bounds.magnitude)
-        ref_idx = self.dataset.refractive_index_estimate(meas_list, ref_meas_=list(selection.refs),
-                                                                      d=d_init)
+        ref_idx = self.dataset.refractive_index_estimate(meas_list,
+                                                         ref_meas_=list(selection.refs),
+                                                         d=d_init)
         return self.format_meas_dict(meas_list, ref_idx)
 
     @action("Fit transmission model", group=t_fit_grp_name)

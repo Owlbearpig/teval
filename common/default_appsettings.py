@@ -321,6 +321,7 @@ class QuantityEnum(Enum):
     TransmissionAmp = DerivedQuantity("Amplitude transmission", domain=Domain.Frequency)
     TransmissionPhase = DerivedQuantity("Phase transmission", domain=Domain.Frequency, unit="rad")
     RefractiveIdx = DerivedQuantity("Refractive idx", domain=Domain.Frequency)
+    ExtCoe = DerivedQuantity("Extinction coefficient", domain=Domain.Frequency)
     AbsorptionCoe = DerivedQuantity("Absorption coe.", domain=Domain.Frequency, unit="1/cm")
     Conductivity = DerivedQuantity("Conductivity", domain=Domain.Frequency, unit="S/cm")
 
@@ -334,7 +335,7 @@ class EvalOpt(ComponentBase):
     phi_offset_correction = Bool(True).tag(name="Phase offset correction")
     printed_freqs = Unicode(default_value="1.0, 2.0").tag(name="Printed frequencies (THz)")
 
-    d = TQuantity(Q_(0.0, "µm")).tag(name="Nominal sample thickness")
+    d = TQuantity(Q_(0.0, "µm")).tag(name="Default nominal sample thickness")
     d_film = TQuantity(Q_(0.0, "µm")).tag(name="Film thickness")
     fp_spacing = TQuantity(Q_(12, "fs")).tag(name="Approximate Fabry-perot spacing")
 

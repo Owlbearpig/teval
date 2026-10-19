@@ -56,7 +56,7 @@ class Regression(EvalComponentBase):
         if selection is None:
             return None
         meas_list = selection.sams
-        meas_quant_func = self.dataset.func_map[self.sel_meas_quantity_enum]
+        meas_quant_func = self.dataset.quantity_func(self.sel_meas_quantity_enum)
         y_meas = meas_quant_func(meas_list)
 
         return self.format_meas_dict(meas_list, y_meas)
