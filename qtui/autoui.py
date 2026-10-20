@@ -1,5 +1,5 @@
 from PySide6 import QtWidgets, QtCore, QtGui
-from traitlets import Integer, Float, Unicode, Bool, Tuple, Enum
+from traitlets import Integer, Float, Unicode, Bool, Enum
 from common.measurement_selection import MeasurementSelection
 from common.eval_component.eval_result import EvalResult
 from qtui.changeindicatorspinbox import ChangeIndicatorSpinBox
@@ -7,7 +7,7 @@ from qtui.changeindicatorlineedit import ChangeIndicatorLineEdit
 from qtui.fastfilefilterproxy import FastNameFilterProxyModel
 from common.components import ComponentBase
 from traitlets import Instance
-from qtui.mplcanvas import MPLCanvas, FigureCanvasWidget
+from qtui.mplcanvas import FigureCanvasWidget
 from common.traits import Quantity, Path as PathTrait, ValueRange, MultiPathSelection, StrListSelection, PlotFigure
 from pathlib import Path
 import types
@@ -22,7 +22,7 @@ from qtui.mplcanvas import MPLCanvas
 plot_traits = (QuantityDict, PlotFigure)
 
 def is_component_trait(x):
-    return (isinstance(x, Instance) and issubclass(x.klass, ComponentBase))
+    return isinstance(x, Instance) and isinstance(x.klass, type) and issubclass(x.klass, ComponentBase)
 
 
 def create_number_entry(component, name, trait):
@@ -33,7 +33,6 @@ def create_number_entry(component, name, trait):
     sample = values[0]
 
     is_integer = isinstance(trait, Integer) or isinstance(sample, int)
-    is_float = isinstance(trait, Float) or isinstance(sample, float)
     is_quantity = isinstance(trait, Quantity) or isinstance(sample, Q_)
 
     is_double_spinbox = not is_integer
@@ -50,7 +49,6 @@ def create_number_entry(component, name, trait):
         min_val = limit(trait.min, float('-inf'))
         max_val = limit(trait.max, float('inf'))
 
-    has_limits = not (np.isinf(min_val) or np.isinf(max_val))
     significant_figures = trait.metadata.get('significant_figures', 3)
 
     if is_quantity:
@@ -330,7 +328,6 @@ def create_path_selector(component, name, prettyName, trait):
     choose.setEnabled(not trait.read_only)
 
     def choose_path():
-        name = None
         if trait.is_dir and not trait.is_file:
             name = QtWidgets.QFileDialog.getExistingDirectory(
                        caption="Choose " + prettyName)

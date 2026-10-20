@@ -1,15 +1,10 @@
 from common.components import ComponentBase
 from common.dataset import DataSet
 import os
-import logging
 from pathlib import Path
-import numpy as np
-import matplotlib.pyplot as plt
-from common.functions import f_axis_idx_map
 from common.settings import Settings
-from traitlets import Instance, Float
+from traitlets import Instance
 from common.dataset_plotter import QuantityPlots
-from common.consts import c_thz, eps0_thz
 from common.components import action
 
 if "nt" in os.name:

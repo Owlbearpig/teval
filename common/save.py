@@ -18,18 +18,14 @@ You should have received a copy of the GNU General Public License
 along with Taipan.  If not, see <http://www.gnu.org/licenses/>.
 """
 from common.components import ComponentBase
-from common.eval_component.eval_result import EvalResult, EvalResultData
-from common.eval_component.quantity_set import QuantityDataSetDict as QuantityDictClass, QuantityDataSet
+from common.eval_component.eval_result import EvalResultData
 from common.units import Q_
-from enum import Enum, unique
-from common.traits import ValueRange, Path as PathTrait
-from traitlets import Bool, Enum as EnumTrait, Unicode
-import numpy as np
+from common.traits import Path as PathTrait
+from traitlets import Bool, Unicode
 from datetime import datetime
 import logging
 from copy import deepcopy
 from common.consts import result_dir
-from pathlib import Path
 import h5py
 import re
 

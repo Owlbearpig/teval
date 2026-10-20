@@ -21,14 +21,14 @@ import typing as t
 import numbers
 import traitlets
 from common.eval_component.quantity_set import QuantityDataSetDict
-from traitlets import TraitError, Undefined, TraitType, List, Float, Integer, Instance, HasTraits, Unicode
+from traitlets import TraitError, Undefined, TraitType, List, Instance, HasTraits, Unicode
 from matplotlib.figure import Figure
 
 if float(traitlets.__version__[0]) <= 4:
     from traitlets import class_of
 else:
     from traitlets.utils.descriptions import class_of
-from .units import ureg, Q_
+from common.units import ureg, Q_
 import pathlib
 
 

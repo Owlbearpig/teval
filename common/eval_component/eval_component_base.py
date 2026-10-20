@@ -1,15 +1,15 @@
-from common.components import ComponentBase, action
+from common.components import action
 from common.eval_component.eval_result import EvalResult, EvalResultData
 from common.save import ResultSaver
-from common.measurements import DataSetFormatter, Averaging
+from common.dataset import Averaging, DataSetFormatter
 import numpy as np
 import threading
 import logging
-from PySide6.QtCore import QObject, Signal, Slot, QTimer
+from PySide6.QtCore import QObject, Signal, QTimer
 from common.eval_component.transfer_functions import TransmissionModels
 from common.eval_component.cost_functions import CostFunctions
 from common.traits import Q_, ValueRange, Path as TPath
-from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance, Unicode
+from traitlets import Enum as TEnum, observe, Integer, Float, Instance, Unicode
 from pathlib import Path
 
 class BusyIndicator(QObject):

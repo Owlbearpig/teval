@@ -65,3 +65,5 @@ if __name__ == '__main__':
     print(q)
     plt.plot(q.magnitude)
     plt.show()
+    d = Q_(10.1234567, "%")
+    print(d.magnitude)

@@ -4,14 +4,12 @@ import threading
 import logging
 import numpy as np
 from common.components import ComponentBase, action
-from common.settings import Settings
-from common.traits import MultiPathSelection, ValueRange, MultiPathClass, StrListSelection, StrList, Quantity
+from common.traits import MultiPathSelection, ValueRange, MultiPathClass, StrListSelection, StrList
 from common.units import Q_
 from common.default_appsettings import Dist
-from traitlets import Enum as TEnum, Unicode, Bool, Int, Instance, observe, Float
+from traitlets import Enum as TEnum, Unicode, Bool, Int, Instance
 from enum import Enum
 from common.measurements import timestamp2id, Measurement
-from types import TracebackType
 
 action_en_checker = lambda inst: inst.selection_queue is not None
 
@@ -82,7 +80,8 @@ class Selection:
                 lines.append(f"Last sample: {self.sams[-1].filepath.name}")
         return "\n".join(lines)
 
-    __repr__ = label.fget
+    def __repr__(self) -> str:
+        return self.label
 
 
 class SelectionQueue(ComponentBase):
@@ -181,7 +180,7 @@ class MeasurementSelection(ComponentBase):
     sample_paths = MultiPathSelection().tag(fullwidth=False, group="Direct sample file selection", combine=True)
 
 
-    def __init__(self, dataset, en_queue=True, **kwargs):
+    def __init__(self, dataset, **kwargs):
         super().__init__(**kwargs)
 
         self.dataset = dataset
@@ -192,7 +191,9 @@ class MeasurementSelection(ComponentBase):
         self.reference_paths = MultiPathClass(root_path=self.dataset.data_path, shown_filenames=ref_filenames)
         self.sample_paths = MultiPathClass(root_path=self.dataset.data_path, shown_filenames=sam_filenames)
 
-        if en_queue:
+    def __enter__(self, *args):
+        super().__enter__(self, *args)
+        if self.dataset.settings.component_toggle.en_queue:
             self.selection_queue = SelectionQueue(object_name="Selection queue")
 
     def set_observers(self):
@@ -464,12 +465,13 @@ class MeasurementSelection(ComponentBase):
         if not selected_meas:
             return []
 
-        if len(selected_meas) == 1:
-            s = f"{selected_meas[0].filepath.name}"
-        else:
-            s = f"{selected_meas[0].filepath.name} -\n{selected_meas[-1].filepath.name}"
+        if self.dataset.info_pane is not None:
+            if len(selected_meas) == 1:
+                s = f"{selected_meas[0].filepath.name}"
+            else:
+                s = f"{selected_meas[0].filepath.name} -\n{selected_meas[-1].filepath.name}"
 
-        self.dataset.info_pane.set_trait("selected_measurement_info", s)
+            self.dataset.info_pane.set_trait("selected_measurement_info", s)
 
         return selected_meas
 

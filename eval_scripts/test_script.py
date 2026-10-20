@@ -1,15 +1,9 @@
 from common.components import ComponentBase
 from common.dataset import DataSet
 from common.eval_component.q_space_eval import QSpaceEval
-import os
-import logging
-from pathlib import Path
-import numpy as np
-import matplotlib.pyplot as plt
 from common.settings import Settings
-from traitlets import Instance, Float
+from traitlets import Instance
 from common.dataset_plotter import QuantityPlots, ImagePlot
-from common.consts import c_thz, eps0_thz
 from common.components import action
 
 redp_labels = {
@@ -43,9 +37,10 @@ class AppRoot(ComponentBase):
         # self.dataset_sub = DataSet(self.settings_sub, object_name="Dataset substrate")
         self.dataset_sub = None
         self.quantity_plotter = QuantityPlots(self.dataset, object_name="Quantity plotter")
-        self.image_plot = ImagePlot(self.dataset, en_avg_rect_component=False,
-                                    en_slice_plots=False, object_name="Image plot")
-        self.q_space_eval = QSpaceEval(self.dataset, object_name="Q-space evaluation")
+        if self.settings.component_toggle.en_image_plot:
+            self.image_plot = ImagePlot(self.dataset, object_name="Image plot")
+        if self.settings.component_toggle.en_q_space_eval:
+            self.q_space_eval = QSpaceEval(self.dataset, object_name="Q-space evaluation")
 
     @action("Take new measurement")
     def takeMeasurement(self):

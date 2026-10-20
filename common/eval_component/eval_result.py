@@ -8,7 +8,7 @@ from common.components import ComponentBase, action
 from common.eval_component.conductivity_models import model_params
 from common.eval_component.quantity_set import QuantityDataSetDict, QuantityDataSet
 from common.traits import QuantityDict, Path as TPath, Quantity, Q_, StrListSelection, StrList
-from traitlets import Bool, Float, Unicode, Integer, observe, Dict
+from traitlets import Bool, Float, Unicode, Integer
 from dataclasses import dataclass, field, asdict
 from typing import Any
 from functools import partial

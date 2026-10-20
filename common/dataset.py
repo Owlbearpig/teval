@@ -1,30 +1,29 @@
 from __future__ import annotations
 import traceback
-import matplotlib.pyplot as plt
-from common.components import ComponentBase
-from common.default_appsettings import Dist, ReferenceClassification, Domain, QuantityEnum, WindowTypes
-from common.settings import Settings
-from common.measurement_selection import MeasurementSelection, get_coordinate_line
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from enum import Enum
+from functools import cached_property, partial
 from pathlib import Path
+from threading import Lock
+import matplotlib.pyplot as plt
 import numpy as np
-from functools import partial
+import pandas as pd
+from PySide6.QtCore import QObject, Signal
+from common.components import ComponentBase
+from common.components import action
+from common.consts import c_thz, eps0_thz
+from common.dataset_cache import DatasetCache
+from common.default_appsettings import Dist, ReferenceClassification, Domain, QuantityEnum, WindowTypes
 from common.functions import (butter_filt, do_fft, f_axis_idx_map,
                               remove_offset, avg_data_array, calculate_bandwidth, to_db)
+from common.measurement_selection import MeasurementSelection, get_coordinate_line
 from common.measurements import Measurement
-from common.consts import c_thz, eps0_thz
-import logging
-from datetime import datetime
-from common.dataset_cache import DatasetCache
-import pandas as pd
+from common.settings import Settings
 from common.traits import Q_, Path as TPath, Quantity, ValueRange
-from scipy.stats import pearsonr
 from scipy.signal import get_window
-from common.components import action
+from scipy.stats import pearsonr
 from traitlets import Unicode, observe, Float, Bool, Enum as TEnum, Instance, Int, Dict
-from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
-from PySide6.QtCore import QObject, Signal
-from functools import cached_property
 
 """
 TODOs: 
@@ -34,25 +33,87 @@ TODOs:
 - check if filesizes? match when making npy array
 - window function (fuctions.py): allow negative values (wrap around) + fix plot (clipping)
 - self.logger is messy, also fix log levels and RuntimeWarnings
-- freq_range variable in transmission function (and other functions?)
-- combine the different reference select settings into one dict
 - Fix unit labeling
-- Split DataSet into multiple smaller classes (e.g. a plotting class) "Classes should do one thing each."
 - should phi correction be a part of the pre-processing?
-- rename some keys in options dict e.g. "eval_opt" to "eval"
-- make Dataset(dict)? -> No
 - q-eval: svmaf, estimate #FP reflections and FP spacing for q-space freq range
-- fix default_options["sample_properties"]["default_values"]
-
-New ideas: add teralyzer evaluation (time consuming)
-- Add plt_show here (done)
-- Possibly add marker in image to show where .plot_point() is
-- interactive imshow plots -> maybe connect to .plot_point()
 
 # units:
 [l] = µm, [t] = ps, [alpha] = 1/cm (absorption coe.), [sigma] = S/cm, [eps0] = Siemens * ps,
 [f] = THz (1/ps), [c_thz] = µm/ps
 """
+
+class Averaging(Enum):
+    only_avg = "Average only"
+    only_individual = "Individual measurements only"
+    both = "Average and individual measurements"
+
+
+class DataSetFormatter(ComponentBase):
+    freq_range = None
+    averaging = None
+
+    def __init__(self, dataset, **kwargs):
+        super().__init__(**kwargs)
+        self.dataset = dataset
+        self.measurement_selector = dataset.measurement_selector
+
+    def __enter__(self, *args) -> DataSetFormatter:
+        if self.settings is not None:
+            self.settings.load_configuration(self)
+
+        return self
+
+    def __exit__(self, *args):
+        if self.settings is not None:
+            self.settings.save_configuration(self)
+
+    @property
+    def measurements(self):
+        return self.dataset.measurements
+
+    @property
+    def settings(self):
+        return self.dataset.settings
+
+    @property
+    def freq_axis(self):
+        f_axis = self.dataset.freq_axis[self.freq_range_idx]
+        return f_axis
+
+    @property
+    def freq_range_idx(self):
+        return f_axis_idx_map(self.dataset.freq_axis, self.freq_range)
+
+    def format_meas_dict(self, meas_list, data_array: np.ndarray | None, is_td=False):
+        if data_array is None:
+            return {}
+        if data_array.shape[1] != len(self.freq_axis) and not is_td:
+            if data_array.ndim == 2:
+                data_array = data_array[:, self.freq_range_idx]
+            elif data_array.ndim == 3:
+                data_array = data_array[:, self.freq_range_idx, :]
+
+        if data_array.ndim == 2:
+            freq_tile = np.tile(self.freq_axis, (len(meas_list), 1))
+            data_array = np.stack((freq_tile, data_array, np.zeros_like(freq_tile)), axis=2)
+
+        if len(meas_list) == 1:
+            return {meas_list[0]: data_array[0]}
+
+        average_y_meas = {"Average": avg_data_array(data_array)}
+        individual_y_meas = {
+            meas: data_array[meas_idx]
+            for meas_idx, meas in enumerate(meas_list)
+        }
+        match self.averaging:
+            case Averaging.only_avg:
+                return average_y_meas
+            case Averaging.only_individual:
+                return individual_y_meas
+            case Averaging.both:
+                return {**average_y_meas, **individual_y_meas}
+        return {}
+
 
 class WindowEvalResult:
     def __init__(self, **kwargs):
@@ -65,7 +126,6 @@ class WindowEvalResult:
         self.phi = kwargs.get("phi", None)
         self.phi_corrected = kwargs.get("phi_corrected", None)
         self.d = kwargs.get("d", None)
-
 
 
 class DataSetInfoPane(ComponentBase):
@@ -114,7 +174,7 @@ class DataSetInfoPane(ComponentBase):
     nyquist_frequency = Quantity(Q_(0, "THz"), read_only=True).tag(name="Nyquist frequency", group=fd_info_grp,
                                                                    priority=1004)
 
-    peak2peak = Float(0.0,read_only=True).tag(name="Peak to peak", group="Maximum amplitude measurement")
+    peak2peak = Float(0.0, read_only=True).tag(name="Peak to peak", group="Maximum amplitude measurement")
     snr = Quantity(Q_(0.0, "dB"), read_only=True).tag(name="Signal to noise ratio",
                                                       group="Maximum amplitude measurement")
     signal_bandwidth = Quantity(Q_(0.0, "THz"), read_only=True).tag(name="Signal bandwidth",
@@ -131,6 +191,7 @@ class ParsingSignalCarrier(QObject):
     progress_signal = Signal(float)
     initialization_complete_signal = Signal(str, bool)
     measurements_parsed_signal = Signal(dict)
+
 
 class DataSet(ComponentBase):
     data_path = TPath(Path(r""), is_file=False).tag(priority=-100, name="Dataset path",
@@ -156,40 +217,44 @@ class DataSet(ComponentBase):
     export_csv_dir = TPath(Path(""), is_file=False).tag(name="Save directory", group=data_export_grp)
     data_export_label = Unicode("", group=data_export_grp).tag(name="Data export label")
 
-    info_pane = Instance(DataSetInfoPane)
+    info_pane = Instance(DataSetInfoPane, allow_none=True)
     measurement_selector = Instance(MeasurementSelection)
 
     measurements = Dict(default_value={"refs": [], "sams": [], "all": ()})
 
-    def __init__(self, settings : Settings, **kwargs):
+    def __init__(self, settings: Settings, **kwargs):
         super().__init__(**kwargs)
         self._parse_lock = Lock()
         self._is_parsing = False
         self.set_trait("is_initialized", False)
 
-        self.info_pane = DataSetInfoPane(object_name="Info pane")
-
-        self.measurements = {"refs": [], "sams": [], "all": ()}
+        self.measurements = {"refs": [], "sams": [], "all": (), "max_amp_meas": None}
 
         self.cache = None
         self.sub_dataset = None
 
-        self.settings : Settings = settings
+        self.settings: Settings = settings
 
         self.measurement_selector = MeasurementSelection(self, object_name="Measurement selection")
 
         self.freq_axis = None
 
     def __enter__(self, *args):
+        super().__enter__(self, *args)
         if self.settings is not None:
             self.settings.load_configuration(self)
         self._set_observers()
         self.measurement_selector.set_observers()
+
+        if self.settings.component_toggle.en_info_pane:
+            self.info_pane = DataSetInfoPane(object_name="Info pane")
+
         self._parse_measurements()
 
         return self
 
     def __exit__(self, *args):
+        super().__exit__(self, *args)
         if self.settings is not None:
             self.settings.save_configuration(self)
 
@@ -214,8 +279,8 @@ class DataSet(ComponentBase):
 
     def quantity_func(self, quantity: QuantityEnum, freq_range=None, d_sam=None):
         func_map = self._func_map
-        func_map[QuantityEnum.PowerInt] = partial(self.power_int, freq_range=freq_range) # 1D (N_meas)
-        func_map[QuantityEnum.PeakCnt] = partial(self.simple_peak_cnt, threshold=2.5) # 1D (N_meas)
+        func_map[QuantityEnum.PowerInt] = partial(self.power_int, freq_range=freq_range)  # 1D (N_meas)
+        func_map[QuantityEnum.PeakCnt] = partial(self.simple_peak_cnt, threshold=2.5)  # 1D (N_meas)
 
         func_map[QuantityEnum.RIEstimate] = partial(self.refractive_index_estimate, d=d_sam)  # 2D (N_meas, Freq_slice)
         func_map[QuantityEnum.RefractiveIdx] = partial(self.refractive_idx, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
@@ -313,7 +378,6 @@ class DataSet(ComponentBase):
 
         win_width = int(win_width.magnitude / dt)
 
-
         if win_width > len(y):
             win_width = len(y)
 
@@ -376,13 +440,15 @@ class DataSet(ComponentBase):
             data = data_td
         else:
             data = do_fft(data_td)
-            self.freq_axis = data[:, 0].real
-
+            if self.freq_axis is None:
+                self.freq_axis = data[:, 0].real
         data = np.insert(data, 2, 0, axis=1)
 
         return data
 
-    def get_multi_data(self, meas_list, domain=Domain.Time):
+    def get_multi_data(self, meas_list, domain=Domain.Time) -> np.ndarray | None:
+        if meas_list is None:
+            return None
         meas_list = [meas_list] if isinstance(meas_list, Measurement) else meas_list
 
         sample_data = self._single_meas_data(meas_list[0], domain=domain)
@@ -394,7 +460,7 @@ class DataSet(ComponentBase):
             return data_arr
         else:
             for meas_idx, meas in enumerate(meas_list[1:]):
-                data_arr[meas_idx+1] = self._single_meas_data(meas, domain=domain)
+                data_arr[meas_idx + 1] = self._single_meas_data(meas, domain=domain)
 
         return data_arr
 
@@ -416,7 +482,8 @@ class DataSet(ComponentBase):
 
         self._sort_meas_type(new_measurement_dict)
 
-        self._set_dataset_info()
+        if self.info_pane is not None:
+            self._set_dataset_info()
         self.refresh_shape_properties()
 
     def _parse_measurements(self, data_path=None):
@@ -508,16 +575,18 @@ class DataSet(ComponentBase):
 
         shape = {"w": w, "h": h, "dx": dx, "dy": dy, "extent": extent,
                  "x_coords": x_coords, "y_coords": y_coords, "all_points": all_points}
-        self.set_shape_info_traits(shape)
+
+        if self.info_pane is not None:
+            self.set_shape_info_traits(shape)
 
         return shape
 
-    def set_shape_info_traits(self, shape):
+    def set_shape_info_traits(self, shape) -> None:
         self.info_pane.set_trait("shape_w_info", str(shape["w"]))
         self.info_pane.set_trait("shape_h_info", str(shape["h"]))
         self.info_pane.set_trait("shape_dx_info", str(shape["dx"]))
         self.info_pane.set_trait("shape_dy_info", str(shape["dy"]))
-        self.info_pane.set_trait("pixel_cnt", str(int((shape["h"]/shape["dy"])*(shape["w"]/shape["dx"]))))
+        self.info_pane.set_trait("pixel_cnt", str(int((shape["h"] / shape["dy"]) * (shape["w"] / shape["dx"]))))
 
         x_extrema_str = f"{np.min(shape['x_coords'])}, {np.max(shape['x_coords'])}"
         self.info_pane.set_trait("x_coord_extrema", x_extrema_str)
@@ -559,7 +628,7 @@ class DataSet(ComponentBase):
         last_measurement = self.measurements["all"][-1]
 
         self.logger.debug(f"First measurement at: {first_measurement.meas_time}, "
-                     f"last measurement: {last_measurement.meas_time}")
+                          f"last measurement: {last_measurement.meas_time}")
         time_del = last_measurement.meas_time - first_measurement.meas_time
         td_secs = time_del.seconds + 24 * 3600 * time_del.days
         tot_hours = td_secs // 3600
@@ -567,13 +636,13 @@ class DataSet(ComponentBase):
         sec_part = time_del.seconds % 60
 
         self.logger.debug(f"Total measurement time: {tot_hours} hours, "
-                     f"{min_part} minute(s) and {sec_part} second(s) ({td_secs} seconds)\n")
+                          f"{min_part} minute(s) and {sec_part} second(s) ({td_secs} seconds)\n")
 
         mean_time_diff = self.mean_time_diff
         diffs = self.time_diffs
         self.logger.debug(f"Mean time between measurements: {np.round(mean_time_diff, 2)} seconds")
         self.logger.debug(f"Min and max time between measurements: "
-                     f"({np.min(diffs)}, {np.max(diffs)}) seconds\n")
+                          f"({np.min(diffs)}, {np.max(diffs)}) seconds\n")
 
         self.info_pane.set_trait("all_meas_cnt_info", str(all_cnt))
         self.info_pane.set_trait("ref_meas_cnt_info", str(ref_cnt))
@@ -594,10 +663,10 @@ class DataSet(ComponentBase):
         self.info_pane.set_trait("sampling_start", t_start)
         self.info_pane.set_trait("sampling_end", t_end)
         self.info_pane.set_trait("sample_count", data_td.shape[1])
-        self.info_pane.set_trait("sampling_window", t_end-t_start)
-        self.info_pane.set_trait("sampling_period", (t_end-t_start)/data_td.shape[1])
+        self.info_pane.set_trait("sampling_window", t_end - t_start)
+        self.info_pane.set_trait("sampling_period", (t_end - t_start) / data_td.shape[1])
 
-        self.info_pane.set_trait("frequency_resolution", Q_(1e3*np.mean(np.diff(data_fd[0, :, 0].real)), "GHz"))
+        self.info_pane.set_trait("frequency_resolution", Q_(1e3 * np.mean(np.diff(data_fd[0, :, 0].real)), "GHz"))
         self.info_pane.set_trait("spectral_line_cnt", data_fd.shape[1])
         self.info_pane.set_trait("nyquist_frequency", Q_(data_fd[0, -1, 0].real, "THz"))
         self.info_pane.set_trait("min_freq", Q_(data_fd[0, 0, 0].real, "THz"))
@@ -748,7 +817,7 @@ class DataSet(ComponentBase):
         f_idx_range = f_axis_idx_map(self.freq_axis, (freq_min, freq_max))
         x, y = np.abs(data_fd_0[:, f_idx_range, 1]), np.abs(data_fd_1[:, f_idx_range, 1])
 
-        return 1+np.log(np.abs(pearsonr(x, y, axis=1).statistic))
+        return 1 + np.log(np.abs(pearsonr(x, y, axis=1).statistic))
 
     def delay_from_phase_slope(self, meas_0, meas_1=None, freq_min=0.25, freq_max=0.85):
         phi_diff = self.phase_difference(meas_0, meas_1)
@@ -756,7 +825,7 @@ class DataSet(ComponentBase):
 
         p = np.polyfit(self.freq_axis[mask], phi_diff[:, mask].T, 1)
 
-        tau = -p[0] / (2*np.pi)
+        tau = -p[0] / (2 * np.pi)
 
         return tau
 
@@ -878,7 +947,6 @@ class DataSet(ComponentBase):
 
         phi_r_m1 = np.angle(m1_fd[:, :, 1])
         phi_r_m0 = np.angle(m0_fd[:, :, 1])
-
         return np.unwrap(phi_r_m0 - phi_r_m1, axis=1)
 
     def phase_difference(self, m0, m1=None):
@@ -946,7 +1014,7 @@ class DataSet(ComponentBase):
         t_zero_ref = self.get_zero_crossing(closest_ref)
         t_zero_sam = self.get_zero_crossing(meas_)
 
-        return  t_zero_sam - t_zero_ref
+        return t_zero_sam - t_zero_ref
 
     def refractive_index_estimate(self, meas_, ref_meas_=None, d=None):
         ref_list = ref_meas_ if ref_meas_ else self.measurement_selector.get_matching_refs(meas_)
@@ -965,13 +1033,13 @@ class DataSet(ComponentBase):
             t_amp = self.amplitude_transmission(meas_, ref_list)
             phi_diff = np.abs(self.phase_difference(meas_, ref_list))
 
-        n_real = 1.0 + (c_thz * phi_diff / (w*d))
-        t_interface_amp = np.abs(4*n_real/(n_real+1)**2)
+        n_real = 1.0 + (c_thz * phi_diff / (w * d))
+        t_interface_amp = np.abs(4 * n_real / (n_real + 1) ** 2)
 
         n_imag = -(c_thz / (w * d)) * np.log(t_amp / t_interface_amp)
 
         n_real = 1.0 + (c_thz * dt / d)[:, None]
-
+        print(n_real)
         return n_real + 1j * n_imag
 
     def conductivity(self, meas_, d_sam=None):
@@ -988,19 +1056,19 @@ class DataSet(ComponentBase):
 
         # [eps0_thz] = ps * Siemens / µm, [c_thz] = µm / ps, [1/d_film] = 1/um -> conversion: 1e4 (S/cm)
         # 1 / µm = 1 / (1e-6 m) = 1 / (1e-6 * 1e2 cm) = 1 / (1e-4 cm) = 1e4 * 1 / cm
-        sigma = 1e4 * (1/d_film) * eps0_thz * c_thz * (1 + n_sub) * (t_sub/t_sam - 1)
+        sigma = 1e4 * (1 / d_film) * eps0_thz * c_thz * (1 + n_sub) * (t_sub / t_sam - 1)
 
         # phase correction, [dt] = fs
         dt = self.settings.eval_opt.dt.magnitude * 1e-3
-        sigma *= np.exp(-1j*dt*2*np.pi*self.freq_axis[None, :])
+        sigma *= np.exp(-1j * dt * 2 * np.pi * self.freq_axis[None, :])
 
         return sigma
 
     def sigma_to_n(self, freq, sigma):
         w = 2 * np.pi * freq
 
-        sigma *= 1e-4 # S/cm -> S/µm
-        n_ = (1 + 1j) * np.sqrt(sigma/(2*w*eps0_thz))
+        sigma *= 1e-4  # S/cm -> S/µm
+        n_ = (1 + 1j) * np.sqrt(sigma / (2 * w * eps0_thz))
 
         return n_
 
@@ -1036,7 +1104,7 @@ class DataSet(ComponentBase):
         t_before = np.array([(rb.meas_time - st).total_seconds() for rb, st in zip(refs_before, sam_times)])
         t_span = np.array([(ra.meas_time - rb.meas_time).total_seconds() for ra, rb in zip(refs_after, refs_before)])
 
-        y_fd_interpol = fd_before -((t_before / t_span)[:, None]) * (fd_after - fd_before)
+        y_fd_interpol = fd_before - ((t_before / t_span)[:, None]) * (fd_after - fd_before)
 
         freq_grid = np.tile(self.freq_axis, (len(sam_meas), 1))
         std_grid = np.tile(np.zeros_like(self.freq_axis), (len(sam_meas), 1))
@@ -1080,11 +1148,12 @@ class DataSet(ComponentBase):
         df = df.apply(lambda col: col.str.replace(r"^\((.*)\)$", r"\1", regex=True))
         df.to_csv(save_path, index=False)
 
+
 if __name__ == '__main__':
     options = {
         # "cbar_lim": (0.52, 0.60), # 2.5 THz
         # "cbar_lim": (0.64, 0.66), # img4
-        "cbar_lim": (0.60, 0.66), # img5 1.5 THz
+        "cbar_lim": (0.60, 0.66),  # img5 1.5 THz
         # "cbar_lim": (0.55, 0.62), # img5 2.0 THz
         "plot_opt": {"plot_range": slice(30, 650), },
         "ref_pos": (10.0, 0.0),
@@ -1127,31 +1196,31 @@ if __name__ == '__main__':
     # dataset.average_area((25, -10), (48, 3), label="7") # img4
     # dataset.average_area((62, -10), (83, 3), label="8") # img4
     dataset.average_area((30, -10), (40, -3.5), label="12.1")  # img5
-    dataset.average_area((23, 2), (28, 4), label="12.2") # img5
+    dataset.average_area((23, 2), (28, 4), label="12.2")  # img5
 
     # img 1
-    #dataset.average_area((4, 8), (20, 13), label="8")
-    #dataset.average_area((36, 8), (51, 13), label="7")
-    #dataset.average_area((35, -13.5), (50, -11), label="4")
-    #dataset.average_area((70, -14.25), (79, -13), label="2")
-    #dataset.average_area((64, 13.50), (77, 14.25), label="9")
+    # dataset.average_area((4, 8), (20, 13), label="8")
+    # dataset.average_area((36, 8), (51, 13), label="7")
+    # dataset.average_area((35, -13.5), (50, -11), label="4")
+    # dataset.average_area((70, -14.25), (79, -13), label="2")
+    # dataset.average_area((64, 13.50), (77, 14.25), label="9")
 
     # img 2
-    #dataset.average_area((9, -10), (30, 2), label="A1") # VR04
-    #dataset.average_area((45, -10), (60, 0), label="A2") # VR01_1
-    #dataset.average_area((68, -12), (70, -1.5), label="A3") # VR01_2
+    # dataset.average_area((9, -10), (30, 2), label="A1") # VR04
+    # dataset.average_area((45, -10), (60, 0), label="A2") # VR01_1
+    # dataset.average_area((68, -12), (70, -1.5), label="A3") # VR01_2
 
-    #dataset.plot_point((10, 14), label="SC 1")
-    #dataset.plot_point((40, 14), label="SC 2")
-    #dataset.plot_point((10, -14), label="SC 3")
-    #dataset.plot_point((40, -14), label="SC 4")
+    # dataset.plot_point((10, 14), label="SC 1")
+    # dataset.plot_point((40, 14), label="SC 2")
+    # dataset.plot_point((10, -14), label="SC 3")
+    # dataset.plot_point((40, -14), label="SC 4")
 
     # dataset2 = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Laser_crystallized_Si")
 
     # point = choice(dataset.img_properties["all_points"])
     # img.window_all()
-    #dataset.plot_point((45, 14), label="Wood substrate (x=45 mm)")
-    #dataset.plot_point((50, 14), label="Wood substrate (x=50 mm)")
+    # dataset.plot_point((45, 14), label="Wood substrate (x=45 mm)")
+    # dataset.plot_point((50, 14), label="Wood substrate (x=50 mm)")
     # dataset.plot_point((5, 14), label="Reference (air)")
     # dataset2.plot_point((60, -14), label="Borofloat sub.")
     # dataset2.plot_point((30, -14), label="Sub. + SiN sub.")
@@ -1163,13 +1232,13 @@ if __name__ == '__main__':
     # dataset.plot_line(y=14.00, label="y=14 mm")
 
     # dataset2 = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Wood/S5")
-    #dataset2.plot_line(y=-12.00, label="y=-12")
-    #dataset2.plot_line(y=12.00, label="y=12")
+    # dataset2.plot_line(y=-12.00, label="y=-12")
+    # dataset2.plot_line(y=12.00, label="y=12")
 
-    #dataset2.plot_point((60, 12), label="Wood + Lacquer (Pure)")
-    #dataset2.plot_point((60, -12), label="Wood + Lac. (1:1)")
-    #dataset2.plot_point((40, 12), label="Wood + Lac. (1:2)")
-    #dataset2.plot_point((40, -12), label="Wood + Lac. (1:5)")
+    # dataset2.plot_point((60, 12), label="Wood + Lacquer (Pure)")
+    # dataset2.plot_point((60, -12), label="Wood + Lac. (1:1)")
+    # dataset2.plot_point((40, 12), label="Wood + Lac. (1:2)")
+    # dataset2.plot_point((40, -12), label="Wood + Lac. (1:5)")
 
     # dataset.plot_point((50, 14), label="Wood substrate (x=50 mm)")
     # dataset = DataSet(r"/home/ftpuser/ftp/Data/IPHT2/Wood/S2")

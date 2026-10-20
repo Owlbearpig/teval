@@ -1,9 +1,8 @@
 import numpy as np
-from common.consts import os_name, Path, result_dir
+from common.consts import Path, result_dir
 import matplotlib.pyplot as plt
 import matplotlib.font_manager
 import matplotlib as mpl
-
 
 def mpl_style_params(new_rcparams=None):
     rcParams = mpl.rcParamsDefault.copy()
@@ -73,7 +72,6 @@ def test_plot():
 if __name__ == '__main__':
     import logging
     from matplotlib.pyplot import subplots, xlabel, ylabel, grid, show
-    import matplotlib as mpl
 
     print([f.name for f in matplotlib.font_manager.fontManager.ttflist], "\n")
     print(mpl.rcParams.keys())

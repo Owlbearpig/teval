@@ -1,16 +1,15 @@
 from __future__ import annotations
 from common.components import ComponentBase, action
-from common.dataset import DataSet
+from common.dataset import DataSet, Averaging, DataSetFormatter
 from common.measurement_selection import ReferenceSelection
-from common.measurements import DataSetFormatter, Measurement, Averaging
+from common.measurements import Measurement
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
-from common.default_appsettings import Domain, PlotReferenceWaveform, Direction, ClimateQuantity, QuantityEnum, \
-    AppSettings
+from common.default_appsettings import Domain, PlotReferenceWaveform, Direction, ClimateQuantity, QuantityEnum
 from functools import partial
-from common.functions import moving_average, f_axis_idx_map, local_minima_1d, round_dx, avg_data_array, to_db
+from common.functions import moving_average, f_axis_idx_map, local_minima_1d, round_dx, to_db
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -222,7 +221,6 @@ class DataSetPlotter(DataSetFormatter):
         plot_value_dict = self.format_meas_dict(meas_list, values)
 
         for meas, y_values in plot_value_dict.items():
-            is_avg_meas = not isinstance(meas, Measurement)
             label = self.get_legend_label(meas)
 
             if not is_complex:
@@ -366,7 +364,7 @@ class DataSetPlotter(DataSetFormatter):
         if not meas_list:
             return
         is_ref_list = self.dataset.is_ref(meas_list[0])
-
+        is_embedded = fd_fig is not None
         meas_fd = self.dataset.get_multi_data(meas_list, Domain.Frequency)
 
         meas_fd_db = to_db(meas_fd)
@@ -376,27 +374,31 @@ class DataSetPlotter(DataSetFormatter):
             noise_floor_db = np.mean(meas_fd_db[:, upper_end_f_slice, 1], axis=1)[:, np.newaxis]
             meas_fd_db[:, :, 1] -= noise_floor_db
 
-        if fd_fig is not None and not is_ref_list:
+        phi = None
+        if is_embedded and not is_ref_list:
             ref_list = self.measurement_selector.get_matching_refs(meas_list)
             phi = self.dataset.simple_phase_difference(meas_list, ref_list)
-        else:
+        if not is_embedded:
             phi = self.dataset.unwrapped_phase(meas_list)
 
-        plot_data_fd_phi = self.format_meas_dict(meas_list, phi)
+        plot_data_fd_phi = self.format_meas_dict(meas_list, phi) if phi is not None else {}
         plot_data_fd_amp = self.format_meas_dict(meas_list, meas_fd_db)
 
-        if fd_fig is None:
-            ax0, ax1 = self.paint_fd_plot()
-        else:  # phase <-> amp (ax0=ax1, ax1=ax0)
+        if is_embedded: # phase <-> amp (ax0=ax1, ax1=ax0)
             ax1, ax0 = fd_fig.get_axes()
+        else:
+            ax0, ax1 = self.paint_fd_plot()
+
         for meas, y_fd_db in plot_data_fd_amp.items():
             label = self.get_legend_label(meas, is_ref_list)
 
             self._plot(y_fd_db, ax=ax0, label=label)
-            if fd_fig is None:
-                self._plot(plot_data_fd_phi[meas], ax=ax1, label=label)
-            elif fd_fig is not None and not is_ref_list:
+            if meas not in plot_data_fd_phi:
+                continue
+            if is_embedded and not is_ref_list:
                 self._plot(plot_data_fd_phi[meas], ax=ax1, label="Phase difference")
+            elif not is_embedded:
+                self._plot(plot_data_fd_phi[meas], ax=ax1, label=label)
 
     def plot_waveform_impl(self, meas_list=None, fd_fig=None, plot_td=True):
         if meas_list is None:
@@ -407,7 +409,6 @@ class DataSetPlotter(DataSetFormatter):
         if not meas_list:
             return None
 
-        is_ref = self.dataset.is_ref(meas_list[0])
         meas_lists = [meas_list]
         if self.should_plot_ref(meas_list, fd_fig):
             meas_lists.insert(0, self.measurement_selector.get_matching_refs(meas_list))
@@ -738,16 +739,19 @@ class ImagePlot(DataSetPlotter):
     avg_val_rect = Instance(AverageValRect, allow_none=True)
     slice_plots = Instance(SlicePlots, allow_none=True)
 
-    def __init__(self, dataset, en_avg_rect_component=False, en_slice_plots=False, **kwargs):
+    def __init__(self, dataset, **kwargs):
         super().__init__(dataset=dataset, **kwargs)
         self.grid_vals = None
         self.img_ax = None
         self.drawn_elements = {"patches": [], "text_labels": [], "points": []}
         self.grid_thread = None
 
-        self.avg_val_rect = AverageValRect(self,
-                                           object_name="Average value rectangle") if en_avg_rect_component else None
-        self.slice_plots = SlicePlots(self, object_name="Slice plots") if en_slice_plots else None
+    def __enter__(self, *args):
+        super().__enter__(self, *args)
+        if self.settings.component_toggle.en_avg_val_rect:
+            self.avg_val_rect = AverageValRect(self, object_name="Average value rectangle")
+        if self.settings.component_toggle.en_slice_plots:
+            self.slice_plots = SlicePlots(self, object_name="Slice plots")
 
     @property
     def img_shape(self):
@@ -1236,7 +1240,6 @@ class QuantityPlots(DataSetPlotter):
         fig_num_ext = self.plot_settings.fig_num_ext
         for meas, phi_1meas in plot_data_phi.items():
             phi_cor_1meas = plot_data_phi_corrected[meas]
-            is_avg_meas = not isinstance(meas, Measurement)
             label = self.get_legend_label(meas)
 
             plt.figure("Phase correction comparison" + fig_num_ext)

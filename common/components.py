@@ -4,9 +4,10 @@ import traitlets
 from PySide6 import QtWidgets
 from functools import wraps
 import matplotlib as mpl
+from typing import cast, Any
 
 def is_component_trait(x):
-    return isinstance(x, Instance) and issubclass(x.klass, ComponentBase)
+    return isinstance(x, Instance) and isinstance(x.klass, type) and issubclass(x.klass, ComponentBase)
 
 def _dumb_list_of_actions(inst):
     cls = type(inst)
@@ -52,11 +53,12 @@ def action(name=None, help=None, check_init=False, **kwargs):
             else:
                 return method(self, *args, **kwargs_fn)
 
-        wrapper.enable_checker = kwargs.get("enable_checker", None)
-        wrapper._isAction = True
-        wrapper.metadata = kwargs
-        wrapper.help = help
-        return wrapper
+        wrapped = cast(Any, wrapper)
+        wrapped.enable_checker = kwargs.get("enable_checker", None)
+        wrapped._isAction = True
+        wrapped.metadata = kwargs
+        wrapped.help = help
+        return wrapped
 
     return action_impl
 
@@ -65,9 +67,9 @@ class ComponentBase(HasTraits):
 
     script_name = None
 
-    def __init__(self, object_name : str = None):
+    def __init__(self, object_name : str | None = None):
 
-        self.object_name = object_name
+        self.object_name : str | None = object_name
         if self.object_name is None:
             self.object_name = type(self).__name__
 
@@ -82,15 +84,22 @@ class ComponentBase(HasTraits):
 
     def __enter__(self, *args):
         for name, trait in self.traits().items():
-            if is_component_trait(trait) and trait.get(self):
-                trait.get(self).__enter__(*args)
+            trait_inst = trait.get(self)
+            if trait_inst is None:
+                continue
+            elif is_component_trait(trait):
+                trait_inst.__enter__(*args)
 
         return self
 
     def __exit__(self, *args):
         for name, trait in self.traits().items():
             if is_component_trait(trait) and trait.get(self):
-                trait.get(self).__exit__(*args)
+                trait_inst = trait.get(self)
+                if trait_inst is None:
+                    continue
+                elif is_component_trait(trait):
+                    trait_inst.__exit__(*args)
 
         return False
 
@@ -141,8 +150,10 @@ class ComponentBase(HasTraits):
 
                     if isinstance(field_widget, QtWidgets.QLayout):
                         for i in range(field_widget.count()):
-                            w = field_widget.itemAt(i).widget()
-                            if w: w.setVisible(is_visible)
+                            item = field_widget.itemAt(i)
+                            if item is not None:
+                                w = item.widget()
+                                if w is not None: w.setVisible(is_visible)
                     else:
                         field_widget.setVisible(is_visible)
 
@@ -162,9 +173,11 @@ class ComponentBase(HasTraits):
 
             if isinstance(field_widget, QtWidgets.QLayout):
                 for i in range(field_widget.count()):
-                    w = field_widget.itemAt(i).widget()
-                    if w and w.isVisibleTo(box):
-                        return True
+                    item = field_widget.itemAt(i)
+                    if item is not None:
+                        w = item.widget()
+                        if w is not None and w.isVisibleTo(box):
+                            return True
             elif field_widget.isVisibleTo(box):
                 return True
 

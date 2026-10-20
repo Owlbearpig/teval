@@ -1,19 +1,20 @@
 import logging
 import traceback
+from tokenize import group
+
 import numpy as np
-import matplotlib.pyplot as plt
 import matplotlib as mpl
 from matplotlib.widgets import SpanSelector
 from common.eval_component.transfer_functions import TransmissionModels
 from common.eval_component.eval_component_base import EvalComponentBase
 from common.measurement_selection import Selection, SelectionQueue
-from common.default_appsettings import SimRISelection, Domain, QSpaceQuantity, AppSettings
+from common.default_appsettings import SimRISelection, Domain, QSpaceQuantity
 from common.functions import f_axis_idx_map, moving_average, do_ifft, to_db, avg_data_array
 from common.eval_component.quantity_set import QuantityDataSet
 from common.eval_component.eval_result import EvalResultData, SingleResultData
 from enum import member, Enum
-from common.units import Q_
-from common.measurements import Measurement, Averaging
+from common.measurements import Measurement
+from common.dataset import Averaging
 from common.consts import c_thz
 from scipy.signal import iirnotch, filtfilt, detrend
 from concurrent.futures import ProcessPoolExecutor, wait as futures_wait
@@ -21,11 +22,11 @@ from concurrent.futures.process import BrokenProcessPool
 from functools import partial
 from common.eval_component.single_opt import shgo_transmission_optimization
 from common.eval_component.t_fit_global import spline_transmission_optimization
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from mpl_settings import mpl_style_params
 from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance, link
-from common.traits import Quantity, Q_, ValueRange, Path as TPath, PlotFigure
-from common.components import action, ComponentBase
+from common.traits import Quantity, Q_, ValueRange, PlotFigure
+from common.components import action
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from common.dataset_plotter import DataSetPlotter
@@ -70,12 +71,20 @@ class Preprocessing(DataSetPlotter):
 
     freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
         name="Plotted frequency range", priority=1000)
-    averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Average / individual", priority=1003)
+    averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Plot average / individual", priority=1003)
 
+    phase_correction_grp = "Phase correction"
     phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(
-        name="Phase extrapolation range", group="Phase correction")
+        name="Phase extrapolation range", group=phase_correction_grp, priority=999)
+    auto_adjust_fit_range = Bool(False).tag(name="Auto adjust spectral fit range",  group=phase_correction_grp,
+                                            priority=1000)
+
+    fit_range_grp = "Spectral fit range"
     fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(
-        name="Fit range", group="Fit range")
+        name="Spectral fit range", group=fit_range_grp, priority=2000)
+    noise_starts_at = Quantity(Q_(6.0, "THz")).tag(name="Noise starts at", group=fit_range_grp, priority=2001)
+    percent_of_spectral_max = Quantity(Q_(10, "%")).tag(name="Percent of spectral max", group=fit_range_grp,
+                                                       priority=2002)
 
     save_open_figures = None
     close_figures = None
@@ -89,6 +98,13 @@ class Preprocessing(DataSetPlotter):
         self._phi_ax = None
         self._phi_data_lines = []
         self._phi_fit_lines = []
+
+        self._spectral_amp_ax = None
+        self._spectral_amp_data_lines = []
+        self.spectral_noise_floor_lines = []
+
+        self.observe(self.draw_noise_floor, "noise_starts_at")
+        self.observe(self.draw_noise_floor, "percent_of_spectral_max")
 
         self.fd_fig.subplots(2, 1, sharex=True)
 
@@ -110,18 +126,63 @@ class Preprocessing(DataSetPlotter):
             span.extents = (f0, f1)
             span.ax.figure.canvas.draw_idle()
 
-    @action("Plot spectrum and phase", group="Phase correction",
-            rc_params=mpl.rcParamsDefault.copy())
+    def draw_noise_floor(self, change=None):
+        if not self._spectral_amp_data_lines:
+            return None, None, None
+        noise_freq = self.noise_starts_at if change is None else change["new"]
+
+        if self.spectral_noise_floor_lines:
+            for line in self.spectral_noise_floor_lines[::-1]:
+                line.remove()
+                self.spectral_noise_floor_lines.pop()
+
+        line = self._spectral_amp_data_lines[1]
+        y = np.asarray(line.get_ydata(), dtype=float)
+        x = np.asarray(line.get_xdata(), dtype=float)
+        x_noise_starts_idx = np.argmin(np.abs(x - noise_freq.magnitude))
+        noise_floor = np.mean(y[x_noise_starts_idx:])
+
+        ax1 = self._spectral_amp_ax
+        l1 = ax1.axhline(noise_floor, color="red", linestyle="--", alpha=0.7, lw=1, label="Noise floor")
+        self.spectral_noise_floor_lines.append(l1)
+
+        floor = noise_floor + np.abs(np.max(y) - noise_floor) * (self.percent_of_spectral_max.magnitude / 100)
+        l2 = ax1.axhline(floor, color="deepskyblue", linestyle="--", alpha=0.7, lw=1,
+                         label=f"Choice floor {self.percent_of_spectral_max.magnitude} %")
+        self.spectral_noise_floor_lines.append(l2)
+
+        with mpl.rc_context(mpl.rcParamsDefault.copy()):
+            ax1.legend()
+
+        self.fd_fig.canvas.draw_idle()
+
+        return x, y, floor
+
+    @action("Auto set spectral fit range", group=fit_range_grp, priority=2003)
+    def auto_set_fit_range(self):
+        x_min = self.phi_fit_range[0]
+        x_max = Q_(1.0, "THz")
+
+        x, y, floor = self.draw_noise_floor()
+        if x is not None:
+
+            x_max = Q_(x[np.argmax(y < floor)], "THz")
+
+        auto_range = [x_min, x_max]
+        self.set_trait("fit_range", auto_range)
+
+
+    @action("Plot spectrum and phase", group=phase_correction_grp,
+            rc_params=mpl.rcParamsDefault.copy(), priority=1001)
     def plot_phase_fit_selector(self):
         fig = self.fd_fig
         fig.clear()
         fig.set_layout_engine("constrained")
         fig.get_layout_engine().set(h_pad=0, hspace=0)
-        ax0, ax1 = fig.subplots(2, 1, sharex=True, gridspec_kw={'hspace': 0})
+        ax0, ax1 = fig.subplots(2, 1, sharex=False, gridspec_kw={'hspace': 0})
         ax0.set_ylabel("Phase difference (rad)")
         ax1.set_xlabel("Frequency (THz)")
         ax1.set_ylabel("Amplitude (dB)")
-
         meas_list = self.plot_waveform_impl(fd_fig=fig, plot_td=False)
         if meas_list is None:
             return
@@ -131,8 +192,15 @@ class Preprocessing(DataSetPlotter):
         self._phi_data_lines = list(ax0.lines)
         self._phi_fit_lines = []
 
+        self._spectral_amp_ax = ax1
+        self._spectral_amp_data_lines = list(ax1.lines)
+        self.spectral_noise_floor_lines = []
+
+        ax0.axvline(0, color="red", linestyle="--", alpha=0.7, lw=1)
+        ax0.axhline(0, color="red", linestyle="--", alpha=0.7, lw=1)
+
         def _make_selector(ax, callback, color):
-            return SpanSelector(ax, callback, "horizontal", useblit=True,
+            return SpanSelector(ax, callback, "horizontal", useblit=False,
                                 interactive=True, drag_from_anywhere=True,
                                 props=dict(facecolor=color, alpha=0.2))
 
@@ -151,9 +219,25 @@ class Preprocessing(DataSetPlotter):
 
         self._set_extents(self._span_fit, self.fit_range)
         self._set_extents(self._span_phi, self.phi_fit_range)
-        ax0.set_xlim(*self.freq_range.magnitude)
+        ax0.set_xlim((-0.07, 1.5))
+
+        ax1.set_xlim(*self.freq_range.magnitude)
+        ax1.legend(loc="upper right")
+
+        if self._phi_data_lines:
+            line = self._phi_data_lines[0]
+            y = np.asarray(line.get_ydata(), dtype=float)
+            x = np.asarray(line.get_xdata(), dtype=float)
+            bottom = y[np.argmin(np.abs(x - ax0.get_xlim()[1]))]
+            top = np.max([0.1 , np.max(y[np.argmin(np.abs(x - ax0.get_xlim()[0])):
+                           np.argmin(np.abs(x - ax0.get_xlim()[1]))])])
+            ax0.set_ylim((bottom, top))
 
         self._update_phase_fit()
+
+        self.draw_noise_floor()
+        if self.auto_adjust_fit_range:
+            self.auto_set_fit_range()
 
         fig.canvas.draw_idle()
 
@@ -176,12 +260,12 @@ class Preprocessing(DataSetPlotter):
             if m.sum() < 2 or np.ptp(x[m]) == 0:
                 continue
             slope, offset = np.polyfit(x[m], y[m], 1)
-            xs = np.array([x.min(), x.max()])
+            xs = np.array([-0.10, x.max()])
             (fit_line,) = ax.plot(xs, slope * xs + offset, ls="--", lw=1.2,
                                   color=line.get_color(), label=f"offset: {np.round(offset, 2)} (rad)",
                                   scalex=False, scaley=False)
             self._phi_fit_lines.append(fit_line)
-        ax.legend()
+        ax.legend(loc="upper right")
         ax.figure.canvas.draw_idle()
 
 
@@ -201,18 +285,23 @@ class QSpaceEval(EvalComponentBase):
     bound_shrink_factor = Float(0.20, group=t_fit_grp_name).tag(name="Thickness bounds shrink factor",
                                                                 priority=4)
 
-    preprocessing = Instance(Preprocessing).tag(priority=1)
+    preprocessing = Instance(Preprocessing, allow_none=True).tag(priority=1)
 
     def __init__(self, dataset, **kwargs):
         super().__init__(dataset, **kwargs)
 
         self.current_process_executor = None
-        self.preprocessing = Preprocessing(dataset)
-        self._fit_range_link = link((self, "freq_range"), (self.preprocessing, "fit_range"))
-        self._phi_fit_range_link = link((self.settings.eval_opt, "phi_fit_range"),
-                                        (self.preprocessing, "phi_fit_range"))
 
         self.opt_state = {}
+
+    def __enter__(self, *args):
+        if self.settings.component_toggle.en_preprocessing:
+            self.preprocessing = Preprocessing(self.dataset)
+        super().__enter__(*args)
+        if self.preprocessing is not None:
+            self._fit_range_link = link((self, "freq_range"), (self.preprocessing, "fit_range"))
+            self._phi_fit_range_link = link((self.settings.eval_opt, "phi_fit_range"),
+                                            (self.preprocessing, "phi_fit_range"))
 
     def reset_state(self):
         self.task_cnt_carrier.cnt_changed.emit(0)
@@ -222,7 +311,7 @@ class QSpaceEval(EvalComponentBase):
 
     def ref_fd_dict(self, selection):
         ref_list = list(selection.refs)
-        ref_fd = self.dataset.get_multi_data(ref_list)
+        ref_fd = self.dataset.get_multi_data(ref_list, domain=Domain.Frequency)
         return self.format_meas_dict(ref_list, ref_fd)
 
     def t_exp_dict(self, selection):

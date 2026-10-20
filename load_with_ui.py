@@ -55,7 +55,7 @@ class HTMLFormatter(logging.Formatter):
 
         return f"{asctime} {level_html} {obj_prefix}: {record.getMessage()}"
 
-def run(globals, filename):
+def run(globals, filename : str):
     rootClass = globals["AppRoot"]
     ComponentBase.script_name = filename
 

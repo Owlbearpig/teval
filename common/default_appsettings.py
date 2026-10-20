@@ -2,9 +2,8 @@ import logging
 from enum import Enum, member
 from pathlib import Path
 import traitlets
-from traitlets import (Bool, Int, Float, Unicode, Tuple,
-    List as TList, Dict as TDict, Enum as TEnum, Instance, Any as TAny
-)
+from traitlets import (Bool, Int, Float, Unicode, Dict as TDict, Enum as TEnum, Instance
+                       )
 from common.eval_component.shgo_settings import SHGOOptions
 from common.components import ComponentBase
 from common.traits import ValueRange, Path as TPath, Q_, Quantity as TQuantity
@@ -477,6 +476,22 @@ class PlotOpt(ComponentBase):
     en_cbar_label = Bool(True, group=image_group).tag(name="Enable color bar label")
     en_cbar_lim = Bool(default_value=False, group=image_group).tag(name="Enable custom color bar limits")
 
+class ComponentToggle(ComponentBase):
+    image_plot_grp = "Image plot"
+    en_image_plot = Bool(True).tag(name="Main component", group=image_plot_grp, priority=1000)
+    en_avg_val_rect = Bool(True).tag(name="Average value rectangle", group=image_plot_grp, priority=1001)
+    en_slice_plots = Bool(True).tag(name="Slice plots", group=image_plot_grp, priority=1002)
+
+    measurement_selection = "Measurement selection"
+    en_queue = Bool(True).tag(name="Queue", group=measurement_selection)
+
+    info_pane = "DataSet info pane"
+    en_info_pane = Bool(True).tag(name="Info pane", group=info_pane)
+
+    q_space_eval = "Q-Space evaluation"
+    en_q_space_eval = Bool(True).tag(name="Main component", group=q_space_eval, priority=1000)
+    en_preprocessing = Bool(True).tag(name="Preprocessing view", group=q_space_eval, priority=1001)
+
 class AppSettings(ComponentBase):
     log_level = TEnum(LogLevel, default_value=LogLevel.info).tag(name="Log level")
 
@@ -485,6 +500,7 @@ class AppSettings(ComponentBase):
     eval_opt = Instance(EvalOpt, args=())
     plot_opt = Instance(PlotOpt, args=())
     shgo_options = Instance(SHGOOptions, args=())
+    component_toggle = Instance(ComponentToggle, args=())
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

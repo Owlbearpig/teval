@@ -1,23 +1,20 @@
 import traceback
 from datetime import datetime
-from common.dataset import DataSet, Domain
-from common.components import ComponentBase, action
-from common.functions import f_axis_idx_map
+from common.dataset import DataSet
+from common.components import action
 from common.eval_component.shgo import shgo
 from scipy.optimize import shgo
 from functools import partial
 import numpy as np
 import logging
 from common.eval_component.quantity_set import QuantityDataSet
-from enum import Enum, member
 from common.eval_component.conductivity_models import RegressionModels, model_params
-from common.traits import Quantity, Q_, ValueRange, Path as TPath
+from common.traits import Q_, ValueRange
 from pathlib import Path
-from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance
+from traitlets import Enum as TEnum, observe, Bool
 from common.default_appsettings import QuantityEnum
 from common.eval_component.shgo_settings import MinimizerOptions
 from concurrent.futures import ThreadPoolExecutor
-import threading
 from common.eval_component.eval_component_base import EvalComponentBase
 
 

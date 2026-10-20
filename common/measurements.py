@@ -2,81 +2,9 @@ import re
 import numpy as np
 from datetime import datetime
 from pathlib import Path
-from common.components import ComponentBase
-from common.functions import avg_data_array, f_axis_idx_map
-from enum import Enum
-from traitlets import Enum as TEnum
 
 meas_id_func = lambda meas_datetime: int((meas_datetime - datetime.min).total_seconds() * 1e6)
 timestamp2id = lambda timestamp_str: meas_id_func(datetime.strptime(timestamp_str, "%Y-%m-%dT%H-%M-%S.%f"))
-
-class Averaging(Enum):
-    only_avg = "Average only"
-    only_individual = "Individual measurements only"
-    both = "Average and individual measurements"
-
-class DataSetFormatter(ComponentBase):
-    freq_range = None
-    averaging = None
-
-    def __init__(self, dataset, **kwargs):
-        super().__init__(**kwargs)
-        self.dataset = dataset
-        self.measurement_selector = dataset.measurement_selector
-
-    def __enter__(self, *args):
-        if self.settings is not None:
-            self.settings.load_configuration(self)
-
-    def __exit__(self, *args):
-        if self.settings is not None:
-            self.settings.save_configuration(self)
-
-    @property
-    def measurements(self):
-        return self.dataset.measurements
-
-    @property
-    def settings(self):
-        return self.dataset.settings
-
-    @property
-    def freq_axis(self):
-        f_axis = self.dataset.freq_axis[self.freq_range_idx]
-        return f_axis
-
-    @property
-    def freq_range_idx(self):
-        return f_axis_idx_map(self.dataset.freq_axis, self.freq_range)
-
-    def format_meas_dict(self, meas_list, data_array: np.ndarray, is_td=False):
-        if data_array.shape[1] != len(self.freq_axis) and not is_td:
-            if data_array.ndim == 2:
-                data_array = data_array[:, self.freq_range_idx]
-            elif data_array.ndim == 3:
-                data_array = data_array[:, self.freq_range_idx, :]
-
-        if data_array.ndim == 2:
-            freq_tile = np.tile(self.freq_axis, (len(meas_list), 1))
-            data_array = np.stack((freq_tile, data_array, np.zeros_like(freq_tile)), axis=2)
-
-        if len(meas_list) == 1:
-            return {meas_list[0]: data_array[0]}
-
-        average_y_meas = {"Average": avg_data_array(data_array)}
-        individual_y_meas = {
-            meas: data_array[meas_idx]
-            for meas_idx, meas in enumerate(meas_list)
-        }
-        match self.averaging:
-            case Averaging.only_avg:
-                return average_y_meas
-            case Averaging.only_individual:
-                return individual_y_meas
-            case Averaging.both:
-                return {**average_y_meas, **individual_y_meas}
-        return {}
-
 
 class Measurement:
     filepath = Path()

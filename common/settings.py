@@ -13,7 +13,7 @@ class Settings(AppSettings):
 
     def __init__(self, settings_file: Path | str = "", **kwargs):
         super().__init__(**kwargs)
-
+        self.script_name = self.script_name if self.script_name is not None else ""
         self._settings_file = Path(settings_file).stem if Path(settings_file).is_file() else Path(self.script_name).stem
 
         self.config_path = Path(f"config/{self._settings_file}.json")
