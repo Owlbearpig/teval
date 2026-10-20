@@ -477,10 +477,16 @@ class PlotOpt(ComponentBase):
     en_cbar_lim = Bool(default_value=False, group=image_group).tag(name="Enable custom color bar limits")
 
 class ComponentToggle(ComponentBase):
+    info = Unicode("Module changes require restart to take effect", read_only=True).tag(
+        priority=1, fullwidth=True, disable_label=True)
+
     image_plot_grp = "Image plot"
     en_image_plot = Bool(True).tag(name="Main component", group=image_plot_grp, priority=1000)
     en_avg_val_rect = Bool(True).tag(name="Average value rectangle", group=image_plot_grp, priority=1001)
     en_slice_plots = Bool(True).tag(name="Slice plots", group=image_plot_grp, priority=1002)
+
+    quantity_plot_grp = "Quantity plots"
+    en_quantity_plots = Bool(True).tag(name="Main component", group=quantity_plot_grp, priority=1000)
 
     measurement_selection = "Measurement selection"
     en_queue = Bool(True).tag(name="Queue", group=measurement_selection)

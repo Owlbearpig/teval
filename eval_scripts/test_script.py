@@ -36,7 +36,8 @@ class AppRoot(ComponentBase):
 
         # self.dataset_sub = DataSet(self.settings_sub, object_name="Dataset substrate")
         self.dataset_sub = None
-        self.quantity_plotter = QuantityPlots(self.dataset, object_name="Quantity plotter")
+        if self.settings.component_toggle.en_quantity_plots:
+            self.quantity_plotter = QuantityPlots(self.dataset, object_name="Quantity plotter")
         if self.settings.component_toggle.en_image_plot:
             self.image_plot = ImagePlot(self.dataset, object_name="Image plot")
         if self.settings.component_toggle.en_q_space_eval:

@@ -87,7 +87,7 @@ class DataSetFormatter(ComponentBase):
     def format_meas_dict(self, meas_list, data_array: np.ndarray | None, is_td=False):
         if data_array is None:
             return {}
-        if data_array.shape[1] != len(self.freq_axis) and not is_td:
+        if not is_td and data_array.shape[1] != len(self.freq_axis):
             if data_array.ndim == 2:
                 data_array = data_array[:, self.freq_range_idx]
             elif data_array.ndim == 3:
