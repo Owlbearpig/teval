@@ -329,6 +329,8 @@ class QuantityEnum(Enum):
 class EvalOpt(ComponentBase):
     dt = TQuantity(Q_(0.0, "fs")).tag(name="Conductivity pulse shift")
     phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(name="Phase correction fit range")
+    avg_grp_delay_fit_range = ValueRange([Q_(0.25, "THz"), Q_(0.85, "THz")]).tag(name="Group delay fit range")
+    spectral_similarity_range = ValueRange([Q_(0.15, "THz"), Q_(2.00, "THz")]).tag(name="Spectral similarity range")
 
     delta_d = TQuantity(Q_(2.0, "µm")).tag(name="Thickness uncertainty")
     fp_count = Int(0).tag(name="Number of Fabry-Perots")
@@ -441,28 +443,6 @@ class PlotOpt(ComponentBase):
     plot_ref_waveform = TEnum(PlotReferenceWaveform, PlotReferenceWaveform.only_first).tag(
         name="Plot reference with sample")
 
-    climate_group = "Stability and climate"
-    add_climate_plot = Bool(False, group=climate_group).tag(name="Add climate values to stability plot")
-    stability_plot_rel_change = Bool(False, group=climate_group).tag(name="Convert to percent")
-    subtract_mean = Bool(False, group=climate_group).tag(name="Subtract mean value")
-    temp_sensor_idx = Int(-1, group=climate_group, help="-1 selects all sensors").tag(name="Select sensor index")
-    climate_file = TPath(Path(), group=climate_group).tag(name="Climate log file")
-    clip_climate_data = Bool(False, group=climate_group, help="Clip climate data to THz measurement",
-                             ).tag(name="Clip climate data")
-    climate_quantity = TEnum(ClimateQuantity, ClimateQuantity.Temperature,
-                             group=climate_group).tag(name="Climate quantity")
-    redp_sensor_labels = TDict(
-        key_trait=Unicode(),
-        value_trait=Unicode(),
-        default_value={
-            "Redp idx 0": r"$\theta_{system}$",
-            "Redp idx 1": r"$\theta_{air}$",
-            "Redp idx 2": r"$\theta_{fiber}$",
-            "Redp idx 3": r"$\theta_{box}$",
-        },
-        group=climate_group
-    )
-
     image_group = "Image"
     cbar_lim = ValueRange(default_value=[0.0, 0.0], group=image_group).tag(name="Custom color bar limits")
     log_scale = Bool(False, group=image_group).tag(name="Log scale")
@@ -485,8 +465,9 @@ class ComponentToggle(ComponentBase):
     en_avg_val_rect = Bool(True).tag(name="Average value rectangle", group=image_plot_grp, priority=1001)
     en_slice_plots = Bool(True).tag(name="Slice plots", group=image_plot_grp, priority=1002)
 
-    quantity_plot_grp = "Quantity plots"
-    en_quantity_plots = Bool(True).tag(name="Main component", group=quantity_plot_grp, priority=1000)
+    dataset_plotter_grp = "Quantity plots"
+    en_extended_dataset_plots = Bool(True).tag(name="Main component", group=dataset_plotter_grp, priority=1000)
+    en_stability_plots = Bool(True).tag(name="Climate plots", group=dataset_plotter_grp, priority=1001)
 
     measurement_selection = "Measurement selection"
     en_queue = Bool(True).tag(name="Queue", group=measurement_selection)

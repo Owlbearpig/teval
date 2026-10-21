@@ -7,7 +7,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
-from common.default_appsettings import Domain, PlotReferenceWaveform, Direction, ClimateQuantity, QuantityEnum
+from common.default_appsettings import Domain, PlotReferenceWaveform, Direction, ClimateQuantity, QuantityEnum, \
+    AppSettings
 from functools import partial
 from common.functions import moving_average, f_axis_idx_map, local_minima_1d, round_dx, to_db
 import logging
@@ -16,8 +17,8 @@ from datetime import datetime
 from scipy.special import erfc
 from scipy.optimize import curve_fit
 from common.eval_component.shgo import shgo
-from traitlets import Float, Bool, Unicode, Enum as TEnum, Instance
-from common.traits import Q_, Quantity, ValueRange
+from traitlets import Float, Bool, Unicode, Enum as TEnum, Instance, Int, Dict as TDict
+from common.traits import Q_, Quantity, ValueRange, Path as TPath
 from mpl_settings import mpl_style_params
 from scipy.stats import pearsonr
 import re
@@ -1012,32 +1013,35 @@ class ImagePlot(DataSetPlotter):
         self._plot_meas_on_image(self.dataset.measurements["refs"])
 
 
-class QuantityPlots(DataSetPlotter):
-    quantity_value = Unicode("", read_only=True).tag(name="Quantity value", priority=1012)
-    freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
-        name="Frequency range", priority=1002)
-    d_sample = Quantity(Q_(1.0, "µm")).tag(name="Nominal sample thickness", priority=1003)
-    averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Average / individual", priority=1004)
+class StabilityPlots(DataSetPlotter):
+    climate_file = TPath(Path()).tag(name="Climate log file", priority=1)
+    legend_label = None
+    d_sample = None
+    selected_quantity_enum = None
 
-    comparison_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
-        name="Point for comparison (x, y)", group="Phase plots", priority=1000)
+    settings_grp = "Settings"
+    add_climate_plot = Bool(False, group=settings_grp).tag(name="Add climate values to stability plot")
+    stability_plot_rel_change = Bool(False, group=settings_grp).tag(name="Convert to percent")
+    subtract_mean = Bool(False, group=settings_grp).tag(name="Subtract mean value", priority=2000)
+    temp_sensor_idx = Int(-1, group=settings_grp, help="-1 selects all sensors").tag(name="Select sensor index")
+    clip_climate_data = Bool(False, group=settings_grp, help="Clip climate data to THz measurement",
+                             ).tag(name="Clip climate data")
+    climate_quantity = TEnum(ClimateQuantity, ClimateQuantity.Temperature,
+                             group=settings_grp).tag(name="Climate quantity")
+    redp_sensor_labels = TDict(
+        key_trait=Unicode(),
+        value_trait=Unicode(),
+        default_value={
+            "Redp idx 0": r"$\theta_{system}$",
+            "Redp idx 1": r"$\theta_{air}$",
+            "Redp idx 2": r"$\theta_{fiber}$",
+            "Redp idx 3": r"$\theta_{box}$",
+        },
+        group=settings_grp
+    )
 
-    print_eval_win_grp = "Print window eval"
-    printed_freqs = Unicode(default_value="1.0, 2.0").tag(name="Printed frequencies (THz)", group=print_eval_win_grp)
-
-    def __init__(self, dataset: DataSet, en_image_plotter=True, **kwargs):
-        super().__init__(dataset=dataset, **kwargs)
-
-        if en_image_plotter:
-            self.image_plotter = ImagePlot(dataset, object_name="Image plot")
-
-    def __exit__(self, *args):
-        self.settings.save_configuration(self)
-
-    def __enter__(self, *args):
-        self.settings.load_configuration(self)
-
-        return self
+    def __init__(self, dataset, **kwargs):
+        super().__init__(dataset, **kwargs)
 
     def find_climate_log_file(self, climate_log_file):
         log_file = Path(climate_log_file)
@@ -1054,6 +1058,552 @@ class QuantityPlots(DataSetPlotter):
                 return log_file
 
         return None
+
+    def set_time_axis_unit(self, axis):
+        axis = axis.to("h")
+        if axis.magnitude.max() < 5 / 60:
+            axis = axis.to("s")
+        elif 5 / 60 <= axis.magnitude.max() < 0.5:
+            axis = axis.to("min")
+        else:
+            axis = axis.to("h")
+
+        return axis
+
+    def get_stability_data(self, meas_set_kw=None):
+        if meas_set_kw is not None:
+            meas_set = []
+            for meas in self.measurements["all"]:
+                if meas_set_kw in meas.filepath.name:
+                    meas_set.append(meas)
+            logging.info(f"Using measurements containing keyword {meas_set_kw}")
+        elif all([self.measurements["all"][0].position == meas.position for meas in self.measurements["all"]]):
+            meas_set = self.measurements["all"]
+            logging.info("Using all measurements")
+        else:
+            meas_set = self.measurements["refs"]
+            logging.info("Using reference measurement set")
+            if len(meas_set) < 2:
+                msg = "Not enough measurements (fewer than 2) classified as reference in dataset. "
+                msg += "Using all measurements instead"
+                logging.info(msg)
+                meas_set = self.measurements["all"]
+
+        if len(meas_set) == 0:
+            logging.info("No measurements in selected measurement set")
+            return None
+        meas0 = meas_set[0]
+
+        meas_fd = self.dataset.get_multi_data(meas_set, domain=Domain.Frequency)
+        meas_td = self.dataset.get_multi_data(meas_set, domain=Domain.Time)
+        meas0_fd = self.dataset.get_multi_data(len(meas_set) * [meas0], domain=Domain.Frequency)
+        meas0_td = self.dataset.get_multi_data(len(meas_set) * [meas0], domain=Domain.Time)
+        data_arrays = [meas0_td, meas0_fd, meas_td, meas_fd]
+
+        fd_val = meas_fd[:, self.sel_freq_idx, 1]
+
+        ret = {
+            "meas_set": meas_set,
+            "meas_times": Q_(np.zeros(len(meas_set)), "h"),
+            "ampl_arr": np.abs(fd_val),
+            "zero_crossing": self.dataset.get_zero_crossing(data_td=meas_td),
+            "relative_delay": self.dataset.delay_from_phase_slope(data_arrays=data_arrays),
+            "angle_arr": -np.angle(fd_val),
+            "spec_similarity": self.dataset.spectral_similarity(data_arrays_fd=[data_arrays[1], data_arrays[3]]),
+        }
+
+        for i, meas in enumerate(meas_set):
+            ret["meas_times"][i] = self.dataset.meas_time_diff(meas0, meas)
+        ret["meas_times"] = self.set_time_axis_unit(ret["meas_times"])
+
+        return ret
+
+    @action("System stability", group="Stability plots")
+    def plot_system_stability(self):
+        stability_data = self.get_stability_data()
+        if stability_data is None:
+            return
+
+        meas_set = stability_data["meas_set"]
+        meas_times = stability_data["meas_times"]
+        angle_arr = stability_data["angle_arr"]
+        relative_delay = stability_data["relative_delay"]
+        ampl_arr = stability_data["ampl_arr"]
+        zero_crossing = stability_data["zero_crossing"]
+        spec_similarity = stability_data["spec_similarity"]
+
+        t0 = meas_set[0].meas_time
+        mt_unit = meas_times.units
+
+        meas_interval = np.mean(np.diff(meas_times)).to("min")
+        angle_arr = np.unwrap(angle_arr)
+
+        minima = local_minima_1d(angle_arr, en_plot=False)
+        period, period_std = minima[1] * meas_interval, minima[2] * meas_interval
+
+        relative_delay *= 1000
+
+        # correction
+        # angle_arr -= 2*np.pi*self.dataset.freq_axis[f_idx]*(zero_crossing/1000)
+
+        selected_freq_ = self.freq.magnitude
+        abs_p_shifts = np.abs(np.diff(relative_delay))
+        logging.info(f"Mean pulse shift: {np.round(np.mean(abs_p_shifts), 2)} fs")
+        max_diff_0x, min_diff_0x = np.max(abs_p_shifts), np.min(abs_p_shifts)
+        logging.info(f"Largest/smallest shift: {np.round(max_diff_0x, 2)}/{np.round(min_diff_0x, 2)} fs")
+
+        max_diff, argmax_diff = np.max(np.diff(angle_arr)), np.argmax(np.diff(angle_arr))
+        phase_str = f"Largest phase jump: {np.round(max_diff, 2)} rad"
+        phase_str += f" (time: {np.round(meas_times[argmax_diff], 2)})"
+        phase_str += f" (at {selected_freq_} THz)"
+        logging.info(phase_str)
+
+        avg_amp_change = np.mean(np.abs(np.diff(ampl_arr)))
+        max_amp_change = np.max(np.diff(ampl_arr))
+
+        logging.info(f"Largest amplitude change: {np.round(max_amp_change, 2)} (Arb. u.)")
+        logging.info(f"Mean absolute amplitude change: {np.round(avg_amp_change, 2)} (Arb. u.)")
+        logging.info(f"Mean measurement interval: {np.round(meas_interval, 2)}")
+        logging.info(f"Period estimation: {np.round(period, 2)}±{np.round(period_std, 2)}.")
+
+        plt.figure("rfft of the phase change")
+        phi_fft = np.fft.rfft(angle_arr)
+        phi_fft_f = np.fft.rfftfreq(len(angle_arr), d=meas_interval.to("h").magnitude)
+
+        plt.plot(phi_fft_f[1:], np.abs(phi_fft)[1:])
+        plt.xlabel("Frequency (1/hour)")
+        plt.ylabel("Magnitude")
+
+        angle_change = angle_arr[0] - angle_arr
+        ampl_change = ampl_arr[0] - ampl_arr
+        if self.stability_plot_rel_change:
+            ampl_change = 100 * ampl_change / ampl_arr[0]
+            angle_change = 100 * angle_change / angle_arr[0]
+
+        from random import choice
+        idx = choice(range(len(meas_set) - 1))
+        ref_fd = self.dataset.get_multi_data(meas_set, domain=Domain.Frequency)
+        phi0, phi1 = np.angle(ref_fd[idx, :, 1]), np.angle(ref_fd[idx + 1, :, 1])
+        amp0, amp1 = np.abs(ref_fd[idx, :, 1]), np.abs(ref_fd[idx + 1, :, 1])
+        w = 2 * np.pi * self.dataset.freq_axis
+
+        plt.figure("Specific pulse shift")
+        plt.title(f"Pulse shift between reference number {idx} and {idx + 1}")
+        plt.plot(self.dataset.freq_axis, 1e3 * (phi0 - phi1) / w, label=idx)
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("Time (fs)")
+
+        plt.figure("Interpolation zero crossing")
+        plt.plot(meas_times, zero_crossing)
+        plt.xlabel(f"Measurement time ({mt_unit})")
+        plt.ylabel("Time (ps)")
+
+        plt.figure("Amp change")
+        plt.plot(self.dataset.freq_axis, amp0 - amp1)
+        plt.xlabel("Frequency (THz)")
+        plt.ylabel("Amplitude change (Arb. u.)")
+
+        plt.figure("Reference delay")
+        plt.title(f"Reference delay\n(relative to first measurement)")
+        plt.plot(meas_times, relative_delay, label="Pulse shift")
+        plt.xlabel(f"Measurement time ({mt_unit})")
+        plt.ylabel(r"$\Delta$t (fs)")
+
+        plt.figure("Reference delay change")
+        plt.title(f"Reference delay change")
+        plt.plot(meas_times[1:], abs_p_shifts, label=t0)
+        # phase_change = np.abs(np.diff(angle_change))
+        # plt.plot(meas_times[1:], 1e3*phase_change/(2*3.1415*selected_freq_), label=t0)
+        plt.xlabel(f"Measurement time ({mt_unit})")
+        plt.ylabel(r"$\Delta (\Delta$t) (fs)")
+
+        plt.figure("Stability amplitude")
+        plt.title(f"Change of amplitude of reference measurement at {selected_freq_} THz")
+        plt.plot(meas_times, ampl_change)
+        plt.xlabel(f"Measurement time ({mt_unit})")
+        if self.stability_plot_rel_change:
+            plt.ylabel(r"$\Delta$A (%)")
+        else:
+            plt.ylabel(r"$\Delta$A (arb. u.)")
+
+        plt.figure("Stability phase")
+        plt.title(f"Change of phase of reference measurement at {selected_freq_} THz")
+        plt.plot(meas_times, angle_change)
+        plt.xlabel(f"Measurement time ({mt_unit})")
+        if self.stability_plot_rel_change:
+            plt.ylabel(r"$\Delta \phi$ (%)")
+        else:
+            plt.ylabel(r"$\Delta \phi$ (rad)")
+
+        plt.figure("Time between reference measurements")
+        plt.title(f"Time between reference measurements")
+        plt.plot(meas_times[1:], np.diff(meas_times) * 3600)
+        plt.ylabel("Time difference (s)")
+        plt.xlabel(f"Measurement time ({mt_unit})")
+
+        plt.figure("Spectral similarity")
+        plt.title("Spectral similarity compared to the first measurement")
+        plt.plot(meas_times, spec_similarity)
+        plt.ylim((-0.05, 1.05))
+        plt.ylabel("1 + ln|pears_r|")
+        plt.xlabel(f"Measurement time ({mt_unit})")
+
+        if not self.add_climate_plot:
+            if self.settings.plot_opt.auto_show:
+                self.plt_show()
+            return
+
+        climate_plot_ret = self.plot_climate(mt_unit)
+        if climate_plot_ret is None:
+            if self.settings.plot_opt.auto_show:
+                self.plt_show()
+            return
+        else:
+            climate_meas_times, climate_value_dict = climate_plot_ret
+
+        # climate_value_dict = key: sensor_id, dict[key] = [original_val_arr, smooth_val_arr]
+
+        thz_meas_times = [meas.meas_time for meas in meas_set]
+        plotted_climate_vals = {k: np.zeros(len(meas_set)) for k in climate_value_dict}
+        for thz_meas_idx, thz_meas_time in enumerate(thz_meas_times):
+            best_fit = (None, np.inf)
+            for climate_meas_idx, climate_meas_time in enumerate(climate_meas_times):
+                meas_time_diff = np.abs((climate_meas_time - thz_meas_time).total_seconds())
+                if meas_time_diff < best_fit[1]:
+                    best_fit = (climate_meas_idx, meas_time_diff)
+
+            for k in climate_value_dict:
+                plotted_climate_vals[k][thz_meas_idx] = climate_value_dict[k][1][best_fit[0]]
+
+        plt.figure("pearsonplot")
+        plt.xlabel(f"Time ({mt_unit})")
+        for k in plotted_climate_vals:
+            shift_arr = np.arange(-100, 100, 1)
+            r_vals = np.zeros(len(shift_arr))
+            # for idx_shift in np.arange(-70, 71, 1):
+            for i, idx_shift in enumerate(shift_arr):
+                r = pearsonr(np.diff(plotted_climate_vals[k]), np.roll(relative_delay[1:], idx_shift))
+                # r = pearsonr(plotted_climate_vals[k], np.roll(relative_delay, idx_shift))
+                r_vals[i] = r.statistic
+
+            argmax = np.argmax(np.abs(r_vals))
+
+            highest_correlation = [r_vals[argmax], shift_arr[argmax]]
+
+            max_corr_val = np.round(highest_correlation[0], 3)
+            time_shift = np.round(highest_correlation[1] * meas_interval, 2)
+            msg = f"Pearson r (climate quantity, pulse delay) for {k}: {max_corr_val}"
+            msg += f" when shifted by {time_shift}"
+            logging.info(msg)
+
+            plt.plot(shift_arr * meas_interval.magnitude, r_vals, label=k)
+
+        label_map = self.redp_sensor_labels
+        plt.figure("Climate correlation plot")
+        for k in plotted_climate_vals:
+            label = label_map.get(k, k)
+            x = np.gradient(plotted_climate_vals[k], 0.012186554258538694)
+            x = plotted_climate_vals[k]
+            if "0" in k:
+                y = relative_delay
+                p = np.polyfit(x, y, 1)
+                y = x * p[0] + p[1]
+                plt.plot(x, y, label=f"linear fit {label}")
+            plt.scatter(x, relative_delay, label=label)
+        plt.ylabel("Pulse shift (fs)")
+        plt.xlabel("Temperature (°C)")
+
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
+
+        return
+
+    @action("Climate", group="Stability plots", priority=100)
+    def plot_climate(self, time_unit=None):
+        climate_log_file = self.climate_file
+        if not climate_log_file.is_file():
+            logging.info(f"The path {climate_log_file} is not a file. Check plotting settings for climate plot")
+            return None
+
+        log_file = self.climate_file
+
+        full_log_path = self.find_climate_log_file(log_file)
+        if not full_log_path:
+            logging.info("No matching climate logfile found")
+            return None
+        else:
+            logging.info(f"Using climate logfile: {full_log_path}")
+
+        quantity = self.climate_quantity
+        is_rp_log = False
+        if "pitaya" in str(full_log_path):
+            is_rp_log = True
+            if quantity == ClimateQuantity.Humidity:
+                logging.info("The Redpitaya does not record humidity")
+        temp_sensor_idx = self.temp_sensor_idx
+
+        def read_log_file(log_file_):
+            meas_time_, temp_, humidity_ = [], [], []
+            if is_rp_log:
+                rp_data = pd.read_csv(log_file_)
+                meas_time_ = [datetime.strptime(t, "%Y-%m-%d %H:%M:%S") for t in rp_data.iloc[:, 0]]
+                if temp_sensor_idx < 0:
+                    temp_ = rp_data.iloc[:, 1:]
+                else:
+                    temp_ = rp_data.iloc[:, temp_sensor_idx + 1]
+                humidity_ = np.zeros_like(meas_time_)
+            else:
+                def read_line(line_):
+                    parts = line_.split(" ")
+                    t = datetime.strptime(f"{parts[0]} {parts[1]}", '%Y-%m-%d %H:%M:%S')
+                    return t, float(parts[4]), float(parts[-3])
+
+                with open(log_file_) as file:
+                    for i, line in enumerate(file):
+                        if "nan" in line:
+                            continue
+                        if i % 15:  # Sampling time: 2 sec (= 0.5 Hz) -> 300 * 2 = 600 sec
+                            continue
+                        try:
+                            res = read_line(line)
+                            meas_time_.append(res[0])
+                            temp_.append(res[1])
+                            humidity_.append(res[2])
+                        except IndexError:
+                            continue
+
+            return meas_time_, np.array(temp_), np.array(humidity_)
+
+        meas_time, temp, humidity = read_log_file(full_log_path)
+
+        if self.measurements["all"] is not None:
+            t0 = self.measurements["all"][0].meas_time
+            tf = self.measurements["all"][-1].meas_time
+            tf_idx = np.argmin(np.abs([(tf - t).total_seconds() for t in meas_time]))
+        else:
+            t0 = meas_time[0]
+            tf_idx = len(meas_time)
+
+        meas_time_diff = Q_(np.array([(t - t0).total_seconds() for t in meas_time]), "s")
+        if time_unit is None:
+            meas_time_diff = self.set_time_axis_unit(meas_time_diff)
+        else:
+            meas_time_diff = meas_time_diff.to(time_unit)
+        mt_unit = meas_time_diff.units
+
+        if quantity == ClimateQuantity.Temperature:
+            quant = temp
+            y_label = r"$\theta$ (°C)"
+            dy_label = r"$\partial \theta / \partial t_m$" + f" (°C/{mt_unit})"
+        else:
+            quant = humidity
+            y_label = "Humidity (%)"
+            dy_label = fr"$\Delta$Humidity (\\%/{mt_unit})"
+
+        if self.clip_climate_data:
+            meas_time = meas_time[:tf_idx]
+            meas_time_diff = meas_time_diff[:tf_idx]
+            quant = quant[:tf_idx]
+
+        sas = (40, 15)  # smoothing_average_settings
+        quant_values = {}
+        if is_rp_log:
+            if quant.ndim != 1:
+                for i in range(np.shape(quant)[1]):
+                    vals = quant[:, i]
+                    smooth_vals = moving_average(vals, iterations=sas[0], n=sas[1])
+                    quant_values[f"Redp idx {i}"] = np.array([vals, smooth_vals])
+            else:
+                vals = quant
+                smooth_vals = moving_average(vals, iterations=sas[0], n=sas[1])
+                quant_values[f"Redp idx {temp_sensor_idx}"] = np.array([vals, smooth_vals])
+        else:
+            vals = quant
+            smooth_vals = moving_average(vals, iterations=sas[0], n=sas[1])
+            quant_values["Arduino"] = np.array([vals, smooth_vals])
+
+        if self.subtract_mean:
+            for k in quant_values:
+                offset = np.mean(quant_values[k][0])
+                std_quant = np.std(quant_values[k][0])
+                quant_values[k][0] -= offset
+                quant_values[k][1] -= offset
+                print(k, offset, std_quant)
+
+        line_labels = self.redp_sensor_labels
+
+        line_colors = ["r", "b", "g", "c", "m", "y", "k"]
+        stability_figs = ["Reference zero crossing", "Stability amplitude", "Stability phase"]
+        stability_figs.extend(["Reference delay", "Interpolation zero crossing"])
+        for fig_label in stability_figs:
+            if plt.fignum_exists(fig_label):
+                old_fig = plt.figure(fig_label)
+                ax_list = old_fig.get_axes()
+                lines = ax_list[0].get_lines()
+                plt.close(fig_label)
+
+                fig, (ax0, ax1, ax2) = plt.subplots(3, 1, num=fig_label,
+                                                    sharex=True, gridspec_kw={'hspace': 0})
+                ax0.tick_params(bottom=False, labelbottom=False)
+                ax1.tick_params(bottom=False, labelbottom=False)
+
+                for i, k in enumerate(quant_values):
+                    c = line_colors[i]
+                    label = line_labels.get(k, k)
+                    # label = None
+                    ax0.plot(meas_time_diff, quant_values[k][0], c=c, alpha=0.15)
+                    ax0.plot(meas_time_diff, quant_values[k][1], c=c, label=label)
+                # ax0.set_yticks([-0.25, 0, 0.25])
+                ax0.set_ylabel(y_label)
+                ax0.grid(True)
+
+                for i, k in enumerate(quant_values):
+                    dqdt = np.gradient(quant_values[k][1], np.mean(np.diff(meas_time_diff)))
+                    c = line_colors[i]
+                    label = line_labels.get(k, k)
+                    label = None
+                    ax1.plot(meas_time_diff, dqdt, c=c, label=label)
+                # ax1.set_yticks([-2.6, 0, 1.6])
+                ax1.set_ylabel(dy_label)
+                ax1.grid(True)
+                ax1.tick_params(axis="y")
+
+                c = "black"
+                for line in lines:
+                    x_data = line.get_xdata()
+                    y_data = line.get_ydata()
+                    # c = line.get_color()
+                    ax2.plot(x_data, y_data, color=c, label=line.get_label())
+                if "delay" in fig_label:
+                    # ax2.set_yticks([0, -50, -100])
+                    pass
+                ax2.tick_params(axis="y", colors=c)
+                ax2.set_ylabel(ax_list[0].get_ylabel(), c=c)
+                # ax0.grid(c="blue")
+                ax2.grid(True)
+                ax2.set_xlabel(f"Measurement time $t_m$ ({mt_unit})")
+
+                if "delay" in fig_label:
+                    h0, l0 = ax0.get_legend_handles_labels()
+                    h2, l2 = ax2.get_legend_handles_labels()
+
+                    ax0.legend(h0 + h2, l0 + l2, loc="upper right", framealpha=0.910)
+
+                fig.align_ylabels([ax0, ax1, ax2])
+                axes = [ax0, ax1, ax2]
+                labels = ["a)", "b)", "c)"]
+                labels = []
+
+                box_style = dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.95, lw=0)
+                for ax, label in zip(axes, labels):
+                    ax.text(0.010, 0.95, label, transform=ax.transAxes,
+                            fontsize=34, fontweight="bold", va="top", ha="left", bbox=box_style)
+
+                # ymin_0, ymax_0 = ax0.get_ylim()
+                # ax0.set_ylim(bottom=ymin_0, top=ymax_0 - (ymax_0 - ymin_0) * 0.05)
+                # ymin_1, ymax_1 = ax1.get_ylim()
+                # ax1.set_ylim(bottom=ymin_1 + (ymax_1 - ymin_1) * 0.05, top=ymax_1)
+
+        if not plt.fignum_exists(stability_figs[0]):
+            fig, ax1 = plt.subplots(num="Climate plot")
+            for i, k in enumerate(quant_values):
+                ax1.scatter(meas_time_diff, quant_values[k][0], c=line_colors[i], alpha=0.11, label=f"Start: {t0}" + k)
+                ax1.scatter(meas_time_diff, quant_values[k][1], c=line_colors[i])
+            ax1.set_xlabel(f"Measurement time ({mt_unit})")
+            ax1.set_ylabel(y_label)
+
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
+
+        return meas_time, quant_values
+
+    @action("Stability difference", group="Stability plots")
+    def system_stability_diff_plot(self):
+        kw_filter_str = ""  # original: "-sub-": monitoring_pulse_mod\set1
+        system_stab_res_refs = self.get_stability_data()
+        x = system_stab_res_refs["meas_times"]
+        y_ref = system_stab_res_refs["relative_delay"]
+
+        with self.settings.pp_opt.override(window_enabled=True, win_start=Q_(11, "ps"), center_on_pulse=False):
+            system_stab_res_mon_pulse0 = self.get_stability_data(meas_set_kw=kw_filter_str)
+        if system_stab_res_mon_pulse0 is None:
+            return
+
+        with self.settings.pp_opt.override(window_enabled=True, win_start=Q_(27, "ps"), center_on_pulse=False):
+            system_stab_res_mon_pulse1 = self.get_stability_data(meas_set_kw=kw_filter_str)
+        if system_stab_res_mon_pulse1 is None:
+            return
+
+        xp = system_stab_res_mon_pulse0["meas_times"]
+        fp = system_stab_res_mon_pulse0["relative_delay"]
+        y_pulse0 = np.interp(x, xp, fp)
+
+        xp = system_stab_res_mon_pulse1["meas_times"]
+        fp = system_stab_res_mon_pulse1["relative_delay"]
+        y_pulse1 = np.interp(x, xp, fp)
+
+        delay_difference_pulse0 = y_pulse0 - y_ref
+        # offset_pulse0 = np.mean(delay_difference_pulse0[100:])
+        offset_pulse0 = 0
+        delay_difference_pulse1 = y_pulse1 - y_ref
+        # offset_pulse1 = np.mean(delay_difference_pulse1[100:])
+        offset_pulse1 = 0
+        # print(offset_pulse0, offset_pulse1)
+
+        y_pulse0 = y_pulse0 - offset_pulse0
+        y_pulse1 = y_pulse1 - offset_pulse1
+
+        y_mean = (y_pulse0 + y_pulse1) / 2
+
+        residual_pulse0 = np.sum((y_pulse0 - y_ref) ** 2) / len(y_ref)
+        residual_pulse1 = np.sum((y_pulse1 - y_ref) ** 2) / len(y_ref)
+        residual_mean = np.sum((y_mean - y_ref) ** 2) / len(y_ref)
+        # print(residual_pulse0, residual_pulse1, residual_mean)
+
+        plt.figure("Delay interpolation")
+        # plt.plot(x, y_pulse0, label="Delay monitor pulse0 (interp)")
+        # plt.plot(x, y_pulse1, label="Delay monitor pulse1 (interp)")
+        plt.plot(x, y_mean, label="Delay monitor mean pulse 0 and 1")
+        plt.plot(x, y_ref, label="Delay reference")
+        plt.xlabel(f"Measurement time (unit?)")
+        plt.ylabel("Time (fs)")
+
+        plt.figure("Delay difference")
+        plt.plot(x, delay_difference_pulse0, label="difference y_mon_pulse0 - y_ref")
+        plt.plot(x, delay_difference_pulse1, label="difference y_mon_pulse1 - y_ref")
+        plt.xlabel(f"Measurement time (unit?)")
+        plt.ylabel("Time (fs)")
+
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
+
+class ExtendedDataSetPlotter(DataSetPlotter):
+    quantity_value = Unicode("", read_only=True).tag(name="Quantity value", priority=1012)
+    freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
+        name="Frequency range", priority=1002)
+    d_sample = Quantity(Q_(1.0, "µm")).tag(name="Nominal sample thickness", priority=1003)
+    averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Average / individual", priority=1004)
+
+    comparison_point = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
+        name="Point for comparison (x, y)", group="Phase plots", priority=1000)
+
+    print_eval_win_grp = "Print window eval"
+    printed_freqs = Unicode(default_value="1.0, 2.0").tag(name="Printed frequencies (THz)", group=print_eval_win_grp)
+
+    stability_plotter = Instance(StabilityPlots, allow_none=True)
+
+    def __init__(self, dataset: DataSet, **kwargs):
+        super().__init__(dataset=dataset, **kwargs)
+
+    def __exit__(self, *args):
+        self.settings.save_configuration(self)
+
+    def __enter__(self, *args):
+        self.settings.load_configuration(self)
+        if self.settings.component_toggle.en_stability_plots:
+            self.stability_plotter = StabilityPlots(self.dataset, object_name="Stability plots")
+
+        return self
 
     @action("Calculate quantity value", priority=1011)
     def calc_quant_value(self):
@@ -1098,61 +1648,6 @@ class QuantityPlots(DataSetPlotter):
             s += f" at {self.freq}"
 
         self.set_trait("quantity_value", s)
-
-    def set_time_axis_unit(self, axis):
-        axis = axis.to("h")
-        if axis.magnitude.max() < 5 / 60:
-            axis = axis.to("s")
-        elif 5 / 60 <= axis.magnitude.max() < 0.5:
-            axis = axis.to("min")
-        else:
-            axis = axis.to("h")
-
-        return axis
-
-    def get_stability_data(self, meas_set_kw=None):
-        if meas_set_kw is not None:
-            meas_set = []
-            for meas in self.measurements["all"]:
-                if meas_set_kw in meas.filepath.name:
-                    meas_set.append(meas)
-            logging.info(f"Using measurements containing keyword {meas_set_kw}")
-        elif all([self.measurements["all"][0].position == meas.position for meas in self.measurements["all"]]):
-            meas_set = self.measurements["all"]
-            logging.info("Using all measurements")
-        else:
-            meas_set = self.measurements["refs"]
-            logging.info("Using reference measurement set")
-            if len(meas_set) < 2:
-                msg = "Not enough measurements assigned as reference in dataset. "
-                msg += "Using all measurements instead"
-                logging.info(msg)
-                meas_set = self.measurements["all"]
-
-        if len(meas_set) == 0:
-            logging.info("No measurements in selected measurement set")
-            return None
-
-        meas0 = meas_set[0]
-        n_meas = len(meas_set)
-        ref_fd = self.dataset.get_multi_data(meas_set, domain=Domain.Frequency)
-        fd_val = ref_fd[:, self.sel_freq_idx, 1]
-
-        ret = {
-            "meas_set": meas_set,
-            "meas_times": Q_(np.zeros(n_meas), "h"),
-            "ampl_arr": np.abs(fd_val),
-            "zero_crossing": self.dataset.get_zero_crossing(meas_set),
-            "relative_delay": self.dataset.delay_from_phase_slope(len(meas_set) * [meas0], meas_set),
-            "angle_arr": -np.angle(fd_val),
-            "spec_similarity": self.dataset.spectral_similarity(len(meas_set) * [meas0], meas_set),
-        }
-
-        for i, meas in enumerate(meas_set):
-            ret["meas_times"][i] = self.dataset.meas_time_diff(meas0, meas)
-        ret["meas_times"] = self.set_time_axis_unit(ret["meas_times"])
-
-        return ret
 
     @action("Reference difference", group="Plots")
     def ref_difference_plot(self):
@@ -1332,466 +1827,6 @@ class QuantityPlots(DataSetPlotter):
             self.plt_show()
 
         logging.info(f"Plotted reference noise")
-
-    @action("System stability", group="Stability plots")
-    def plot_system_stability(self):
-        stability_data = self.get_stability_data()
-        if stability_data is None:
-            return
-
-        meas_set = stability_data["meas_set"]
-        meas_times = stability_data["meas_times"]
-        angle_arr = stability_data["angle_arr"]
-        relative_delay = stability_data["relative_delay"]
-        ampl_arr = stability_data["ampl_arr"]
-        zero_crossing = stability_data["zero_crossing"]
-        spec_similarity = stability_data["spec_similarity"]
-
-        t0 = meas_set[0].meas_time
-        mt_unit = meas_times.units
-
-        meas_interval = np.mean(np.diff(meas_times)).to("min")
-        angle_arr = np.unwrap(angle_arr)
-
-        minima = local_minima_1d(angle_arr, en_plot=False)
-        period, period_std = minima[1] * meas_interval, minima[2] * meas_interval
-
-        relative_delay *= 1000
-
-        # correction
-        # angle_arr -= 2*np.pi*self.dataset.freq_axis[f_idx]*(zero_crossing/1000)
-
-        selected_freq_ = self.freq.magnitude
-        abs_p_shifts = np.abs(np.diff(relative_delay))
-        logging.info(f"Mean pulse shift: {np.round(np.mean(abs_p_shifts), 2)} fs")
-        max_diff_0x, min_diff_0x = np.max(abs_p_shifts), np.min(abs_p_shifts)
-        logging.info(f"Largest/smallest shift: {np.round(max_diff_0x, 2)}/{np.round(min_diff_0x, 2)} fs")
-
-        max_diff, argmax_diff = np.max(np.diff(angle_arr)), np.argmax(np.diff(angle_arr))
-        phase_str = f"Largest phase jump: {np.round(max_diff, 2)} rad"
-        phase_str += f" (time: {np.round(meas_times[argmax_diff], 2)})"
-        phase_str += f" (at {selected_freq_} THz)"
-        logging.info(phase_str)
-
-        avg_amp_change = np.mean(np.abs(np.diff(ampl_arr)))
-        max_amp_change = np.max(np.diff(ampl_arr))
-
-        logging.info(f"Largest amplitude change: {np.round(max_amp_change, 2)} (Arb. u.)")
-        logging.info(f"Mean absolute amplitude change: {np.round(avg_amp_change, 2)} (Arb. u.)")
-        logging.info(f"Mean measurement interval: {np.round(meas_interval, 2)}")
-        logging.info(f"Period estimation: {np.round(period, 2)}±{np.round(period_std, 2)}.")
-
-        plt.figure("rfft of the phase change")
-        phi_fft = np.fft.rfft(angle_arr)
-        phi_fft_f = np.fft.rfftfreq(len(angle_arr), d=meas_interval.to("h").magnitude)
-
-        plt.plot(phi_fft_f[1:], np.abs(phi_fft)[1:])
-        plt.xlabel("Frequency (1/hour)")
-        plt.ylabel("Magnitude")
-
-        angle_change = angle_arr[0] - angle_arr
-        ampl_change = ampl_arr[0] - ampl_arr
-        if self.plot_settings.stability_plot_rel_change:
-            ampl_change = 100 * ampl_change / ampl_arr[0]
-            angle_change = 100 * angle_change / angle_arr[0]
-
-        from random import choice
-        idx = choice(range(len(meas_set) - 1))
-        ref_fd = self.dataset.get_multi_data(meas_set, domain=Domain.Frequency)
-        phi0, phi1 = np.angle(ref_fd[idx, :, 1]), np.angle(ref_fd[idx + 1, :, 1])
-        amp0, amp1 = np.abs(ref_fd[idx, :, 1]), np.abs(ref_fd[idx + 1, :, 1])
-        w = 2 * np.pi * self.dataset.freq_axis
-
-        plt.figure("Specific pulse shift")
-        plt.title(f"Pulse shift between reference number {idx} and {idx + 1}")
-        plt.plot(self.dataset.freq_axis, 1e3 * (phi0 - phi1) / w, label=idx)
-        plt.xlabel("Frequency (THz)")
-        plt.ylabel("Time (fs)")
-
-        plt.figure("Interpolation zero crossing")
-        plt.plot(meas_times, zero_crossing)
-        plt.xlabel(f"Measurement time ({mt_unit})")
-        plt.ylabel("Time (ps)")
-
-        plt.figure("Amp change")
-        plt.plot(self.dataset.freq_axis, amp0 - amp1)
-        plt.xlabel("Frequency (THz)")
-        plt.ylabel("Amplitude change (Arb. u.)")
-
-        plt.figure("Reference delay")
-        plt.title(f"Reference delay\n(relative to first measurement)")
-        plt.plot(meas_times, relative_delay, label="Pulse shift")
-        plt.xlabel(f"Measurement time ({mt_unit})")
-        plt.ylabel(r"$\Delta$t (fs)")
-
-        plt.figure("Reference delay change")
-        plt.title(f"Reference delay change")
-        plt.plot(meas_times[1:], abs_p_shifts, label=t0)
-        # phase_change = np.abs(np.diff(angle_change))
-        # plt.plot(meas_times[1:], 1e3*phase_change/(2*3.1415*selected_freq_), label=t0)
-        plt.xlabel(f"Measurement time ({mt_unit})")
-        plt.ylabel(r"$\Delta (\Delta$t) (fs)")
-
-        plt.figure("Stability amplitude")
-        plt.title(f"Change of amplitude of reference measurement at {selected_freq_} THz")
-        plt.plot(meas_times, ampl_change)
-        plt.xlabel(f"Measurement time ({mt_unit})")
-        if self.plot_settings.stability_plot_rel_change:
-            plt.ylabel(r"$\Delta$A (%)")
-        else:
-            plt.ylabel(r"$\Delta$A (arb. u.)")
-
-        plt.figure("Stability phase")
-        plt.title(f"Change of phase of reference measurement at {selected_freq_} THz")
-        plt.plot(meas_times, angle_change)
-        plt.xlabel(f"Measurement time ({mt_unit})")
-        if self.plot_settings.stability_plot_rel_change:
-            plt.ylabel(r"$\Delta \phi$ (%)")
-        else:
-            plt.ylabel(r"$\Delta \phi$ (rad)")
-
-        plt.figure("Time between reference measurements")
-        plt.title(f"Time between reference measurements")
-        plt.plot(meas_times[1:], np.diff(meas_times) * 3600)
-        plt.ylabel("Time difference (s)")
-        plt.xlabel(f"Measurement time ({mt_unit})")
-
-        plt.figure("Spectral similarity")
-        plt.title("Spectral similarity compared to the first measurement")
-        plt.plot(meas_times, spec_similarity)
-        plt.ylim((-0.05, 1.05))
-        plt.ylabel("1 + ln|pears_r|")
-        plt.xlabel(f"Measurement time ({mt_unit})")
-
-        if not self.settings.plot_opt.add_climate_plot:
-            if self.settings.plot_opt.auto_show:
-                self.plt_show()
-            return
-
-        climate_plot_ret = self.plot_climate(mt_unit)
-        if climate_plot_ret is None:
-            if self.settings.plot_opt.auto_show:
-                self.plt_show()
-            return
-        else:
-            climate_meas_times, climate_value_dict = climate_plot_ret
-
-        # climate_value_dict = key: sensor_id, dict[key] = [original_val_arr, smooth_val_arr]
-
-        thz_meas_times = [meas.meas_time for meas in meas_set]
-        plotted_climate_vals = {k: np.zeros(len(meas_set)) for k in climate_value_dict}
-        for thz_meas_idx, thz_meas_time in enumerate(thz_meas_times):
-            best_fit = (None, np.inf)
-            for climate_meas_idx, climate_meas_time in enumerate(climate_meas_times):
-                meas_time_diff = np.abs((climate_meas_time - thz_meas_time).total_seconds())
-                if meas_time_diff < best_fit[1]:
-                    best_fit = (climate_meas_idx, meas_time_diff)
-
-            for k in climate_value_dict:
-                plotted_climate_vals[k][thz_meas_idx] = climate_value_dict[k][1][best_fit[0]]
-
-        plt.figure("pearsonplot")
-        plt.xlabel(f"Time ({mt_unit})")
-        for k in plotted_climate_vals:
-            shift_arr = np.arange(-100, 100, 1)
-            r_vals = np.zeros(len(shift_arr))
-            # for idx_shift in np.arange(-70, 71, 1):
-            for i, idx_shift in enumerate(shift_arr):
-                r = pearsonr(np.diff(plotted_climate_vals[k]), np.roll(relative_delay[1:], idx_shift))
-                # r = pearsonr(plotted_climate_vals[k], np.roll(relative_delay, idx_shift))
-                r_vals[i] = r.statistic
-
-            argmax = np.argmax(np.abs(r_vals))
-
-            highest_correlation = [r_vals[argmax], shift_arr[argmax]]
-
-            max_corr_val = np.round(highest_correlation[0], 3)
-            time_shift = np.round(highest_correlation[1] * meas_interval, 2)
-            msg = f"Pearson r (climate quantity, pulse delay) for {k}: {max_corr_val}"
-            msg += f" when shifted by {time_shift}"
-            logging.info(msg)
-
-            plt.plot(shift_arr * meas_interval.magnitude, r_vals, label=k)
-
-        label_map = self.plot_settings.redp_sensor_labels
-        plt.figure("Climate correlation plot")
-        for k in plotted_climate_vals:
-            label = label_map.get(k, k)
-            x = np.gradient(plotted_climate_vals[k], 0.012186554258538694)
-            x = plotted_climate_vals[k]
-            if "0" in k:
-                y = relative_delay
-                p = np.polyfit(x, y, 1)
-                y = x * p[0] + p[1]
-                plt.plot(x, y, label=f"linear fit {label}")
-            plt.scatter(x, relative_delay, label=label)
-        plt.ylabel("Pulse shift (fs)")
-        plt.xlabel("Temperature (°C)")
-
-        if self.settings.plot_opt.auto_show:
-            self.plt_show()
-
-        return
-
-    @action("Climate", group="Stability plots")
-    def plot_climate(self, time_unit=None):
-        climate_log_file = self.plot_settings.climate_file
-        if not climate_log_file.is_file():
-            logging.info(f"The path {climate_log_file} is not a file. Check plotting settings for climate plot")
-            return None
-
-        log_file = self.plot_settings.climate_file
-
-        full_log_path = self.find_climate_log_file(log_file)
-        if not full_log_path:
-            logging.info("No matching climate logfile found")
-            return None
-        else:
-            logging.info(f"Using climate logfile: {full_log_path}")
-
-        quantity = self.settings.plot_opt.climate_quantity
-        is_rp_log = False
-        if "pitaya" in str(full_log_path):
-            is_rp_log = True
-            if quantity == ClimateQuantity.Humidity:
-                logging.info("The Redpitaya does not record humidity")
-        temp_sensor_idx = self.plot_settings.temp_sensor_idx
-
-        def read_log_file(log_file_):
-            meas_time_, temp_, humidity_ = [], [], []
-            if is_rp_log:
-                rp_data = pd.read_csv(log_file_)
-                meas_time_ = [datetime.strptime(t, "%Y-%m-%d %H:%M:%S") for t in rp_data.iloc[:, 0]]
-                if temp_sensor_idx < 0:
-                    temp_ = rp_data.iloc[:, 1:]
-                else:
-                    temp_ = rp_data.iloc[:, temp_sensor_idx + 1]
-                humidity_ = np.zeros_like(meas_time_)
-            else:
-                def read_line(line_):
-                    parts = line_.split(" ")
-                    t = datetime.strptime(f"{parts[0]} {parts[1]}", '%Y-%m-%d %H:%M:%S')
-                    return t, float(parts[4]), float(parts[-3])
-
-                with open(log_file_) as file:
-                    for i, line in enumerate(file):
-                        if "nan" in line:
-                            continue
-                        if i % 15:  # Sampling time: 2 sec (= 0.5 Hz) -> 300 * 2 = 600 sec
-                            continue
-                        try:
-                            res = read_line(line)
-                            meas_time_.append(res[0])
-                            temp_.append(res[1])
-                            humidity_.append(res[2])
-                        except IndexError:
-                            continue
-
-            return meas_time_, np.array(temp_), np.array(humidity_)
-
-        meas_time, temp, humidity = read_log_file(full_log_path)
-
-        if self.measurements["all"] is not None:
-            t0 = self.measurements["all"][0].meas_time
-            tf = self.measurements["all"][-1].meas_time
-            tf_idx = np.argmin(np.abs([(tf - t).total_seconds() for t in meas_time]))
-        else:
-            t0 = meas_time[0]
-            tf_idx = len(meas_time)
-
-        meas_time_diff = Q_(np.array([(t - t0).total_seconds() for t in meas_time]), "s")
-        if time_unit is None:
-            meas_time_diff = self.set_time_axis_unit(meas_time_diff)
-        else:
-            meas_time_diff = meas_time_diff.to(time_unit)
-        mt_unit = meas_time_diff.units
-
-        if quantity == ClimateQuantity.Temperature:
-            quant = temp
-            y_label = r"$\theta$ (°C)"
-            dy_label = r"$\partial \theta / \partial t_m$" + f" (°C/{mt_unit})"
-        else:
-            quant = humidity
-            y_label = "Humidity (%)"
-            dy_label = fr"$\Delta$Humidity (\\%/{mt_unit})"
-
-        if self.plot_settings.clip_climate_data:
-            meas_time = meas_time[:tf_idx]
-            meas_time_diff = meas_time_diff[:tf_idx]
-            quant = quant[:tf_idx]
-
-        sas = (40, 15)  # smoothing_average_settings
-        quant_values = {}
-        if is_rp_log:
-            if quant.ndim != 1:
-                for i in range(np.shape(quant)[1]):
-                    vals = quant[:, i]
-                    smooth_vals = moving_average(vals, iterations=sas[0], n=sas[1])
-                    quant_values[f"Redp idx {i}"] = np.array([vals, smooth_vals])
-            else:
-                vals = quant
-                smooth_vals = moving_average(vals, iterations=sas[0], n=sas[1])
-                quant_values[f"Redp idx {temp_sensor_idx}"] = np.array([vals, smooth_vals])
-        else:
-            vals = quant
-            smooth_vals = moving_average(vals, iterations=sas[0], n=sas[1])
-            quant_values["Arduino"] = np.array([vals, smooth_vals])
-
-        if self.plot_settings.subtract_mean:
-            for k in quant_values:
-                offset = np.mean(quant_values[k][0])
-                std_quant = np.std(quant_values[k][0])
-                quant_values[k][0] -= offset
-                quant_values[k][1] -= offset
-                print(k, offset, std_quant)
-
-        line_labels = self.plot_settings.redp_sensor_labels
-
-        line_colors = ["r", "b", "g", "c", "m", "y", "k"]
-        stability_figs = ["Reference zero crossing", "Stability amplitude", "Stability phase"]
-        stability_figs.extend(["Reference delay", "Interpolation zero crossing"])
-        for fig_label in stability_figs:
-            if plt.fignum_exists(fig_label):
-                old_fig = plt.figure(fig_label)
-                ax_list = old_fig.get_axes()
-                lines = ax_list[0].get_lines()
-                plt.close(fig_label)
-
-                fig, (ax0, ax1, ax2) = plt.subplots(3, 1, num=fig_label,
-                                                    sharex=True, gridspec_kw={'hspace': 0})
-                ax0.tick_params(bottom=False, labelbottom=False)
-                ax1.tick_params(bottom=False, labelbottom=False)
-
-                for i, k in enumerate(quant_values):
-                    c = line_colors[i]
-                    label = line_labels.get(k, k)
-                    # label = None
-                    ax0.plot(meas_time_diff, quant_values[k][0], c=c, alpha=0.15)
-                    ax0.plot(meas_time_diff, quant_values[k][1], c=c, label=label)
-                # ax0.set_yticks([-0.25, 0, 0.25])
-                ax0.set_ylabel(y_label)
-                ax0.grid(True)
-
-                for i, k in enumerate(quant_values):
-                    dqdt = np.gradient(quant_values[k][1], np.mean(np.diff(meas_time_diff)))
-                    c = line_colors[i]
-                    label = line_labels.get(k, k)
-                    label = None
-                    ax1.plot(meas_time_diff, dqdt, c=c, label=label)
-                # ax1.set_yticks([-2.6, 0, 1.6])
-                ax1.set_ylabel(dy_label)
-                ax1.grid(True)
-                ax1.tick_params(axis="y")
-
-                c = "black"
-                for line in lines:
-                    x_data = line.get_xdata()
-                    y_data = line.get_ydata()
-                    # c = line.get_color()
-                    ax2.plot(x_data, y_data, color=c, label=line.get_label())
-                if "delay" in fig_label:
-                    # ax2.set_yticks([0, -50, -100])
-                    pass
-                ax2.tick_params(axis="y", colors=c)
-                ax2.set_ylabel(ax_list[0].get_ylabel(), c=c)
-                # ax0.grid(c="blue")
-                ax2.grid(True)
-                ax2.set_xlabel(f"Measurement time $t_m$ ({mt_unit})")
-
-                if "delay" in fig_label:
-                    h0, l0 = ax0.get_legend_handles_labels()
-                    h2, l2 = ax2.get_legend_handles_labels()
-
-                    ax0.legend(h0 + h2, l0 + l2, loc="upper right", framealpha=0.910)
-
-                fig.align_ylabels([ax0, ax1, ax2])
-                axes = [ax0, ax1, ax2]
-                labels = ["a)", "b)", "c)"]
-                labels = []
-
-                box_style = dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.95, lw=0)
-                for ax, label in zip(axes, labels):
-                    ax.text(0.010, 0.95, label, transform=ax.transAxes,
-                            fontsize=34, fontweight="bold", va="top", ha="left", bbox=box_style)
-
-                #ymin_0, ymax_0 = ax0.get_ylim()
-                #ax0.set_ylim(bottom=ymin_0, top=ymax_0 - (ymax_0 - ymin_0) * 0.05)
-                #ymin_1, ymax_1 = ax1.get_ylim()
-                #ax1.set_ylim(bottom=ymin_1 + (ymax_1 - ymin_1) * 0.05, top=ymax_1)
-
-        if not plt.fignum_exists(stability_figs[0]):
-            fig, ax1 = plt.subplots(num="Climate plot")
-            for i, k in enumerate(quant_values):
-                ax1.scatter(meas_time_diff, quant_values[k][0], c=line_colors[i], alpha=0.11, label=f"Start: {t0}" + k)
-                ax1.scatter(meas_time_diff, quant_values[k][1], c=line_colors[i])
-            ax1.set_xlabel(f"Measurement time ({mt_unit})")
-            ax1.set_ylabel(y_label)
-
-        if self.settings.plot_opt.auto_show:
-            self.plt_show()
-
-        return meas_time, quant_values
-
-    @action("Stability difference", group="Stability plots")
-    def system_stability_diff_plot(self):
-        kw_filter_str = ""  # original: "-sub-": monitoring_pulse_mod\set1
-        system_stab_res_refs = self.get_stability_data()
-        x = system_stab_res_refs["meas_times"]
-        y_ref = system_stab_res_refs["relative_delay"]
-
-        with self.settings.pp_opt.override(window_enabled=True, win_start=Q_(11, "ps"), center_on_pulse=False):
-            system_stab_res_mon_pulse0 = self.get_stability_data(meas_set_kw=kw_filter_str)
-        if system_stab_res_mon_pulse0 is None:
-            return
-
-        with self.settings.pp_opt.override(window_enabled=True, win_start=Q_(27, "ps"), center_on_pulse=False):
-            system_stab_res_mon_pulse1 = self.get_stability_data(meas_set_kw=kw_filter_str)
-        if system_stab_res_mon_pulse1 is None:
-            return
-
-        xp = system_stab_res_mon_pulse0["meas_times"]
-        fp = system_stab_res_mon_pulse0["relative_delay"]
-        y_pulse0 = np.interp(x, xp, fp)
-
-        xp = system_stab_res_mon_pulse1["meas_times"]
-        fp = system_stab_res_mon_pulse1["relative_delay"]
-        y_pulse1 = np.interp(x, xp, fp)
-
-        delay_difference_pulse0 = y_pulse0 - y_ref
-        # offset_pulse0 = np.mean(delay_difference_pulse0[100:])
-        offset_pulse0 = 0
-        delay_difference_pulse1 = y_pulse1 - y_ref
-        # offset_pulse1 = np.mean(delay_difference_pulse1[100:])
-        offset_pulse1 = 0
-        # print(offset_pulse0, offset_pulse1)
-
-        y_pulse0 = y_pulse0 - offset_pulse0
-        y_pulse1 = y_pulse1 - offset_pulse1
-
-        y_mean = (y_pulse0 + y_pulse1) / 2
-
-        residual_pulse0 = np.sum((y_pulse0 - y_ref) ** 2) / len(y_ref)
-        residual_pulse1 = np.sum((y_pulse1 - y_ref) ** 2) / len(y_ref)
-        residual_mean = np.sum((y_mean - y_ref) ** 2) / len(y_ref)
-        # print(residual_pulse0, residual_pulse1, residual_mean)
-
-        plt.figure("Delay interpolation")
-        # plt.plot(x, y_pulse0, label="Delay monitor pulse0 (interp)")
-        # plt.plot(x, y_pulse1, label="Delay monitor pulse1 (interp)")
-        plt.plot(x, y_mean, label="Delay monitor mean pulse 0 and 1")
-        plt.plot(x, y_ref, label="Delay reference")
-        plt.xlabel(f"Measurement time (unit?)")
-        plt.ylabel("Time (fs)")
-
-        plt.figure("Delay difference")
-        plt.plot(x, delay_difference_pulse0, label="difference y_mon_pulse0 - y_ref")
-        plt.plot(x, delay_difference_pulse1, label="difference y_mon_pulse1 - y_ref")
-        plt.xlabel(f"Measurement time (unit?)")
-        plt.ylabel("Time (fs)")
-
-        if self.settings.plot_opt.auto_show:
-            self.plt_show()
-
 
     @action("Print windowing eval result", group=print_eval_win_grp)
     def print_ret(self, label=""):

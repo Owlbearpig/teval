@@ -3,7 +3,7 @@ from common.dataset import DataSet
 from common.eval_component.q_space_eval import QSpaceEval
 from common.settings import Settings
 from traitlets import Instance
-from common.dataset_plotter import QuantityPlots, ImagePlot
+from common.dataset_plotter import ExtendedDataSetPlotter, ImagePlot
 from common.components import action
 
 redp_labels = {
@@ -23,7 +23,7 @@ class AppRoot(ComponentBase):
     # settings_sub = Instance(Settings)
     dataset = Instance(DataSet, allow_none=True)
     # dataset_sub = Instance(DataSet)
-    quantity_plotter = Instance(QuantityPlots, allow_none=True)
+    dataset_plotter = Instance(ExtendedDataSetPlotter, allow_none=True)
     image_plot = Instance(ImagePlot, allow_none=True)
     q_space_eval = Instance(QSpaceEval, allow_none=True)
 
@@ -36,8 +36,8 @@ class AppRoot(ComponentBase):
 
         # self.dataset_sub = DataSet(self.settings_sub, object_name="Dataset substrate")
         self.dataset_sub = None
-        if self.settings.component_toggle.en_quantity_plots:
-            self.quantity_plotter = QuantityPlots(self.dataset, object_name="Quantity plotter")
+        if self.settings.component_toggle.en_extended_dataset_plots:
+            self.dataset_plotter = ExtendedDataSetPlotter(self.dataset, object_name="DataSet plotter")
         if self.settings.component_toggle.en_image_plot:
             self.image_plot = ImagePlot(self.dataset, object_name="Image plot")
         if self.settings.component_toggle.en_q_space_eval:
@@ -45,7 +45,7 @@ class AppRoot(ComponentBase):
 
     @action("Take new measurement")
     def takeMeasurement(self):
-        self.quantity_plotter.plot_system_stability()
-        self.quantity_plotter.plt_show()
+        self.dataset_plotter.plot_system_stability()
+        self.dataset_plotter.plt_show()
         # self.set_trait('someDataSet', dataSet)
 

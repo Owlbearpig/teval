@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from common.settings import Settings
 from traitlets import Instance
-from common.dataset_plotter import QuantityPlots
+from common.dataset_plotter import ExtendedDataSetPlotter
 from common.components import action
 
 if "nt" in os.name:
@@ -76,13 +76,13 @@ class AppRoot(ComponentBase):
 
     settings = Instance(Settings)
     dataset = Instance(DataSet)
-    dataset_plotter = Instance(QuantityPlots)
+    dataset_plotter = Instance(ExtendedDataSetPlotter)
 
     def __init__(self):
         super().__init__()
         self.settings = Settings()
         self.dataset = DataSet(dataset_path, self.settings, object_name="Dataset")
-        self.dataset_plotter = QuantityPlots(self.dataset, object_name="Dataset Plotter")
+        self.dataset_plotter = ExtendedDataSetPlotter(self.dataset, object_name="Dataset Plotter")
 
     @action("print settings")
     def print_settings(self):

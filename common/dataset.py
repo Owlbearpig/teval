@@ -446,9 +446,7 @@ class DataSet(ComponentBase):
 
         return data
 
-    def get_multi_data(self, meas_list, domain=Domain.Time) -> np.ndarray | None:
-        if meas_list is None:
-            return None
+    def get_multi_data(self, meas_list, domain=Domain.Time) -> np.ndarray:
         meas_list = [meas_list] if isinstance(meas_list, Measurement) else meas_list
 
         sample_data = self._single_meas_data(meas_list[0], domain=domain)
@@ -810,17 +808,30 @@ class DataSet(ComponentBase):
 
         return t[np.arange(ref_td.shape[0]), np.argmax(np.abs(y), axis=1)]
 
-    def spectral_similarity(self, meas_0, meas_1, freq_min=0.15, freq_max=2.00):
-        data_fd_0 = self.get_multi_data(meas_0, domain=Domain.Frequency)
-        data_fd_1 = self.get_multi_data(meas_1, domain=Domain.Frequency)
+    def spectral_similarity(self, meas_0=None, meas_1=None, data_arrays_fd=None):
+        if (meas_0 is None) and (meas_1 is None) and (data_arrays_fd is None):
+            return None
 
+        if data_arrays_fd is None:
+            data_fd_0 = self.get_multi_data(meas_0, domain=Domain.Frequency)
+            if meas_1 is None:
+                meas_1 = self.measurement_selector.get_matching_refs(meas_0)
+            data_fd_1 = self.get_multi_data(meas_1, domain=Domain.Frequency)
+        else:
+            data_fd_0, data_fd_1 = data_arrays_fd
+
+        freq_min, freq_max = self.settings.eval_opt.spectral_similarity_range.magnitude
         f_idx_range = f_axis_idx_map(self.freq_axis, (freq_min, freq_max))
         x, y = np.abs(data_fd_0[:, f_idx_range, 1]), np.abs(data_fd_1[:, f_idx_range, 1])
 
         return 1 + np.log(np.abs(pearsonr(x, y, axis=1).statistic))
 
-    def delay_from_phase_slope(self, meas_0, meas_1=None, freq_min=0.25, freq_max=0.85):
-        phi_diff = self.phase_difference(meas_0, meas_1)
+    def delay_from_phase_slope(self, meas_0=None, meas_1=None, data_arrays=None):
+        if data_arrays is None:
+            phi_diff = self.phase_difference(meas_0, meas_1)
+        else:
+            phi_diff = self.phase_difference(data_arrays=data_arrays)
+        freq_min, freq_max = self.settings.eval_opt.avg_grp_delay_fit_range.magnitude
         mask = (freq_min <= self.freq_axis) & (self.freq_axis <= freq_max)
 
         p = np.polyfit(self.freq_axis[mask], phi_diff[:, mask].T, 1)
@@ -829,8 +840,9 @@ class DataSet(ComponentBase):
 
         return tau
 
-    def get_zero_crossing(self, meas_):
-        data_td = self.get_multi_data(meas_)
+    def get_zero_crossing(self, meas_=None, data_td=None):
+        if data_td is None:
+            data_td = self.get_multi_data(meas_)
         t, y = data_td[:, :, 0], data_td[:, :, 1]
 
         y_abs_max = np.argmax(np.abs(y), axis=1)
@@ -949,16 +961,19 @@ class DataSet(ComponentBase):
         phi_r_m0 = np.angle(m0_fd[:, :, 1])
         return np.unwrap(phi_r_m0 - phi_r_m1, axis=1)
 
-    def phase_difference(self, m0, m1=None):
+    def phase_difference(self, m0=None, m1=None, data_arrays=None):
         # phase unwrapping Phase Retrieval in Terahertz Time-Domain
         # Measurements: a how to Tutorial P. Uhd Jepsen https://doi.org/10.1007/s10762-019-00578-0
-        if m1 is None:
-            m1 = self.measurement_selector.get_matching_refs(m0)
+        if data_arrays is None:
+            if m1 is None:
+                m1 = self.measurement_selector.get_matching_refs(m0)
 
-        m1_fd = self.get_multi_data(m1, Domain.Frequency)
-        m0_fd = self.get_multi_data(m0, Domain.Frequency)
-        m1_td = self.get_multi_data(m1, Domain.Time)
-        m0_td = self.get_multi_data(m0, Domain.Time)
+            m0_fd = self.get_multi_data(m0, Domain.Frequency)
+            m1_fd = self.get_multi_data(m1, Domain.Frequency)
+            m0_td = self.get_multi_data(m0, Domain.Time)
+            m1_td = self.get_multi_data(m1, Domain.Time)
+        else:
+            m0_td, m0_fd, m1_td, m1_fd = data_arrays
 
         phi_fit_range = self.settings.eval_opt.phi_fit_range.magnitude
 

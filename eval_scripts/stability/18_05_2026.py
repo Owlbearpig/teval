@@ -2,7 +2,7 @@ from common.components import ComponentBase
 from common.dataset import DataSet
 from common.settings import Settings
 from traitlets import Instance
-from common.dataset_plotter import QuantityPlots
+from common.dataset_plotter import ExtendedDataSetPlotter
 from common.components import action
 
 
@@ -23,7 +23,7 @@ class AppRoot(ComponentBase):
     # settings_sub = Instance(Settings)
     dataset = Instance(DataSet, allow_none=True)
     # dataset_sub = Instance(DataSet)
-    dataset_plotter = Instance(QuantityPlots, allow_none=True)
+    dataset_plotter = Instance(ExtendedDataSetPlotter, allow_none=True)
     dataset_eval = Instance(DatasetEval, allow_none=True)
 
     def __init__(self):
@@ -35,7 +35,7 @@ class AppRoot(ComponentBase):
 
         # self.dataset_sub = DataSet(self.settings_sub, object_name="Dataset substrate")
         self.dataset_sub = None
-        self.dataset_plotter = QuantityPlots(self.dataset, object_name="Dataset Plotter")
+        self.dataset_plotter = ExtendedDataSetPlotter(self.dataset, object_name="Dataset Plotter")
         self.dataset_eval = DatasetEval(self.dataset, self.dataset_sub, object_name="Dataset Evaluation")
         
     @action("Take new measurement")
