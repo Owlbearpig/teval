@@ -89,6 +89,12 @@ class PlotReferenceWaveform(Enum):
     only_first = "Only first"
     never = "Never"
 
+class ComplexPart(Enum):
+    abs = "Absolute value"
+    real = "Real part"
+    imag = "Imaginary part"
+    phase = "Phase"
+
 class PixelInterpolation(Enum):
     none = None
     antialiased = 'antialiased'

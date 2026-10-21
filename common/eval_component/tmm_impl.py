@@ -2,20 +2,42 @@ from tmm import array, list_snell, seterr, cos, zeros, interface_r, interface_t,
 import numpy as np
 from common.consts import c_thz
 
+def _is_forward_angle(n, theta):
+    # vectorized version of tmm.is_forward_angle
+    ncostheta = n * np.cos(theta)
+    return np.where(np.abs(ncostheta.imag) > 100 * np.finfo(float).eps, ncostheta.imag > 0, ncostheta.real > 0)
+
+
 def coh_tmm_wrapper(pol, n_list, d_list, th_0, lam_vac):
-    lam_vac = array(lam_vac)
-    if lam_vac.ndim == 0:
-        return coh_tmm(pol, n_list, d_list, th_0, lam_vac)
-    elif lam_vac.ndim == 1:
-        n_arr = np.zeros((len(n_list), len(lam_vac)), dtype=complex)
-        for n_idx in range(len(n_list)):
-            n_arr[n_idx] = n_list[n_idx] * np.ones_like(lam_vac, dtype=complex)
+    # same result as coh_tmm, but vectorized: lam_vac and each entry of n_list can be arrays of any
+    # broadcastable shape (e.g. frequencies, or scan points x frequencies)
+    lam_vac = np.asarray(lam_vac, dtype=float)
+    n_arr = np.array(np.broadcast_arrays(*[np.asarray(n, dtype=complex) for n in n_list], lam_vac)[:-1])
+    d_list = np.asarray(d_list, dtype=float)
+    num_layers = len(n_arr)
 
-        t_arr = np.zeros(len(lam_vac), dtype=complex)
-        for f_idx, lv in enumerate(lam_vac):
-            t_arr[f_idx] = coh_tmm(pol, n_arr[:, f_idx], d_list, th_0, lv)
+    with np.errstate(invalid="ignore", over="ignore"):
+        th_arr = np.arcsin(n_arr[0] * np.sin(th_0) / n_arr)
+        for i in (0, -1):
+            th_arr[i] = np.where(_is_forward_angle(n_arr[i], th_arr[i]), th_arr[i], np.pi - th_arr[i])
 
-        return t_arr
+        kz_arr = 2 * np.pi * n_arr * np.cos(th_arr) / lam_vac
+
+        def interface(i):
+            return (interface_t(pol, n_arr[i], n_arr[i + 1], th_arr[i], th_arr[i + 1]),
+                    interface_r(pol, n_arr[i], n_arr[i + 1], th_arr[i], th_arr[i + 1]))
+
+        # Mtilde = (1/t01) [[1, r01], [r01, 1]] @ M_1 @ ... @ M_(num_layers-2), elementwise 2x2 products
+        t_, r_ = interface(0)
+        m00, m01, m10, m11 = 1 / t_, r_ / t_, r_ / t_, 1 / t_
+        for i in range(1, num_layers - 1):
+            t_, r_ = interface(i)
+            e_m, e_p = np.exp(-1j * kz_arr[i] * d_list[i]), np.exp(1j * kz_arr[i] * d_list[i])
+            a00, a01, a10, a11 = e_m / t_, r_ * e_m / t_, r_ * e_p / t_, e_p / t_
+            m00, m01, m10, m11 = (m00 * a00 + m01 * a10, m00 * a01 + m01 * a11,
+                                  m10 * a00 + m11 * a10, m10 * a01 + m11 * a11)
+
+    return 1 / m00
 
 def coh_tmm(pol, n_list, d_list, th_0, lam_vac):
 

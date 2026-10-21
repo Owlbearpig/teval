@@ -1,6 +1,7 @@
 import numpy as np
 from common.eval_component.shgo import shgo
 from common.consts import c_thz
+from common.eval_component.n_guess import get_n_guess
 from common.eval_component.eval_result import SingleResultData
 from common.units import Q_
 from common.eval_component.quantity_set import QuantityDataSet
@@ -8,7 +9,7 @@ from datetime import datetime
 
 def shgo_transmission_optimization(d, shift, config_dict) -> SingleResultData:
     freq_axis = config_dict["freq_axis"]
-    n0 = np.asarray(config_dict["n_guess"])
+    n0 = get_n_guess(d, shift, config_dict)
     t_exp = config_dict["t_exp"]
     transmission_model = config_dict["transmission_model"]
     cost_fun = config_dict["cost_fun"]

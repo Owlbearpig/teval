@@ -8,7 +8,7 @@ import matplotlib.patches as patches
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 from common.default_appsettings import (Domain, PlotReferenceWaveform, Direction,
-                                        ClimateQuantity, QuantityEnum, AppSettings, ComponentToggle)
+                                        ClimateQuantity, QuantityEnum, AppSettings, ComponentToggle, ComplexPart)
 from functools import partial
 from common.functions import moving_average, f_axis_idx_map, local_minima_1d, round_dx, to_db
 import logging
@@ -65,8 +65,6 @@ class GridWorker(QThread):
             batch_y = y_idxs[i: i + self.batch_size]
 
             res_batch = sel_quant_func(batch_meas)
-            if np.iscomplexobj(res_batch):
-                res_batch = np.abs(res_batch)
 
             if res_batch.ndim == 1:
                 grid[batch_x, batch_y] = res_batch
@@ -495,7 +493,7 @@ class AverageValRect(ComponentBase):
         x0_idx, y0_idx = self.image_plot_inst._coords_to_idx(*pnt_bot_left)
         x1_idx, y1_idx = self.image_plot_inst._coords_to_idx(*pnt_top_right)
 
-        grid_vals = self.image_plot_inst.grid_vals[x0_idx:x1_idx + 1, y0_idx:y1_idx + 1]
+        grid_vals = self.image_plot_inst.real_grid_vals[x0_idx:x1_idx + 1, y0_idx:y1_idx + 1]
         mean_val, std_val = np.mean(grid_vals), np.std(grid_vals)
 
         mean_s, std_s = str(np.round(mean_val, 4)), str(np.round(std_val, 4))
@@ -581,7 +579,7 @@ class SlicePlots(ComponentBase):
         sel_quant = self.image_plot_inst.selected_quantity
         sel_quant_func = self.image_plot_inst.get_selected_quantity_func()
 
-        vals = np.real(sel_quant_func(meas_on_line))
+        vals = self.image_plot_inst.to_real(sel_quant_func(meas_on_line))
         if vals.ndim == 2:
             vals = vals[:, self.image_plot_inst.sel_freq_idx]
 
@@ -722,13 +720,15 @@ class ImagePlot(DataSetPlotter):
         name="Frequency range", group=image_calc, priority=1001)
     selected_quantity_enum = TEnum(QuantityEnum, default_value=QuantityEnum.P2P).tag(
         name="Selected quantity", group=image_calc, priority=1002)
+    complex_part = TEnum(ComplexPart, default_value=ComplexPart.abs).tag(
+        name="Complex value representation", group=image_calc, priority=1003)
     only_use_sample_set = Bool(True, group=image_calc,
                                help="Will only use measurements classified as a sample measurement "
                                     "for the image plot, otherwise uses all measurements in the "
                                     "dataset").tag(name="Only use sample measurements for image")
 
     grid_calc_progress = Float(0, min=0, max=1, read_only=True).tag(
-        name="Grid calculation progress", group=image_calc, priority=1003)
+        name="Grid calculation progress", group=image_calc, priority=1004)
 
     waveform_grp = "On-click waveform plot"
     legend_label = Unicode("").tag(name="Legend label", group=waveform_grp, priority=1000)
@@ -774,6 +774,23 @@ class ImagePlot(DataSetPlotter):
     def quantity_label(self):
         lbl = self.freq_label()
         return f"{self.selected_quantity}" + f" ({lbl})" * bool(lbl)
+
+    def to_real(self, vals):
+        if not np.iscomplexobj(vals) or not np.any(vals.imag):
+            return np.real(vals)
+
+        conversions = {ComplexPart.abs: np.abs,
+                       ComplexPart.real: np.real,
+                       ComplexPart.imag: np.imag,
+                       ComplexPart.phase: np.angle}
+
+        return conversions[self.complex_part](vals)
+
+    @property
+    def real_grid_vals(self):
+        if self.grid_vals is None:
+            return None
+        return self.to_real(self.grid_vals)
 
     def _get_empty_grid(self):
         img_shape = self.img_shape
@@ -903,7 +920,7 @@ class ImagePlot(DataSetPlotter):
             h0, h1 = (int((img_extent[2] - shape_properties["extent"][2]) / dy),
                       int((img_extent[3] - shape_properties["extent"][2]) / dy))
 
-        shown_grid_vals = self.grid_vals.real
+        shown_grid_vals = self.real_grid_vals
         shown_grid_vals = shown_grid_vals[w0:w1, h0:h1]
         shown_grid_vals = self._exclude_pixels(shown_grid_vals)
 

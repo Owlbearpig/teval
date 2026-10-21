@@ -3,6 +3,7 @@ import logging
 from scipy.interpolate import CubicSpline
 from scipy.optimize import least_squares
 from common.consts import c_thz
+from common.eval_component.n_guess import get_n_guess
 from common.eval_component.eval_result import SingleResultData
 from common.units import Q_
 from common.eval_component.quantity_set import QuantityDataSet
@@ -10,7 +11,7 @@ from datetime import datetime
 
 def spline_transmission_optimization(d, shift, config_dict):
     freq_axis = np.asarray(config_dict["freq_axis"])
-    n0 = np.asarray(config_dict["n_guess"])
+    n0 = get_n_guess(d, shift, config_dict)
     t_exp = np.asarray(config_dict["t_exp"])
     transmission_model = config_dict["transmission_model"]
     cost_fun = config_dict["cost_fun"]
@@ -41,19 +42,17 @@ def spline_transmission_optimization(d, shift, config_dict):
 
     freq_knots = freq_axis[knot_idx]
 
-    def make_splines(p):
-        n_knots_values = p[:n_knots]
-        k_knots_values = p[n_knots:]
+    unit_splines = CubicSpline(freq_knots, np.eye(n_knots), bc_type="natural")
+    basis = unit_splines(freq_axis)
+    basis_d2 = unit_splines(freq_axis, 2)
 
-        spline_n = CubicSpline(freq_knots, n_knots_values, bc_type="natural")
-        spline_k = CubicSpline(freq_knots, k_knots_values, bc_type="natural")
-
-        return spline_n, spline_k
+    reg_n_mat = np.sqrt(lambda_n) / n_scale * basis_d2
+    reg_k_mat = np.sqrt(lambda_k) / k_scale * basis_d2
+    reg_jac = np.block([[reg_n_mat, np.zeros_like(basis_d2)],
+                        [np.zeros_like(basis_d2), reg_k_mat]])
 
     def calculate_model(p):
-        spline_n, spline_k = make_splines(p)
-
-        n = spline_n(freq_axis) + 1j * spline_k(freq_axis)
+        n = basis @ p[:n_knots] + 1j * (basis @ p[n_knots:])
         t_mod = transmission_model(n, freq_axis, **model_kwargs)
 
         return n, t_mod
@@ -63,20 +62,26 @@ def spline_transmission_optimization(d, shift, config_dict):
 
         data_residual = cost_fun(t_exp, t_mod)
 
-        spline_n, spline_k = make_splines(p)
-
-        d2n = spline_n(freq_axis, 2)
-        d2k = spline_k(freq_axis, 2)
-
-        d2n_normalized = d2n / n_scale
-        d2k_normalized = d2k / k_scale
-
         residuals = np.concatenate([data_residual,
-                                    np.sqrt(lambda_n) * d2n_normalized,
-                                    np.sqrt(lambda_k) * d2k_normalized,
+                                    reg_n_mat @ p[:n_knots],
+                                    reg_k_mat @ p[n_knots:],
         ])
 
         return residuals
+
+    def jac_fun(p):
+        n = basis @ p[:n_knots] + 1j * (basis @ p[n_knots:])
+        h = 1e-7
+
+        def cost_at(n_):
+            return cost_fun(t_exp, transmission_model(n_, freq_axis, **model_kwargs))
+
+        dc_dn = (cost_at(n + h) - cost_at(n - h)) / (2 * h)
+        dc_dk = (cost_at(n + 1j * h) - cost_at(n - 1j * h)) / (2 * h)
+
+        data_jac = np.hstack((dc_dn[:, None] * basis, dc_dk[:, None] * basis))
+
+        return np.vstack((data_jac, reg_jac))
 
     n_real_0 = n0.real[knot_idx]
     kappa_0 = n0.imag[knot_idx]
@@ -105,6 +110,7 @@ def spline_transmission_optimization(d, shift, config_dict):
     opt_res = least_squares(
         residual_fun,
         p0,
+        jac=jac_fun,
         bounds=(lower_bounds, upper_bounds),
         x_scale="jac",
         max_nfev = max_nfev,
@@ -159,8 +165,8 @@ def spline_transmission_optimization(d, shift, config_dict):
     )
 
     result_data.datasets["alpha"] = QuantityDataSet(
-        axes=[Q_(freq_axis, "THz")],
-        data=Q_(alpha_,"1/cm"),
+        axes=[Q_(np.real(freq_axis), "THz")],
+        data=Q_(np.real(alpha_),"1/cm"),
         axes_labels=["Frequency"],
         data_label="Absorption coefficient"
     )

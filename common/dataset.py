@@ -237,7 +237,7 @@ class DataSet(ComponentBase):
 
         self.measurement_selector = MeasurementSelection(self, object_name="Measurement selection")
 
-        self.freq_axis = None
+        self._freq_axis = None
 
     def __enter__(self, *args):
         super().__enter__(self, *args)
@@ -257,6 +257,13 @@ class DataSet(ComponentBase):
         super().__exit__(self, *args)
         if self.settings is not None:
             self.settings.save_configuration(self)
+
+    @property
+    def freq_axis(self):
+        if self._freq_axis is None:
+            self._single_meas_data(self.measurements["all"][0], domain=Domain.Frequency)
+
+        return self._freq_axis
 
     @property
     def _func_map(self):
@@ -440,8 +447,8 @@ class DataSet(ComponentBase):
             data = data_td
         else:
             data = do_fft(data_td)
-            if self.freq_axis is None:
-                self.freq_axis = data[:, 0].real
+            if self._freq_axis is None:
+                self._freq_axis = data[:, 0].real
         data = np.insert(data, 2, 0, axis=1)
 
         return data
@@ -1054,7 +1061,7 @@ class DataSet(ComponentBase):
         n_imag = -(c_thz / (w * d)) * np.log(t_amp / t_interface_amp)
 
         n_real = 1.0 + (c_thz * dt / d)[:, None]
-        print(n_real)
+
         return n_real + 1j * n_imag
 
     def conductivity(self, meas_, d_sam=None):

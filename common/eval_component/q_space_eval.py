@@ -1,14 +1,12 @@
 import logging
 import traceback
-from tokenize import group
-
 import numpy as np
 import matplotlib as mpl
 from matplotlib.widgets import SpanSelector
 from common.eval_component.transfer_functions import TransmissionModels
 from common.eval_component.eval_component_base import EvalComponentBase
 from common.measurement_selection import Selection, SelectionQueue
-from common.default_appsettings import SimRISelection, Domain, QSpaceQuantity, ComponentToggle
+from common.default_appsettings import SimRISelection, Domain, QSpaceQuantity, ComponentToggle, AppSettings
 from common.functions import f_axis_idx_map, moving_average, do_ifft, to_db, avg_data_array
 from common.eval_component.quantity_set import QuantityDataSet
 from common.eval_component.eval_result import EvalResultData, SingleResultData
@@ -22,6 +20,7 @@ from concurrent.futures.process import BrokenProcessPool
 from functools import partial
 from common.eval_component.single_opt import shgo_transmission_optimization
 from common.eval_component.t_fit_global import spline_transmission_optimization
+from common.eval_component.n_guess import NGuessMethod
 from dataclasses import dataclass
 from mpl_settings import mpl_style_params
 from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance, link
@@ -48,12 +47,20 @@ def kill_process_pool(executor):
         except Exception:
             pass
 
+
+def limit_worker_threads():
+    try:
+        from threadpoolctl import threadpool_limits
+    except ImportError:
+        return
+    threadpool_limits(limits=1)
+
 @dataclass(frozen=True)
 class SelectionContext:
     selection: Selection
     ref_fd_dict: dict
     t_exp_dict: dict
-    n_guess: dict
+    n_guess: dict | None
     t_model_kwargs: dict
     smoothing: tuple
 
@@ -285,6 +292,16 @@ class QSpaceEval(EvalComponentBase):
     bound_shrink_factor = Float(0.20, group=t_fit_grp_name).tag(name="Thickness bounds shrink factor",
                                                                 priority=4)
 
+    n_guess_grp = "Initial refractive index guess"
+    n_guess_method = TEnum(NGuessMethod, default_value=NGuessMethod.tof, group=n_guess_grp,
+                           help="Time of flight: estimate from the mean of the thickness axis bounds. "
+                                "Model cost scan: for each thickness and shift, scan a constant n with the "
+                                "selected transmission model and use the minimum of the phase cost").tag(
+        name="Initial guess method", priority=10)
+    n_scan_range = ValueRange([1.0, 6.0], group=n_guess_grp).tag(name="Scanned n range", priority=11)
+    n_scan_step = Float(0.02, group=n_guess_grp).tag(name="Scan step n", priority=12)
+    k_scan_max = Float(0.5, group=n_guess_grp).tag(name="Maximum scanned k", priority=13)
+
     preprocessing = Instance(Preprocessing, allow_none=True).tag(priority=1, toggle=ComponentToggle.en_preprocessing)
 
     def __init__(self, dataset, **kwargs):
@@ -317,6 +334,8 @@ class QSpaceEval(EvalComponentBase):
         return self.format_meas_dict(meas_list, t_exp)
 
     def n_guess(self, selection):
+        if self.n_guess_method == NGuessMethod.cost_scan:
+            return None
         meas_list = list(selection.sams)
         d_init = np.mean(self.d_opt_axis_bounds.magnitude)
         ref_idx = self.dataset.refractive_index_estimate(meas_list,
@@ -398,7 +417,6 @@ class QSpaceEval(EvalComponentBase):
         phi_avg = avg_data_array(t_exp_phi)
 
         amp = t_exp_amp_avg[:, 1]
-        phi = phi_avg[:, 1]
         delta_amp = t_exp_amp_avg[:, 2]
         delta_phi = phi_avg[:, 2]
 
@@ -419,17 +437,18 @@ class QSpaceEval(EvalComponentBase):
 
         delta_d = self.settings.eval_opt.delta_d.magnitude
 
-        delta_k_term1 = delta_phi * -(c_thz / (w * d)) ** 2 * (n.real - 1) / (n.real * (n.real + 1))
-        delta_k_term2 = delta_amp * (c_thz / (w * d)) * (1 / amp)
-        delta_k_term3 = delta_d * (c_thz / (w * d ** 2)) * np.log(amp * (1 + n.real) ** 2 / (4 * n))
-        delta_k = np.sqrt(np.abs(delta_k_term1) ** 2 + np.abs(delta_k_term2) ** 2 + np.abs(delta_k_term3) ** 2)
+        n_r, k = n.real, n.imag
+        a = c_thz / (w * d)
 
-        delta_n_term1 = delta_phi * c_thz / (w * d)
-        delta_n_term2 = delta_d * (-phi * c_thz) / (w * d ** 2)
+        dk_dn = -a * (n_r - 1) / (n_r * (n_r + 1))
+        dn_dd = -(n_r - 1) / d
+        dk_dd = -k / d + dk_dn * dn_dd
+
+        delta_n = np.sqrt((a * delta_phi) ** 2 + (dn_dd * delta_d) ** 2)
+        delta_k = np.sqrt((dk_dn * a * delta_phi) ** 2 + (a * delta_amp / amp) ** 2 + (dk_dd * delta_d) ** 2)
 
         opt_res.datasets["alpha"].uncert = Q_(np.abs(4 * np.pi * f_axis * delta_k / (1e-4 * c_thz)), "1/cm")
-        opt_res.datasets["n"].uncert = Q_(np.sqrt(np.abs(delta_n_term1) ** 2 + np.abs(delta_n_term2) ** 2)
-                                          + 1j * delta_k, "")
+        opt_res.datasets["n"].uncert = Q_(delta_n + 1j * delta_k, "")
 
     def calc_q_val(self, res_data: SingleResultData):
         if self.settings.eval_opt.use_separate_range:
@@ -517,6 +536,10 @@ class QSpaceEval(EvalComponentBase):
             "shgo_options": self.settings.shgo_options.get_shgo_options(),
             "n": self.settings.shgo_options.n,
             "iters": self.settings.shgo_options.iters,
+            "n_guess_method": self.n_guess_method,
+            "n_scan_range": tuple(float(v) for v in self.n_scan_range),
+            "n_scan_step": self.n_scan_step,
+            "k_scan_max": self.k_scan_max,
             **ctx.t_model_kwargs,
         }
         if self.optimization_method == OptimizationMethods.Spline:
@@ -524,7 +547,7 @@ class QSpaceEval(EvalComponentBase):
             common_opt_params["reg_n"] = self.settings.eval_opt.reg_n
             common_opt_params["reg_k"] = self.settings.eval_opt.reg_k
             common_opt_params["max_nfev"] = self.settings.eval_opt.max_nfev
-        opt_configs = {meas: {**common_opt_params, "n_guess": ctx.n_guess[meas],
+        opt_configs = {meas: {**common_opt_params, "n_guess": ctx.n_guess[meas] if ctx.n_guess else None,
                               "t_exp": ctx.t_exp_dict[meas]} for meas in ctx.t_exp_dict}
 
         def get_new_tasks():
@@ -580,7 +603,8 @@ class QSpaceEval(EvalComponentBase):
 
             check_cancel()
             task_results = []
-            with ProcessPoolExecutor(max_workers=self.number_of_workers) as executor:
+            with ProcessPoolExecutor(max_workers=self.number_of_workers,
+                                     initializer=limit_worker_threads) as executor:
                 self.current_process_executor = executor
                 try:
                     worker_func = partial(self.optimization_method.value, config_dict=opt_config)
@@ -591,7 +615,8 @@ class QSpaceEval(EvalComponentBase):
                         self.task_cnt_carrier.cnt_changed.emit(1)
 
                         info_str = f"Finished optimizing thickness {np.round(res.d, 2)} "
-                        info_str += f"with a shift of {res.shift}"
+                        if self.settings.eval_opt.enable_shift_opt:
+                            info_str += f"with a shift of {res.shift}"
                         logging.info(info_str)
 
                         q_val = self.calc_q_val(res)
