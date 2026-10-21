@@ -358,19 +358,23 @@ class DataSetPlotter(DataSetFormatter):
                 y_td[:, 1] = td_scale * y_td[:, 1]
             self._plot(y_td, label=td_label)
 
-    def _plot_waveform_fd(self, meas_list: list | tuple, fd_fig=None):
-        if not meas_list:
-            return
-        is_ref_list = self.dataset.is_ref(meas_list[0])
-        is_embedded = fd_fig is not None
-        meas_fd = self.dataset.get_multi_data(meas_list, Domain.Frequency)
-
-        meas_fd_db = to_db(meas_fd)
+    def fd_db_data(self, meas_list):
+        # amplitude spectra in dB over the full frequency axis, as plotted
+        meas_fd_db = to_db(self.dataset.get_multi_data(meas_list, Domain.Frequency))
 
         if self.plot_settings.sub_noise_floor:
             upper_end_f_slice = self.dataset.freq_axis > 6.0
             noise_floor_db = np.mean(meas_fd_db[:, upper_end_f_slice, 1], axis=1)[:, np.newaxis]
             meas_fd_db[:, :, 1] -= noise_floor_db
+
+        return meas_fd_db
+
+    def _plot_waveform_fd(self, meas_list: list | tuple, fd_fig=None):
+        if not meas_list:
+            return
+        is_ref_list = self.dataset.is_ref(meas_list[0])
+        is_embedded = fd_fig is not None
+        meas_fd_db = self.fd_db_data(meas_list)
 
         phi = None
         if is_embedded and not is_ref_list:

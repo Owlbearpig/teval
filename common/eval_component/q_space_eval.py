@@ -93,6 +93,9 @@ class Preprocessing(DataSetPlotter):
     percent_of_spectral_max = Quantity(Q_(10, "%")).tag(name="Percent of spectral max", group=fit_range_grp,
                                                        priority=2002)
 
+    freq = None
+    selected_quantity_enum = None
+    d_sample = None
     save_open_figures = None
     close_figures = None
     plt_show = None
@@ -105,10 +108,12 @@ class Preprocessing(DataSetPlotter):
         self._phi_ax = None
         self._phi_data_lines = []
         self._phi_fit_lines = []
+        self._phi_fits = []
 
         self._spectral_amp_ax = None
         self._spectral_amp_data_lines = []
         self.spectral_noise_floor_lines = []
+        self._plotted_meas_list = []
 
         self.observe(self.draw_noise_floor, "noise_starts_at")
         self.observe(self.draw_noise_floor, "percent_of_spectral_max")
@@ -133,21 +138,33 @@ class Preprocessing(DataSetPlotter):
             span.extents = (f0, f1)
             span.ax.figure.canvas.draw_idle()
 
+    def _sample_spectrum(self):
+        # spectrum of the plotted sample (average) over the full frequency axis, the plotted line only covers
+        # the plotted frequency range
+        y_db = self.fd_db_data(self._plotted_meas_list)[:, :, 1]
+        if self.averaging == Averaging.only_individual:
+            return y_db[0]
+        return np.mean(y_db, axis=0)
+
     def draw_noise_floor(self, change=None):
-        if not self._spectral_amp_data_lines:
+        if not self._spectral_amp_data_lines or not self._plotted_meas_list:
             return None, None, None
-        noise_freq = self.noise_starts_at if change is None else change["new"]
+        noise_freq = self.noise_starts_at  # also called by the percent_of_spectral_max observer
 
         if self.spectral_noise_floor_lines:
             for line in self.spectral_noise_floor_lines[::-1]:
                 line.remove()
                 self.spectral_noise_floor_lines.pop()
 
-        line = self._spectral_amp_data_lines[1]
-        y = np.asarray(line.get_ydata(), dtype=float)
-        x = np.asarray(line.get_xdata(), dtype=float)
-        x_noise_starts_idx = np.argmin(np.abs(x - noise_freq.magnitude))
-        noise_floor = np.mean(y[x_noise_starts_idx:])
+        f_full = self.dataset.freq_axis
+        y_full = self._sample_spectrum()
+        noise_mask = f_full >= noise_freq.magnitude
+        if not noise_mask.any():
+            logging.warning(f"Noise start frequency {noise_freq} is above the measured frequency range")
+            return None, None, None
+        noise_floor = np.mean(y_full[noise_mask])
+
+        x, y = self.freq_axis, y_full[self.freq_range_idx]
 
         ax1 = self._spectral_amp_ax
         l1 = ax1.axhline(noise_floor, color="red", linestyle="--", alpha=0.7, lw=1, label="Noise floor")
@@ -167,16 +184,21 @@ class Preprocessing(DataSetPlotter):
 
     @action("Auto set spectral fit range", group=fit_range_grp, priority=2003)
     def auto_set_fit_range(self):
-        x_min = self.phi_fit_range[0]
-        x_max = Q_(1.0, "THz")
-
         x, y, floor = self.draw_noise_floor()
-        if x is not None:
+        if x is None:
+            logging.warning("Plot the spectrum first to set the fit range automatically")
+            return
 
-            x_max = Q_(x[np.argmax(y < floor)], "THz")
+        # upper limit: first frequency above the lower limit where the spectrum drops below the choice floor
+        x_min = self.phi_fit_range[0]
+        below_floor = (x > x_min.to("THz").magnitude) & (y < floor)
+        if not below_floor.any():
+            logging.warning("Spectrum does not drop below the choice floor in the plotted frequency range, "
+                            "fit range not changed")
+            return
 
-        auto_range = [x_min, x_max]
-        self.set_trait("fit_range", auto_range)
+        x_max = Q_(x[np.argmax(below_floor)], "THz")
+        self.set_trait("fit_range", [x_min, x_max])
 
 
     @action("Plot spectrum and phase", group=phase_correction_grp,
@@ -193,6 +215,7 @@ class Preprocessing(DataSetPlotter):
         meas_list = self.plot_waveform_impl(fd_fig=fig, plot_td=False)
         if meas_list is None:
             return
+        self._plotted_meas_list = list(meas_list)
         self._redraw_legend(fig)
 
         self._phi_ax = ax0
@@ -231,15 +254,6 @@ class Preprocessing(DataSetPlotter):
         ax1.set_xlim(*self.freq_range.magnitude)
         ax1.legend(loc="upper right")
 
-        if self._phi_data_lines:
-            line = self._phi_data_lines[0]
-            y = np.asarray(line.get_ydata(), dtype=float)
-            x = np.asarray(line.get_xdata(), dtype=float)
-            bottom = y[np.argmin(np.abs(x - ax0.get_xlim()[1]))]
-            top = np.max([0.1 , np.max(y[np.argmin(np.abs(x - ax0.get_xlim()[0])):
-                           np.argmin(np.abs(x - ax0.get_xlim()[1]))])])
-            ax0.set_ylim((bottom, top))
-
         self._update_phase_fit()
 
         self.draw_noise_floor()
@@ -258,6 +272,7 @@ class Preprocessing(DataSetPlotter):
             except ValueError:
                 pass
         self._phi_fit_lines = []
+        self._phi_fits = []
 
         f0, f1 = (q.to("THz").magnitude for q in self.phi_fit_range)
         for line in self._phi_data_lines:
@@ -272,8 +287,27 @@ class Preprocessing(DataSetPlotter):
                                   color=line.get_color(), label=f"offset: {np.round(offset, 2)} (rad)",
                                   scalex=False, scaley=False)
             self._phi_fit_lines.append(fit_line)
+            self._phi_fits.append((slope, offset))
+        self._scale_phase_axis()
         ax.legend(loc="upper right")
         ax.figure.canvas.draw_idle()
+
+    def _scale_phase_axis(self):
+        # y limits from the data and the fit lines in the visible x range, including the offsets at f = 0
+        ax = self._phi_ax
+        x0, x1 = ax.get_xlim()
+        values = [0.0]
+        for line in self._phi_data_lines:
+            x = np.asarray(line.get_xdata(), dtype=float)
+            y = np.asarray(line.get_ydata(), dtype=float)
+            values.extend(y[(x >= x0) & (x <= x1) & np.isfinite(y)])
+        for slope, offset in self._phi_fits:
+            values.extend(slope * np.array([x0, x1]) + offset)
+            values.append(offset)
+
+        lower, upper = np.min(values), np.max(values)
+        pad = 0.05 * (upper - lower) if upper > lower else 0.1
+        ax.set_ylim(lower - pad, upper + pad)
 
 
 class QSpaceEval(EvalComponentBase):

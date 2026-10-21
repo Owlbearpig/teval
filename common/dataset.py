@@ -1001,14 +1001,14 @@ class DataSet(ComponentBase):
 
         phi0_star = np.unwrap(phi_r_m0 - phi_r_m1, axis=1)
 
-        fit_slice = (f_axis >= phi_fit_range[0]) * (f_axis <= phi_fit_range[1])
-        p = np.polyfit(f_axis[fit_slice], phi0_star[:, fit_slice].T, 1)
+        if self.settings.eval_opt.phi_offset_correction:
+            fit_slice = (f_axis >= phi_fit_range[0]) * (f_axis <= phi_fit_range[1])
+            p = np.polyfit(f_axis[fit_slice], phi0_star[:, fit_slice].T, 1)
+            phi0 = phi0_star - 2 * np.pi * np.round(p[1][:, None] / (2 * np.pi))
+        else:
+            phi0 = phi0_star
 
-        phi0 = phi0_star - 2 * np.pi * np.round(p[1][:, None] / (2 * np.pi))
-
-        if not self.settings.eval_opt.phi_offset_correction:
-            return phi0_star
-
+        # add the removed linear phase (pulse positions) back
         phi = phi0 - phi0_m1 + phi0_m0 + w_axis * t_offset[:, None]
 
         return phi
