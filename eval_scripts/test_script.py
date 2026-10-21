@@ -2,6 +2,7 @@ from common.components import ComponentBase
 from common.dataset import DataSet
 from common.eval_component.q_space_eval import QSpaceEval
 from common.eval_component.regression import Regression
+from common.eval_component.conductivity_eval import ConductivityEval
 from common.settings import Settings
 from traitlets import Instance
 from common.dataset_plotter import ExtendedDataSetPlotter, ImagePlot
@@ -15,6 +16,8 @@ class AppRoot(ComponentBase):
     image_plot = Instance(ImagePlot, allow_none=True).tag(toggle=ComponentToggle.en_image_plot)
     q_space_eval = Instance(QSpaceEval, allow_none=True).tag(toggle=ComponentToggle.en_q_space_eval)
     regression = Instance(Regression, allow_none=True).tag(toggle=ComponentToggle.en_regression)
+    conductivity_eval = Instance(ConductivityEval, allow_none=True).tag(
+        toggle=ComponentToggle.en_conductivity_eval)
 
     def __init__(self):
         super().__init__()
@@ -25,6 +28,7 @@ class AppRoot(ComponentBase):
         self.image_plot = ImagePlot(self.dataset, object_name="Image plot")
         self.q_space_eval = QSpaceEval(self.dataset, object_name="Q-space evaluation")
         self.regression = Regression(self.dataset, object_name="Regression")
+        self.conductivity_eval = ConductivityEval(self.dataset, object_name="Conductivity evaluation")
 
     def __enter__(self, *args):
         super().__enter__(*args)

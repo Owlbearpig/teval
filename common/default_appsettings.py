@@ -333,7 +333,6 @@ class QuantityEnum(Enum):
 
 
 class EvalOpt(ComponentBase):
-    dt = TQuantity(Q_(0.0, "fs")).tag(name="Conductivity pulse shift")
     phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(name="Phase correction fit range")
     avg_grp_delay_fit_range = ValueRange([Q_(0.25, "THz"), Q_(0.85, "THz")]).tag(name="Group delay fit range")
     spectral_similarity_range = ValueRange([Q_(0.15, "THz"), Q_(2.00, "THz")]).tag(name="Spectral similarity range")
@@ -372,10 +371,6 @@ class EvalOpt(ComponentBase):
     reg_k = Float(1e-10).tag(name="k regularization", group=regulated_spline_grp, significant_figures=3)
     reg_n = Float(1e-10).tag(name="n regularization", group=regulated_spline_grp, significant_figures=3)
     max_nfev = Int(100, min=1).tag(name="Maximum number of function evaluations", group=regulated_spline_grp)
-
-    conductivity_calc_grp = "Conductivity calculation"
-    use_sub_dataset = Bool(False, group=conductivity_calc_grp).tag(name="Use separate substrate dataset")
-    sub_pnt = ValueRange([0, 0], group=conductivity_calc_grp).tag(name="Substrate point")
 
     smoothing_avg_grp = "Smoothing average"
     smoothing_avg_en = Bool(False).tag(name="Enable smoothing average of n and k", group=smoothing_avg_grp)
@@ -484,6 +479,9 @@ class ComponentToggle(ComponentBase):
 
     regression = "Regression"
     en_regression = Bool(True).tag(name="Main component", group=regression, priority=1000)
+
+    conductivity_eval = "Conductivity evaluation"
+    en_conductivity_eval = Bool(True).tag(name="Main component", group=conductivity_eval, priority=1000)
 
 class AppSettings(ComponentBase):
     log_level = TEnum(LogLevel, default_value=LogLevel.info).tag(name="Log level")

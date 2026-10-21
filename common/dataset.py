@@ -12,7 +12,7 @@ import pandas as pd
 from PySide6.QtCore import QObject, Signal
 from common.components import ComponentBase
 from common.components import action
-from common.consts import c_thz, eps0_thz
+from common.consts import c_thz
 from common.dataset_cache import DatasetCache
 from common.default_appsettings import Dist, ReferenceClassification, Domain, QuantityEnum, WindowTypes, ComponentToggle
 from common.functions import (butter_filt, do_fft, f_axis_idx_map,
@@ -232,6 +232,7 @@ class DataSet(ComponentBase):
 
         self.cache = None
         self.sub_dataset = None
+        self.quantity_funcs = {}
 
         self.settings: Settings = settings
 
@@ -293,9 +294,18 @@ class DataSet(ComponentBase):
         func_map[QuantityEnum.RefractiveIdx] = partial(self.refractive_idx, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
         func_map[QuantityEnum.ExtCoe] = partial(self.extinction_coe, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
         func_map[QuantityEnum.AbsorptionCoe] = partial(self.absorption_coef, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
-        func_map[QuantityEnum.Conductivity] = partial(self.conductivity, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
+
+        # quantities provided by evaluation components, e.g. Conductivity (ConductivityEval)
+        func_map.update(self.quantity_funcs)
+
+        if quantity not in func_map:
+            raise KeyError(f"No function for {quantity.name}, is the evaluation component providing it enabled?")
 
         return func_map[quantity]
+
+    def register_quantity_func(self, quantity: QuantityEnum, func):
+        # func(meas_list) -> (N_meas) or (N_meas, Freq) array
+        self.quantity_funcs[quantity] = func
 
     @cached_property
     def shape_properties(self):
@@ -792,22 +802,6 @@ class DataSet(ComponentBase):
     def extinction_coe(self, meas_, d_sam=None):
         return np.imag(self.windowing_eval(meas_, d=d_sam).refr_idx)
 
-    def get_single_layer_properties(self, d_sam=None):
-        sub_pnt = self.settings.eval_opt.sub_pnt
-        if self.settings.eval_opt.use_sub_dataset:
-            meas_list = self.sub_dataset.measurement_selector.get_measurements_from_point(*sub_pnt)
-            window_eval_res = self.sub_dataset.windowing_eval(meas_list, d_sam)
-            t = self.sub_dataset.transmission(meas_list)
-        else:
-            meas_list = self.measurement_selector.get_measurements_from_point(*sub_pnt)
-            window_eval_res = self.windowing_eval(meas_list, d_sam)
-            t = self.transmission(meas_list)
-
-        window_eval_res.meas_list = meas_list
-        window_eval_res.t = t
-
-        return window_eval_res
-
     def get_ref_abs_argmax(self, meas_):
         ref_meas = self.measurement_selector.get_matching_refs(meas_)
         ref_td = self.get_multi_data(ref_meas)
@@ -1063,36 +1057,6 @@ class DataSet(ComponentBase):
         n_real = 1.0 + (c_thz * dt / d)[:, None]
 
         return n_real + 1j * n_imag
-
-    def conductivity(self, meas_, d_sam=None):
-        sub_properties = self.get_single_layer_properties(d_sam)
-
-        t_sam = self.transmission(meas_)
-
-        n_sub = sub_properties.refr_idx
-        t_sub = sub_properties.t
-
-        d_film = self.settings.eval_opt.d_film.magnitude
-        if np.isclose(d_film, 0):
-            d_film = 1e-3
-
-        # [eps0_thz] = ps * Siemens / µm, [c_thz] = µm / ps, [1/d_film] = 1/um -> conversion: 1e4 (S/cm)
-        # 1 / µm = 1 / (1e-6 m) = 1 / (1e-6 * 1e2 cm) = 1 / (1e-4 cm) = 1e4 * 1 / cm
-        sigma = 1e4 * (1 / d_film) * eps0_thz * c_thz * (1 + n_sub) * (t_sub / t_sam - 1)
-
-        # phase correction, [dt] = fs
-        dt = self.settings.eval_opt.dt.magnitude * 1e-3
-        sigma *= np.exp(-1j * dt * 2 * np.pi * self.freq_axis[None, :])
-
-        return sigma
-
-    def sigma_to_n(self, freq, sigma):
-        w = 2 * np.pi * freq
-
-        sigma *= 1e-4  # S/cm -> S/µm
-        n_ = (1 + 1j) * np.sqrt(sigma / (2 * w * eps0_thz))
-
-        return n_
 
     def _ref_interpolation(self, sam_meas):
         if len(self.measurements["refs"]) < 2:

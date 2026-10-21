@@ -9,17 +9,12 @@ from enum import Enum
 from typing import Callable
 
 
-def sigma_to_n(freq, sig):
-    # [eps0_thz] = ps * S / µm
-    # sig_ in S/cm -> S/µm ( 1/(1e6 µm) = 1/m = 1/(1e2 cm) => 1e-4/µm = 1/cm)
-    sig *= 1e-4
+def sigma_to_n(freq, sig, eps_inf=1.0):
+    # e^{-iωt} convention: eps = eps_inf + i sigma / (eps0 omega), [sig] = S/cm, [freq] = THz
+    # [eps0_thz] = ps * S / µm, S/cm -> S/µm: 1e-4
+    w = 2 * pi * freq
 
-    w = 2*pi*freq
-
-    sig *= 1e-4 # S/cm -> S/µm
-    n = sqrt(1 + 1j * sig / (eps0_thz * w))
-
-    return n
+    return np.sqrt(eps_inf + 1j * (sig * 1e-4) / (eps0_thz * w) + 0j)
 
 def n_to_sigma(freq, n):
     # [eps0_thz] = ps * S / µm

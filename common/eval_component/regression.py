@@ -9,7 +9,8 @@ import logging
 from common.components import action
 from common.measurements import Measurement
 from common.eval_component.quantity_set import QuantityDataSet
-from common.eval_component.conductivity_models import RegressionModels, make_expression_model, parameter_label
+from common.eval_component.conductivity_models import (RegressionModels, make_expression_model, parameter_label,
+                                                       sigma_to_n)
 from common.eval_component.model_latex import expression_to_latex, identifier_label
 from common.eval_component.eval_result import EvalResultData, SingleResultData
 from common.traits import Q_, FitParameter, FitParameterTable
@@ -156,7 +157,7 @@ class Regression(EvalComponentBase):
         transmission_model = self.transmission_model.value
 
         def t_model(freq, p):
-            n = self.dataset.sigma_to_n(freq, reg_model(freq, p))
+            n = sigma_to_n(freq, reg_model(freq, p))
             return transmission_model(n, freq, **t_mod_kwargs)
 
         return t_model

@@ -326,3 +326,8 @@ class EvalResult(ComponentBase):
         elif eval_result_data.result_type == "Transmission fit":
             self.toggle_traits(transmission_traits, group_filter=self.transmission_res_grp_name)
             self.toggle_traits([], group_filter=self.reg_result_grp_name)
+        elif eval_result_data.result_type == "Conductivity":
+            hidden = ["q_val", "gof", "nfev", "sub_dataset_path"]
+            self.toggle_traits([t for t in transmission_traits if t not in hidden],
+                               group_filter=self.transmission_res_grp_name)
+            self.toggle_traits([], group_filter=self.reg_result_grp_name)

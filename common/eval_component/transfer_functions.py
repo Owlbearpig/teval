@@ -63,6 +63,32 @@ def t_tmm_model_2layer(n, freq, **opt_kwargs):
 
     return np.nan_to_num(t)
 
+@layer_cnt_decorator(layer_cnt=2)
+def t_tmm_model_2layer_no_sub_echo(n, freq, **opt_kwargs):
+    # film (all internal reflections) on a substrate without its echoes, e.g. when the substrate echo is outside
+    # the measured / windowed time trace
+    d = opt_kwargs["d"]
+    n_sub = opt_kwargs["n_sub"]
+    h = opt_kwargs["h"]
+    n1 = opt_kwargs["n1"]
+    n4 = opt_kwargs["n4"]
+    shift = opt_kwargs["shift"]
+
+    lam_vac = c_thz / freq
+    w_ = 2 * np.pi * freq
+
+    t_film = coh_tmm_wrapper("s", [n1, n, n_sub], [np.inf, h, np.inf], 0, lam_vac)
+    t_sub_exit = 2 * n_sub / (n_sub + n4)
+    e_sam = t_film * t_sub_exit * np.exp(1j * n_sub * d * w_ / c_thz)
+    e_ref = np.exp(1j * ((d + h) * w_ / c_thz))
+
+    t = np.conj(e_sam / e_ref)
+
+    t = shift_t(freq, t, shift)
+
+    return np.nan_to_num(t)
+
+
 @layer_cnt_decorator(layer_cnt=1)
 def model_1layer_inf(n, freq, **opt_kwargs):
     d = opt_kwargs["d"]
@@ -258,6 +284,7 @@ def dtdd(n, d, freq):
 class TransmissionModels(Enum):
     tmm_1layer = member(t_tmm_model_1layer)
     tmm_2layer = member(t_tmm_model_2layer)
+    tmm_2layer_no_sub_echo = member(t_tmm_model_2layer_no_sub_echo)
     model_1layer_inf = member(model_1layer_inf)
     model_1layer_fp = member(model_1layer_fp)
     model_2layer = member(model_2layer)
