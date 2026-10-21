@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
-from common.default_appsettings import Domain, PlotReferenceWaveform, Direction, ClimateQuantity, QuantityEnum, \
-    AppSettings
+from common.default_appsettings import (Domain, PlotReferenceWaveform, Direction,
+                                        ClimateQuantity, QuantityEnum, AppSettings, ComponentToggle)
 from functools import partial
 from common.functions import moving_average, f_axis_idx_map, local_minima_1d, round_dx, to_db
 import logging
@@ -29,7 +29,6 @@ from enum import Enum
 import matplotlib as mpl
 
 action = partial(action, check_init=True, rc_params=mpl_style_params)
-
 
 class PlotType(Enum):
     plot = 0
@@ -737,8 +736,8 @@ class ImagePlot(DataSetPlotter):
     freq_range = ValueRange(default_value=[Q_(0.300, "THz"), Q_(4.500, "THz")]).tag(
         name="Frequency range", group=waveform_grp)
 
-    avg_val_rect = Instance(AverageValRect, allow_none=True)
-    slice_plots = Instance(SlicePlots, allow_none=True)
+    avg_val_rect = Instance(AverageValRect, allow_none=True).tag(toggle=ComponentToggle.en_avg_val_rect)
+    slice_plots = Instance(SlicePlots, allow_none=True).tag(toggle=ComponentToggle.en_slice_plots)
 
     def __init__(self, dataset, **kwargs):
         super().__init__(dataset=dataset, **kwargs)
@@ -747,12 +746,8 @@ class ImagePlot(DataSetPlotter):
         self.drawn_elements = {"patches": [], "text_labels": [], "points": []}
         self.grid_thread = None
 
-    def __enter__(self, *args):
-        super().__enter__(self, *args)
-        if self.settings.component_toggle.en_avg_val_rect:
-            self.avg_val_rect = AverageValRect(self, object_name="Average value rectangle")
-        if self.settings.component_toggle.en_slice_plots:
-            self.slice_plots = SlicePlots(self, object_name="Slice plots")
+        self.avg_val_rect = AverageValRect(self, object_name="Average value rectangle")
+        self.slice_plots = SlicePlots(self, object_name="Slice plots")
 
     @property
     def img_shape(self):
@@ -1590,20 +1585,12 @@ class ExtendedDataSetPlotter(DataSetPlotter):
     print_eval_win_grp = "Print window eval"
     printed_freqs = Unicode(default_value="1.0, 2.0").tag(name="Printed frequencies (THz)", group=print_eval_win_grp)
 
-    stability_plotter = Instance(StabilityPlots, allow_none=True)
+    stability_plotter = Instance(StabilityPlots, allow_none=True).tag(toggle=ComponentToggle.en_stability_plots)
 
     def __init__(self, dataset: DataSet, **kwargs):
         super().__init__(dataset=dataset, **kwargs)
+        self.stability_plotter = StabilityPlots(self.dataset, object_name="Stability plots")
 
-    def __exit__(self, *args):
-        self.settings.save_configuration(self)
-
-    def __enter__(self, *args):
-        self.settings.load_configuration(self)
-        if self.settings.component_toggle.en_stability_plots:
-            self.stability_plotter = StabilityPlots(self.dataset, object_name="Stability plots")
-
-        return self
 
     @action("Calculate quantity value", priority=1011)
     def calc_quant_value(self):

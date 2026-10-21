@@ -4,6 +4,7 @@ import threading
 import logging
 import numpy as np
 from common.components import ComponentBase, action
+from common.default_appsettings import ComponentToggle
 from common.traits import MultiPathSelection, ValueRange, MultiPathClass, StrListSelection, StrList
 from common.units import Q_
 from common.default_appsettings import Dist
@@ -172,7 +173,7 @@ class MeasurementSelection(ComponentBase):
                              "different from the measurement file selection"
                         ).tag(name="Direct file selection match", priority=2000, group=reference_matching_grp)
 
-    selection_queue = Instance(SelectionQueue, allow_none=True)
+    selection_queue = Instance(SelectionQueue, allow_none=True).tag(toggle=ComponentToggle.en_queue)
 
     queue_grp = "Queue actions"
 
@@ -191,10 +192,7 @@ class MeasurementSelection(ComponentBase):
         self.reference_paths = MultiPathClass(root_path=self.dataset.data_path, shown_filenames=ref_filenames)
         self.sample_paths = MultiPathClass(root_path=self.dataset.data_path, shown_filenames=sam_filenames)
 
-    def __enter__(self, *args):
-        super().__enter__(self, *args)
-        if self.dataset.settings.component_toggle.en_queue:
-            self.selection_queue = SelectionQueue(object_name="Selection queue")
+        self.selection_queue = SelectionQueue(object_name="Selection queue")
 
     def set_observers(self):
         self.dataset.observe(self.update_fileselection, "measurements")

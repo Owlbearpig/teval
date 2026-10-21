@@ -8,7 +8,7 @@ from matplotlib.widgets import SpanSelector
 from common.eval_component.transfer_functions import TransmissionModels
 from common.eval_component.eval_component_base import EvalComponentBase
 from common.measurement_selection import Selection, SelectionQueue
-from common.default_appsettings import SimRISelection, Domain, QSpaceQuantity
+from common.default_appsettings import SimRISelection, Domain, QSpaceQuantity, ComponentToggle
 from common.functions import f_axis_idx_map, moving_average, do_ifft, to_db, avg_data_array
 from common.eval_component.quantity_set import QuantityDataSet
 from common.eval_component.eval_result import EvalResultData, SingleResultData
@@ -285,7 +285,7 @@ class QSpaceEval(EvalComponentBase):
     bound_shrink_factor = Float(0.20, group=t_fit_grp_name).tag(name="Thickness bounds shrink factor",
                                                                 priority=4)
 
-    preprocessing = Instance(Preprocessing, allow_none=True).tag(priority=1)
+    preprocessing = Instance(Preprocessing, allow_none=True).tag(priority=1, toggle=ComponentToggle.en_preprocessing)
 
     def __init__(self, dataset, **kwargs):
         super().__init__(dataset, **kwargs)
@@ -294,14 +294,11 @@ class QSpaceEval(EvalComponentBase):
 
         self.opt_state = {}
 
-    def __enter__(self, *args):
-        if self.settings.component_toggle.en_preprocessing:
-            self.preprocessing = Preprocessing(self.dataset)
-        super().__enter__(*args)
-        if self.preprocessing is not None:
-            self._fit_range_link = link((self, "freq_range"), (self.preprocessing, "fit_range"))
-            self._phi_fit_range_link = link((self.settings.eval_opt, "phi_fit_range"),
-                                            (self.preprocessing, "phi_fit_range"))
+        self.preprocessing = Preprocessing(self.dataset)
+
+        self._fit_range_link = link((self, "freq_range"), (self.preprocessing, "fit_range"))
+        self._phi_fit_range_link = link((self.settings.eval_opt, "phi_fit_range"),
+                                        (self.preprocessing, "phi_fit_range"))
 
     def reset_state(self):
         self.task_cnt_carrier.cnt_changed.emit(0)

@@ -745,26 +745,36 @@ def generate_component_ui(name, component):
 
 def generate_ui(component):
     stack = QtWidgets.QStackedWidget()
+    toggle_source = component.settings.component_toggle
 
-    def make_tree_items(component, name, depth, treeitem):
+    def make_tree_items(component, name, depth, treeitem, toggle_trait=None):
         if component is None:
             return
         prettyName = component.object_name or name
         newItem = QtWidgets.QTreeWidgetItem(treeitem)
         newItem.setText(0, prettyName)
-        if "AppRoot" in prettyName:
-            newItem.setExpanded(True)
-        else:
-            newItem.setExpanded(True)
+        newItem.setExpanded(True)
 
         widget = generate_component_ui(prettyName, component)
         newItem.widgetId = stack.addWidget(widget)
 
-        for name, trait in sorted(component.attributes.items(), key=_traitSortingKey):
+        if toggle_trait is not None:
+            toggle_name = toggle_trait.name
+
+            def apply_visibility(change=None, item=newItem, tn=toggle_name):
+                visible = bool(getattr(toggle_source, tn))
+                item.setHidden(not visible)
+                if not visible and stack.currentIndex() == item.widgetId:
+                    stack.setCurrentIndex(0)
+
+            apply_visibility()
+            toggle_source.observe(apply_visibility, toggle_name)
+
+        for child_name, trait in sorted(component.attributes.items(), key=_traitSortingKey):
             if not is_component_trait(trait):
                 continue
-            cInst = getattr(component, name)
-            make_tree_items(cInst, name, depth + 1, newItem)
+            make_tree_items(getattr(component, child_name), child_name, depth + 1, newItem,
+                            toggle_trait=trait.metadata.get("toggle"))
 
     win = QtWidgets.QWidget()
     win.setWindowTitle(getattr(component, "title", "Teval"))

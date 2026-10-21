@@ -457,15 +457,12 @@ class PlotOpt(ComponentBase):
     en_cbar_lim = Bool(default_value=False, group=image_group).tag(name="Enable custom color bar limits")
 
 class ComponentToggle(ComponentBase):
-    info = Unicode("Module changes require restart to take effect", read_only=True).tag(
-        priority=1, fullwidth=True, disable_label=True)
-
     image_plot_grp = "Image plot"
     en_image_plot = Bool(True).tag(name="Main component", group=image_plot_grp, priority=1000)
     en_avg_val_rect = Bool(True).tag(name="Average value rectangle", group=image_plot_grp, priority=1001)
     en_slice_plots = Bool(True).tag(name="Slice plots", group=image_plot_grp, priority=1002)
 
-    dataset_plotter_grp = "Quantity plots"
+    dataset_plotter_grp = "Dataset plots"
     en_extended_dataset_plots = Bool(True).tag(name="Main component", group=dataset_plotter_grp, priority=1000)
     en_stability_plots = Bool(True).tag(name="Climate plots", group=dataset_plotter_grp, priority=1001)
 
@@ -496,5 +493,4 @@ class AppSettings(ComponentBase):
 
 if __name__ == '__main__':
     settings = AppSettings()
-
     print([getattr(settings.eval_opt, k) for k in settings.eval_opt.traits()])

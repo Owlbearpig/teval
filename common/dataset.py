@@ -14,7 +14,7 @@ from common.components import ComponentBase
 from common.components import action
 from common.consts import c_thz, eps0_thz
 from common.dataset_cache import DatasetCache
-from common.default_appsettings import Dist, ReferenceClassification, Domain, QuantityEnum, WindowTypes
+from common.default_appsettings import Dist, ReferenceClassification, Domain, QuantityEnum, WindowTypes, ComponentToggle
 from common.functions import (butter_filt, do_fft, f_axis_idx_map,
                               remove_offset, avg_data_array, calculate_bandwidth, to_db)
 from common.measurement_selection import MeasurementSelection, get_coordinate_line
@@ -217,7 +217,7 @@ class DataSet(ComponentBase):
     export_csv_dir = TPath(Path(""), is_file=False).tag(name="Save directory", group=data_export_grp)
     data_export_label = Unicode("", group=data_export_grp).tag(name="Data export label")
 
-    info_pane = Instance(DataSetInfoPane, allow_none=True)
+    info_pane = Instance(DataSetInfoPane, allow_none=True).tag(toggle=ComponentToggle.en_info_pane)
     measurement_selector = Instance(MeasurementSelection)
 
     measurements = Dict(default_value={"refs": [], "sams": [], "all": ()})
