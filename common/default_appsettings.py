@@ -483,6 +483,9 @@ class ComponentToggle(ComponentBase):
     conductivity_eval = "Conductivity evaluation"
     en_conductivity_eval = Bool(True).tag(name="Main component", group=conductivity_eval, priority=1000)
 
+    sparse_deconvolution = "Sparse deconvolution"
+    en_sparse_deconvolution = Bool(True).tag(name="Main component", group=sparse_deconvolution, priority=1000)
+
 class AppSettings(ComponentBase):
     log_level = TEnum(LogLevel, default_value=LogLevel.info).tag(name="Log level")
 

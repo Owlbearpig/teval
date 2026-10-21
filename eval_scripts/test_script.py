@@ -3,6 +3,7 @@ from common.dataset import DataSet
 from common.eval_component.q_space_eval import QSpaceEval
 from common.eval_component.regression import Regression
 from common.eval_component.conductivity_eval import ConductivityEval
+from common.eval_component.sparse_deconvolution import SparseDeconvolution
 from common.settings import Settings
 from traitlets import Instance
 from common.dataset_plotter import ExtendedDataSetPlotter, ImagePlot
@@ -18,6 +19,8 @@ class AppRoot(ComponentBase):
     regression = Instance(Regression, allow_none=True).tag(toggle=ComponentToggle.en_regression)
     conductivity_eval = Instance(ConductivityEval, allow_none=True).tag(
         toggle=ComponentToggle.en_conductivity_eval)
+    sparse_deconvolution = Instance(SparseDeconvolution, allow_none=True).tag(
+        toggle=ComponentToggle.en_sparse_deconvolution)
 
     def __init__(self):
         super().__init__()
@@ -29,6 +32,7 @@ class AppRoot(ComponentBase):
         self.q_space_eval = QSpaceEval(self.dataset, object_name="Q-space evaluation")
         self.regression = Regression(self.dataset, object_name="Regression")
         self.conductivity_eval = ConductivityEval(self.dataset, object_name="Conductivity evaluation")
+        self.sparse_deconvolution = SparseDeconvolution(self.dataset, object_name="Sparse deconvolution")
 
     def __enter__(self, *args):
         super().__enter__(*args)
