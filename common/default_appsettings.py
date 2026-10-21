@@ -482,6 +482,9 @@ class ComponentToggle(ComponentBase):
     en_q_space_eval = Bool(True).tag(name="Main component", group=q_space_eval, priority=1000)
     en_preprocessing = Bool(True).tag(name="Preprocessing view", group=q_space_eval, priority=1001)
 
+    regression = "Regression"
+    en_regression = Bool(True).tag(name="Main component", group=regression, priority=1000)
+
 class AppSettings(ComponentBase):
     log_level = TEnum(LogLevel, default_value=LogLevel.info).tag(name="Log level")
 

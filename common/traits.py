@@ -30,6 +30,7 @@ else:
     from traitlets.utils.descriptions import class_of
 from common.units import ureg, Q_
 import pathlib
+from dataclasses import dataclass
 
 
 def instance_init(self, obj):
@@ -244,3 +245,29 @@ class ValueRange(TraitTypePatched):
             raise TraitError(
                 f"The value of the '{self.name}' trait of {class_of(obj)} instance should "
                 f"be between {self.min} and {self.max}, but a value of {v} was specified")
+
+
+@dataclass(frozen=True)
+class FitParameter:
+    # name: identifier in the model function / expression, unit: unit of the bounds and of the fitted value
+    name: str
+    unit: str = ""
+    lower: float = 0.0
+    upper: float = 1.0
+    label: str = ""
+    value: float | None = None
+
+    @property
+    def display_name(self):
+        return self.label or self.name
+
+
+class FitParameterTable(TraitTypePatched):
+    default_value = ()
+    info_text = 'a tuple of fit parameters'
+
+    def validate(self, obj, value):
+        if not isinstance(value, (list, tuple)) or not all(isinstance(p, FitParameter) for p in value):
+            self.error(obj, value)
+
+        return tuple(value)

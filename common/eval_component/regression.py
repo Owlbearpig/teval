@@ -1,41 +1,62 @@
 import traceback
+import threading
+from dataclasses import replace
 from datetime import datetime
-from common.dataset import DataSet
-from common.components import action
-from common.eval_component.shgo import shgo
+from concurrent.futures import ThreadPoolExecutor
 from scipy.optimize import shgo
-from functools import partial
 import numpy as np
 import logging
+from common.components import action
+from common.measurements import Measurement
 from common.eval_component.quantity_set import QuantityDataSet
-from common.eval_component.conductivity_models import RegressionModels, model_params
-from common.traits import Q_, ValueRange
-from pathlib import Path
-from traitlets import Enum as TEnum, observe, Bool
+from common.eval_component.conductivity_models import RegressionModels, make_expression_model, parameter_label
+from common.eval_component.model_latex import expression_to_latex, identifier_label
+from common.eval_component.eval_result import EvalResultData, SingleResultData
+from common.traits import Q_, FitParameter, FitParameterTable
+from traitlets import Enum as TEnum, Unicode, observe, Bool
 from common.default_appsettings import QuantityEnum
-from common.eval_component.shgo_settings import MinimizerOptions
-from concurrent.futures import ThreadPoolExecutor
 from common.eval_component.eval_component_base import EvalComponentBase
 
 
-
 class Regression(EvalComponentBase):
+    activity = Unicode("Idle", read_only=True).tag(name="Status", group=EvalComponentBase.process_status,
+                                                   priority=-1, en_save=False)
+
     reg_grp_name = "Regression"
     sel_meas_quantity_enum = TEnum(QuantityEnum, default_value=QuantityEnum.TransmissionAmp,
-                                   group=reg_grp_name).tag(name="Measurement quantity")
+                                   group=reg_grp_name).tag(name="Measurement quantity", priority=0)
     selected_reg_model = TEnum(RegressionModels, default_value=RegressionModels.drude,
-                               group=reg_grp_name).tag(name="Selected regression model")
+                               group=reg_grp_name).tag(name="Selected regression model", priority=1)
+    model_grp_name = "Model"
+    custom_expression = Unicode("sig0 / (1 - 1j * 2 * pi * freq * tau * 1e-3)", group=model_grp_name,
+                                help="Python expression of the model quantity (Ctrl+Enter or ✓ to apply, line "
+                                     "breaks and # comments are allowed). freq is the frequency axis in THz, "
+                                     "every other name is a free parameter, its value is passed in the unit set in "
+                                     "the parameter table. Names can also be written as latex symbols, e.g. "
+                                     r"\sigma_0, \omega_{p}, \varepsilon_\infty (stored as sigma_0, omega_p, "
+                                     r"varepsilon_infty), \pi is the constant. Available: np, pi, c_thz (µm/ps), eps0_thz (S ps/µm), "
+                                     "sqrt, exp, log, log10, sin, cos, tan, arctan, sinh, cosh, tanh, abs, real, imag, "
+                                     "conj, angle and the built-in models (drude, drude2, drude_smith, "
+                                     "lattice_contrib, total_response, n_to_sigma)"
+                                ).tag(name="Model expression", priority=0, multiline=False, fullwidth=True,
+                                      disable_label=True)
+    model_latex = Unicode("", read_only=True, group=model_grp_name).tag(name="Model formula", priority=1, latex=True,
+                                                                        disable_label=True, en_save=False)
     convert_sigma_to_t = Bool(default_value=False, group=reg_grp_name,
-                              help="Calculate sigma -> 2 layer model to calculate t").tag(name="Fit to transmission")
-    sig0_bounds = ValueRange([Q_(10, "S/cm"), Q_(20, "S/cm")], group=reg_grp_name).tag(name="σ₀ Bounds")
-    tau_bounds = ValueRange([Q_(10, "fs"), Q_(1000, "fs")], group=reg_grp_name).tag(name="τ Bounds")
-    wp_bounds = ValueRange([Q_(-10, "THz"), Q_(100, "THz")], group=reg_grp_name).tag(name="ωₚ Bounds")
-    eps_inf_bounds = ValueRange([1.0, 100.0], group=reg_grp_name).tag(name="ε_inf Bounds")
-    eps_s_bounds = ValueRange([1.0, 100.0], group=reg_grp_name).tag(name="ε_s Bounds")
-    c1_bounds = ValueRange([-1.0, 1.0], group=reg_grp_name).tag(name="c₁ Bounds")
+                              help="Calculate sigma -> 2 layer model to calculate t").tag(name="Fit to transmission",
+                                                                                         priority=3)
 
-    def __init__(self, dataset: "DataSet", **kwargs):
+    param_grp_name = "Fit parameters"
+    fit_parameters = FitParameterTable(group=param_grp_name,
+                                       help="Free parameters of the selected model. Bounds are given in the unit "
+                                            "of the parameter, the fit result is reported in the same unit"
+                                       ).tag(name="Fit parameters", disable_label=True)
+
+    def __init__(self, dataset, **kwargs):
         super().__init__(dataset, **kwargs)
+        self._param_memory: dict[str, FitParameter] = {}
+        self.update_fit_parameters()
+        self.update_model_latex()
 
     @property
     def _ui_control_widget(self):
@@ -45,174 +66,233 @@ class Regression(EvalComponentBase):
     def _ui_control_widget(self, value):
         self._ui_widget_internal = value
         if value:
-            self.select_regression_model()
+            self._toggle_expression()
+
+    def _toggle_expression(self):
+        active = [name for name in self.traits(group=self.model_grp_name)
+                  if name != "custom_expression" or self.is_custom_model]
+        self.toggle_traits(active, group_filter=self.model_grp_name)
+
+    @observe("selected_reg_model", "custom_expression", "convert_sigma_to_t")
+    def update_model_latex(self, change=None):
+        if self.is_custom_model:
+            try:
+                lines = [expression_to_latex(self.custom_expression,
+                                             lhs=r"\sigma(f)" if self.convert_sigma_to_t else "y(f)")]
+            except SyntaxError:
+                lines = []
+            except ValueError as e:
+                logging.warning(f"No formula preview: {e}")
+                lines = []
+        else:
+            lines = list(self.selected_reg_model.value.latex)
+
+        if self.convert_sigma_to_t and lines:
+            lines.insert(0, r"t(f) = T\left(n(\sigma(f)), d\right)")
+
+        self.set_trait("model_latex", "\n".join(lines))
+
+    @property
+    def is_custom_model(self):
+        return self.selected_reg_model == RegressionModels.custom
+
+    @observe("fit_parameters")
+    def _remember_parameters(self, change):
+        self._param_memory.update({p.name: p for p in change["new"]})
+
+    @observe("selected_reg_model", "custom_expression")
+    def update_fit_parameters(self, change=None):
+        if self.is_custom_model:
+            try:
+                _, names = make_expression_model(self.custom_expression)
+            except SyntaxError as e:
+                logging.error(f"Invalid model expression: {e}")
+                return
+            defaults = [FitParameter(name, label=parameter_label(name) or identifier_label(name)) for name in names]
+        else:
+            defaults = self.selected_reg_model.value.parameters
+
+        parameters = []
+        for default in defaults:
+            remembered = self._param_memory.get(default.name)
+            if remembered is None or not self._units_compatible(remembered.unit, default.unit, default):
+                parameters.append(default)
+            else:
+                parameters.append(replace(remembered, label=default.label, value=None))
+
+        self.fit_parameters = tuple(parameters)
+        self._toggle_expression()
+
+    def _units_compatible(self, unit, default_unit, default):
+        if self.is_custom_model:
+            return True
+        try:
+            Q_(1, unit).to(default_unit)
+            return True
+        except Exception:
+            return False
+
+    def get_model(self):
+        if self.is_custom_model:
+            func, names = make_expression_model(self.custom_expression)
+            factors = {p.name: 1.0 for p in self.fit_parameters}
+            if set(names) != set(factors):
+                raise ValueError("Parameter table does not match the model expression")
+        else:
+            func = self.selected_reg_model.value.func
+            model_units = {p.name: p.unit for p in self.selected_reg_model.value.parameters}
+            factors = {p.name: Q_(1, p.unit).to(model_units[p.name]).magnitude for p in self.fit_parameters}
+
+        names = [p.name for p in self.fit_parameters]
+
+        def reg_model(freq, p):
+            return func(freq, **{name: val * factors[name] for name, val in zip(names, p)})
+
+        if not self.convert_sigma_to_t:
+            return reg_model
+
+        t_mod_kwargs = self.get_t_model_kwargs()
+        t_mod_kwargs["d"] = self.settings.eval_opt.d.magnitude
+        transmission_model = self.transmission_model.value
+
+        def t_model(freq, p):
+            n = self.dataset.sigma_to_n(freq, reg_model(freq, p))
+            return transmission_model(n, freq, **t_mod_kwargs)
+
+        return t_model
+
+    def get_bounds(self):
+        bounds = [(p.lower, p.upper) for p in self.fit_parameters]
+        for p, (lower, upper) in zip(self.fit_parameters, bounds):
+            if not (np.isfinite(lower) and np.isfinite(upper) and lower < upper):
+                raise ValueError(f"Invalid bounds for parameter {p.display_name}: [{lower}, {upper}]")
+
+        return bounds
 
     @property
     def y_meas_dict(self):
         selection = self.dataset.measurement_selector.get_selection()
         if selection is None:
             return None
-        meas_list = selection.sams
+        meas_list = list(selection.sams)
         meas_quant_func = self.dataset.quantity_func(self.sel_meas_quantity_enum)
         y_meas = meas_quant_func(meas_list)
 
         return self.format_meas_dict(meas_list, y_meas)
 
-    @property
-    def _opt_conf(self):
-        bounds, bounds_units = self.get_bounds()
-        selection = self.dataset.measurement_selector.get_selection()
-        if selection is None:
-            return None
-        conf_dict = {"measurements": {meas.identifier: meas for meas in selection.sams},
-                     "freq_axis": self.freq_axis,
-                     "meas_quantity": self.sel_meas_quantity_enum,
-                     "y_meas_dict": self.y_meas_dict,
-                     "model": self.set_reg_model_freq,
-                     "model_name": self.selected_reg_model.name,
-                     "bounds": bounds,
-                     "bounds_units": bounds_units,
-                     "opt_func_dict": self.opt_func_dict,
-                     }
-
-        if self.dataset.sub_dataset is not None:
-            sub_dataset_path = self.dataset.sub_dataset.data_path
-        else:
-            sub_dataset_path = Path(".")
-
-        conf_dict["sub_dataset_path"] = sub_dataset_path
-        conf_dict["dataset_path"] = self.dataset.data_path
-
-        return conf_dict
-
-    @property
-    def opt_func_dict(self):
-        reg_mod = self.set_reg_model_freq
-        cost_func = self.selected_cost_fun.value
-
-        t_mod_kwargs = self.get_t_model_kwargs()
-        t_mod_kwargs["d"] = self.settings.eval_opt.d.magnitude
-
-        def t_mod_func(*args, **kwargs):
-            sigma = reg_mod(*args, **kwargs)
-            n = self.dataset.sigma_to_n(self.freq_axis, sigma)
-
-            t = self.transmission_model.value(n, self.freq_axis, **t_mod_kwargs)
-
-            return t
-
-        mod_func = t_mod_func if self.convert_sigma_to_t else reg_mod
-
-        y_dict = self.y_meas_dict
-        return {
-            meas_id: (lambda params, m_id=meas_id: np.sum(cost_func(y_dict[m_id], mod_func(*params))))
-            for meas_id in y_dict
-        }
-
-
-    @property
-    def set_reg_model_freq(self):
-        model_func = self.selected_reg_model.value
-        return partial(model_func, self.freq_axis)
-
-    @observe("selected_reg_model")
-    def select_regression_model(self, change=None):
-        reg_model = self.selected_reg_model if change is None else change["new"]
-
-        param_keys = model_params(reg_model.name)
-        active_bounds = [f"{p}_bounds" for p in param_keys if p not in ['freq', 'freq_']]
-        self.toggle_traits(active_bounds, group_filter=self.reg_grp_name, endswith_filter="_bounds")
-
-
-    def get_bounds(self):
-        params = model_params(self.selected_reg_model.name)
-        bounds, units = [], []
-        for p in params:
-            bound = getattr(self, p + "_bounds", None)
-            if bound is None:
-                min_value, max_value = -np.inf, np.inf
-                units.append("")
-            else:
-                min_value = bound[0].magnitude if isinstance(bound[0], Q_) else bound[0]
-                max_value = bound[1].magnitude if isinstance(bound[1], Q_) else bound[1]
-                units.append(bound[0].units if isinstance(bound[0], Q_) else "")
-
-            bounds.append([min_value, max_value])
-
-        return bounds, units
-
-    @action("Fit regression model", group=reg_grp_name)
+    @action("Fit regression model", group=reg_grp_name, priority=10)
     def perform_regression(self):
-        if self.dataset.measurement_selector.selected_sam_cnt == "0":
+        if self._active_eval is not None:
+            logging.warning("Regression is already running")
+            return
+
+        y_meas_dict = self.y_meas_dict
+        if not y_meas_dict:
             logging.warning("No measurements selected")
             return
-        opt_conf = self._opt_conf
+
+        try:
+            model = self.get_model()
+            bounds = self.get_bounds()
+            if not bounds:
+                raise ValueError("Model has no free parameters")
+        except Exception as e:
+            logging.error(f"Invalid regression model: {e}")
+            return
+
+        freq_axis = self.freq_axis
+        cost_func = self.selected_cost_fun.value
+        fit_parameters = self.fit_parameters
+        quantity = self.sel_meas_quantity_enum
         shgo_options = self.settings.shgo_options
+        minimizer_kwargs = {**shgo_options.get_minimizer_kwargs(),
+                            "method": str(shgo_options.minimizer_kwargs.method.value)}
 
-        def bg_worker(meas_id):
+        eval_result_data = EvalResultData()
+        eval_result_data.result_type = "Regression"
+        eval_result_data.dataset_path = self.dataset.data_path
+        eval_result_data.model_name = self.selected_reg_model.name
+        eval_result_data.measurement_quantity = quantity.name
+        eval_result_data.measurement_names = [str(meas) if not isinstance(meas, Measurement) else meas.filepath.name
+                                              for meas in y_meas_dict]
+
+        common_info = {"model_expression": self.custom_expression if self.is_custom_model else "",
+                       "fit_to_transmission": self.convert_sigma_to_t}
+
+        self._cancel_event = threading.Event()
+        evaluator = self
+        self._active_eval = evaluator
+        self.task_cnt_carrier.cnt_changed.emit(len(y_meas_dict))
+
+        def bg_worker():
             try:
-                min_kwargs = shgo_options.minimizer_kwargs.traits(group=MinimizerOptions.minimizer_opt_grp)
-                min_kwargs["method"] = str(shgo_options.minimizer_kwargs.method.value)
+                for meas_idx, (meas, y_meas) in enumerate(y_meas_dict.items()):
+                    if self._cancel_event.is_set():
+                        logging.info("Regression cancelled")
+                        return
+                    y_vals = y_meas[:, 1]
 
-                shgo_opt_res = shgo(func=opt_conf["opt_func_dict"][meas_id],
-                                    bounds=opt_conf["bounds"],
-                                    n=shgo_options.n,
-                                    iters=shgo_options.iters,
-                                    minimizer_kwargs=min_kwargs,
-                                    options=shgo_options.get_shgo_options(),
-                                    )
-                logging.info(f"Fit result {meas_id}: {shgo_opt_res}")
+                    def opt_fun(p):
+                        return np.sum(cost_func(y_vals, model(freq_axis, p)))
 
-                reg_res = self.prepare_regression_result(shgo_opt_res, opt_conf, meas_id)
+                    opt_res = shgo(opt_fun, bounds=bounds, n=shgo_options.n, iters=shgo_options.iters,
+                                   minimizer_kwargs=minimizer_kwargs, options=shgo_options.get_shgo_options())
 
-                self.current_result.result_carrier.received_result.emit(reg_res)
+                    single_res = self.prepare_result(meas, y_meas, model(freq_axis, opt_res.x), opt_res,
+                                                     fit_parameters, quantity)
+                    single_res.optimization_info.update(common_info)
+
+                    res_key = f"result_{meas_idx:03d}"
+                    eval_result_data.results[res_key] = single_res
+                    eval_result_data.optimum_results[single_res.measurement] = res_key
+
+                    params_str = ", ".join(f"{p.display_name}={v:.4g} {p.unit}".rstrip()
+                                           for p, v in zip(fit_parameters, opt_res.x))
+                    logging.info(f"Fit result {single_res.measurement}: {params_str} (cost: {opt_res.fun:.4g})")
+                    self.task_cnt_carrier.cnt_changed.emit(1)
+
+                self._result_ready(eval_result_data)
             except Exception:
                 traceback.print_exc()
+            finally:
+                if self._active_eval is evaluator:
+                    self._active_eval = None
 
-        executor = ThreadPoolExecutor(max_workers=self.number_of_workers)
-        for meas_key in opt_conf["y_meas_dict"].keys():
-            executor.submit(bg_worker, meas_key)
-        executor.shutdown(wait=False)
+        if self._thread_executor is None:
+            self._thread_executor = ThreadPoolExecutor(max_workers=1)
+        self._thread_executor.submit(bg_worker)
 
-    def prepare_regression_result(self, shgo_opt_res, opt_conf, meas_id):
-        model_name = opt_conf["model_name"]
-        x = shgo_opt_res.x
+    def prepare_result(self, meas, y_meas, y_mod, opt_res, fit_parameters, quantity) -> SingleResultData:
+        freq_axis = Q_(y_meas[:, 0].real, "THz")
+        unit = quantity.value.unit
 
-        opt_res_dict = {
-            "measurement": str(opt_conf["measurements"].get(meas_id, "Average")),
-            "model_name": model_name,
-            "result_type": "Regression",
-            "sub_dataset_path": opt_conf["sub_dataset_path"],
-            "dataset_path": opt_conf["dataset_path"],
+        res = SingleResultData()
+        res.measurement = str(meas) if not isinstance(meas, Measurement) else meas.filepath.name
+        res.freq_axis = freq_axis
+        res.regression_params = {p.name: Q_(val, p.unit) for p, val in zip(fit_parameters, opt_res.x)}
+        res.optimization_info = {
+            "fun": float(opt_res.fun),
+            "gof": Q_(opt_res.fun / len(freq_axis), ""),
+            "nit": int(opt_res.nit),
+            "nfev": int(opt_res.nfev),
+            "converged": bool(opt_res.success),
+            "timestamp": str(datetime.now().isoformat()),
         }
-        for param_idx, p in enumerate(model_params(model_name)):
-            unit = opt_conf["bounds_units"][param_idx]
-            if not unit:
-                opt_res_dict[p] = x[param_idx]
+
+        datasets = {"y_meas": (y_meas[:, 1], y_meas[:, 2], "Measured"),
+                    "y_mod": (y_mod, np.zeros_like(y_mod), "Model")}
+        for key, (data, uncert, label) in datasets.items():
+            label = f"{quantity.value.label} ({label})"
+            if np.iscomplexobj(data) and np.any(np.imag(data)):
+                parts = {"real": np.real, "imag": np.imag}
             else:
-                opt_res_dict[p] = Q_(x[param_idx], unit)
+                parts = {"": np.real}
+            for part, part_func in parts.items():
+                res.datasets[f"{key}_{part}" if part else key] = QuantityDataSet(
+                    axes=[freq_axis],
+                    data=Q_(part_func(data), unit),
+                    uncert=Q_(part_func(uncert), unit),
+                    axes_labels=["Frequency"],
+                    data_label=f"{label} ({part.capitalize()})" if part else label)
 
-        opt_res_dict["nit"] = shgo_opt_res.nit
-        opt_res_dict["fun"] = shgo_opt_res.fun
-        opt_res_dict["converged"] = shgo_opt_res.success
-        opt_res_dict["timestamp"] = str(datetime.now().isoformat())
-
-        freq_axis = Q_(opt_conf["freq_axis"], "THz")
-        unit = opt_conf["meas_quantity"].value.unit
-        y_meas_data = opt_conf["y_meas_dict"][meas_id][:, 1]
-
-        opt_res_dict["y_meas"] = QuantityDataSet(axes=[freq_axis],
-                                                 data=Q_(y_meas_data, unit),
-                                                 axes_labels=["Frequency"],
-                                                 data_label=opt_conf["meas_quantity"].name)
-        opt_res_dict["y_mod"] = QuantityDataSet(axes=[freq_axis],
-                                                data=Q_(opt_conf["model"](*x), unit),
-                                                axes_labels=["Frequency"],
-                                                data_label=opt_conf["meas_quantity"].name)
-
-        return opt_res_dict
-
-
-if __name__ == "__main__":
-
-    print(RegressionModels.drude.name)
+        return res

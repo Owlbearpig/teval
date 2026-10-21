@@ -5,9 +5,11 @@ import h5py
 import numpy as np
 from PySide6.QtCore import QObject, Signal
 from common.components import ComponentBase, action
-from common.eval_component.conductivity_models import model_params
+from common.eval_component.conductivity_models import parameter_label as model_parameter_label
+from common.eval_component.model_latex import identifier_label
 from common.eval_component.quantity_set import QuantityDataSetDict, QuantityDataSet
-from common.traits import QuantityDict, Path as TPath, Quantity, Q_, StrListSelection, StrList
+from common.traits import (QuantityDict, Path as TPath, Quantity, Q_, StrListSelection, StrList, FitParameter,
+                           FitParameterTable)
 from traitlets import Bool, Float, Unicode, Integer
 from dataclasses import dataclass, field, asdict
 from typing import Any
@@ -16,6 +18,10 @@ from mpl_settings import mpl_style_params
 import logging
 
 action = partial(action, rc_params=mpl_style_params)
+
+
+def parameter_label(name):
+    return model_parameter_label(name) or identifier_label(name)
 
 @dataclass
 class SingleResultData:
@@ -70,12 +76,8 @@ class EvalResult(ComponentBase):
     reg_result_grp_name = "Regression result values"
     fun = Float(0.0, read_only=True, group=reg_result_grp_name).tag(priority=-1)
     nit = Integer(0, read_only=True, group=reg_result_grp_name).tag(priority=0)
-    sig0 = Quantity(Q_(0, "S/cm"), read_only=True, group=reg_result_grp_name).tag(name="σ₀")
-    tau = Quantity(Q_(0, "fs"), read_only=True, group=reg_result_grp_name).tag(name="τ")
-    wp = Quantity(Q_(0, "THz"), read_only=True, group=reg_result_grp_name).tag(name="ωₚ")
-    eps_inf = Float(0, read_only=True, group=reg_result_grp_name).tag(name="ε_inf")
-    eps_s = Float(0, read_only=True, group=reg_result_grp_name).tag(name="ε_s")
-    c1 = Float(0, read_only=True, group=reg_result_grp_name).tag(name="c₁")
+    fit_parameters = FitParameterTable(read_only=True, group=reg_result_grp_name).tag(name="Fitted parameters",
+                                                                                    disable_label=True, priority=1)
 
     measurement_list = StrListSelection(group="Evaluated measurements", read_only=True, combine=True, priority=1)
     thicknesses = StrListSelection(group="Thicknesses (µm)", read_only=True).tag(max_width=70, combine=True, priority=2)
@@ -214,6 +216,14 @@ class EvalResult(ComponentBase):
                     **selected_result.optimization_info
                 }
                 self.set_simple_traits(scalar_values)
+                fitted = []
+                for name, val in selected_result.regression_params.items():
+                    if isinstance(val, Q_):
+                        fitted.append(FitParameter(name, unit=f"{val.units:~P}", label=parameter_label(name),
+                                                   value=float(val.magnitude)))
+                    elif isinstance(val, (int, float)):
+                        fitted.append(FitParameter(name, label=parameter_label(name), value=float(val)))
+                self.set_trait("fit_parameters", tuple(fitted))
                 self.quantity_dict = QuantityDataSetDict(selected_result.datasets)
 
         self.thicknesses.observe(select_quantity_dict, "selected_item")
@@ -306,8 +316,13 @@ class EvalResult(ComponentBase):
         if self.measurement_list.items:
             self.measurement_list.selected_item = self.measurement_list.items[0]
 
+        transmission_traits = list(self.traits(group=self.transmission_res_grp_name))
         if eval_result_data.result_type == "Regression":
-            active_parameters = model_params(eval_result_data.model_name)
-            self.toggle_traits(active_parameters, group_filter=self.transmission_res_grp_name)
+            transmission_only = ["q_val", "sub_dataset_path"]
+            self.toggle_traits([t for t in transmission_traits if t not in transmission_only],
+                               group_filter=self.transmission_res_grp_name)
+            self.toggle_traits(list(self.traits(group=self.reg_result_grp_name)),
+                               group_filter=self.reg_result_grp_name)
         elif eval_result_data.result_type == "Transmission fit":
+            self.toggle_traits(transmission_traits, group_filter=self.transmission_res_grp_name)
             self.toggle_traits([], group_filter=self.reg_result_grp_name)

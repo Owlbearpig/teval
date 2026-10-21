@@ -164,6 +164,10 @@ class ComponentBase(HasTraits):
             for box in touched_boxes:
                 box.setVisible(self._group_box_has_visible_field(ui_widget, box))
 
+            # the flow layout doesn't pick up the changed group box sizes on its own
+            if ui_widget.layout() is not None:
+                ui_widget.layout().invalidate()
+
     @staticmethod
     def _group_box_has_visible_field(ui_widget, box):
         for trait_name, widgets in ui_widget.param_widgets.items():

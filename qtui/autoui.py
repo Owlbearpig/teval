@@ -8,7 +8,9 @@ from qtui.fastfilefilterproxy import FastNameFilterProxyModel
 from common.components import ComponentBase
 from traitlets import Instance
 from qtui.mplcanvas import FigureCanvasWidget
-from common.traits import Quantity, Path as PathTrait, ValueRange, MultiPathSelection, StrListSelection, PlotFigure
+from common.traits import (Quantity, Path as PathTrait, ValueRange, MultiPathSelection, StrListSelection, PlotFigure,
+                           FitParameterTable)
+from dataclasses import replace
 from pathlib import Path
 import types
 import logging
@@ -295,6 +297,139 @@ def create_lineedit(component, name, trait):
     return lineEdit
 
 
+class MultilineEdit(QtWidgets.QPlainTextEdit):
+    apply_requested = QtCore.Signal()
+
+    def keyPressEvent(self, event):
+        if (event.key() in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter)
+                and event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier):
+            self.apply_requested.emit()
+            return
+        super().keyPressEvent(event)
+
+    def focusOutEvent(self, event):
+        self.apply_requested.emit()
+        super().focusOutEvent(event)
+
+
+def create_multiline_edit(component, name, trait):
+    layout = QtWidgets.QHBoxLayout()
+    text_edit = MultilineEdit()
+    text_edit.setPlainText(trait.get(component))
+    text_edit.setToolTip(trait.help)
+    text_edit.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.SystemFont.FixedFont))
+    text_edit.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth)
+    line_height = text_edit.fontMetrics().lineSpacing()
+    text_edit.setMinimumHeight(5 * line_height)
+    text_edit.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
+
+    def update_changed_indicator():
+        changed = text_edit.toPlainText() != trait.get(component)
+        text_edit.setStyleSheet("QPlainTextEdit { border: 1px solid #E6A100; }" if changed else "")
+
+    def apply_text_to_component():
+        if text_edit.toPlainText() != trait.get(component):
+            setattr(component, name, text_edit.toPlainText())
+        update_changed_indicator()
+
+    def apply_text_to_edit(change):
+        if change["new"] != text_edit.toPlainText():
+            text_edit.blockSignals(True)
+            text_edit.setPlainText(change["new"])
+            text_edit.blockSignals(False)
+        update_changed_indicator()
+
+    component.observe(apply_text_to_edit, name)
+    text_edit.apply_requested.connect(apply_text_to_component)
+    text_edit.textChanged.connect(update_changed_indicator)
+
+    apply = QtWidgets.QToolButton()
+    apply.setFocusPolicy(QtCore.Qt.NoFocus)
+    apply.setText('✓')
+    apply.setAutoRaise(True)
+    apply.setToolTip("Apply (Ctrl+Enter)")
+    apply.clicked.connect(apply_text_to_component)
+
+    layout.addWidget(text_edit)
+    layout.addWidget(apply, alignment=QtCore.Qt.AlignmentFlag.AlignTop)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setStretch(0, 1)
+
+    return layout
+
+
+class LatexView(QtWidgets.QScrollArea):
+    # renders the latex lines (one formula per line) of a Unicode trait with matplotlib mathtext
+    refresh_requested = QtCore.Signal()
+
+    def __init__(self, component, name, trait):
+        super().__init__()
+        self.component, self.name = component, name
+        self.setWidgetResizable(True)
+        self.setFrameStyle(QtWidgets.QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        self.label = QtWidgets.QLabel()
+        self.label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self.label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.setWidget(self.label)
+
+        self.refresh_requested.connect(self.refresh)
+        component.observe(lambda change: self.refresh_requested.emit(), name)
+        self.refresh()
+
+    def _render_line(self, latex, color, dpi):
+        from io import BytesIO
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        buffer = BytesIO()
+        fig = Figure()
+        FigureCanvasAgg(fig)
+        fig.text(0, 0, f"${latex}$", color=color, fontsize=max(self.font().pointSizeF(), 9))
+        fig.savefig(buffer, dpi=dpi, format="png", transparent=True, bbox_inches="tight", pad_inches=0.02)
+        image = QtGui.QImage.fromData(buffer.getvalue(), "PNG")
+        image.setDevicePixelRatio(self.devicePixelRatioF())
+        return image
+
+    @QtCore.Slot()
+    def refresh(self):
+        lines = [line for line in getattr(self.component, self.name).split("\n") if line.strip()]
+        self.label.setToolTip("\n".join(lines))
+        if not lines:
+            self.label.clear()
+            self.setFixedHeight(0)
+            return
+
+        color = self.palette().color(QtGui.QPalette.ColorRole.WindowText).name()
+        dpi = 1.3 * self.logicalDpiY() * self.devicePixelRatioF()
+        try:
+            images = [self._render_line(line, color, dpi) for line in lines]
+        except Exception as e:
+            logging.warning(f"Could not render formula: {e}")
+            self.label.setText("\n".join(lines))
+            self.setFixedHeight(self.label.sizeHint().height() + 4)
+            return
+
+        spacing = int(0.4 * self.fontMetrics().height() * self.devicePixelRatioF())
+        width = max(image.width() for image in images)
+        height = sum(image.height() for image in images) + spacing * (len(images) - 1)
+        pixmap = QtGui.QPixmap(width, height)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+        painter = QtGui.QPainter(pixmap)
+        y = 0
+        for image in images:
+            image.setDevicePixelRatio(1.0)
+            painter.drawImage(0, y, image)
+            y += image.height() + spacing
+        painter.end()
+        pixmap.setDevicePixelRatio(self.devicePixelRatioF())
+
+        self.label.setPixmap(pixmap)
+        scrollbar = self.horizontalScrollBar().sizeHint().height()
+        self.setFixedHeight(int(height / self.devicePixelRatioF()) + scrollbar + 4)
+
+
 def create_path_selector(component, name, prettyName, trait):
     layout = QtWidgets.QHBoxLayout()
 
@@ -507,6 +642,78 @@ def create_list_view(component, name, trait):
 
     return container
 
+class ParameterTableWidget(QtWidgets.QTableWidget):
+    refresh_requested = QtCore.Signal()
+
+    def __init__(self, component, name, trait):
+        super().__init__()
+        self.component, self.name, self.read_only = component, name, trait.read_only
+        if self.read_only:
+            self.columns = ["Parameter", "Value", "Unit"]
+        else:
+            self.columns = ["Parameter", "Unit", "Lower bound", "Upper bound"]
+
+        self.setColumnCount(len(self.columns))
+        self.setHorizontalHeaderLabels(self.columns)
+        self.verticalHeader().setVisible(False)
+        self.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
+        self.setToolTip(trait.help)
+        self.setSizeAdjustPolicy(QtWidgets.QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
+
+        self.refresh_requested.connect(self.refresh)
+        component.observe(lambda change: self.refresh_requested.emit(), name)
+        self.itemChanged.connect(self.on_item_changed)
+        self.refresh()
+
+    @staticmethod
+    def _fmt(val):
+        return "" if val is None else f"{val:.6g}"
+
+    def _row_texts(self, p):
+        if self.read_only:
+            return [p.display_name, self._fmt(p.value), p.unit]
+        return [p.display_name, p.unit, self._fmt(p.lower), self._fmt(p.upper)]
+
+    @QtCore.Slot()
+    def refresh(self):
+        parameters = getattr(self.component, self.name)
+        self.blockSignals(True)
+        self.setRowCount(len(parameters))
+        for row, p in enumerate(parameters):
+            for col, text in enumerate(self._row_texts(p)):
+                item = QtWidgets.QTableWidgetItem(text)
+                if self.read_only or col == 0:
+                    item.setFlags(item.flags() & ~QtCore.Qt.ItemFlag.ItemIsEditable)
+                if col == 0 and p.label:
+                    item.setToolTip(p.name)
+                self.setItem(row, col, item)
+        self.blockSignals(False)
+
+        height = self.horizontalHeader().height() + 2 * self.frameWidth()
+        height += sum(self.rowHeight(row) for row in range(self.rowCount()))
+        self.setFixedHeight(height)
+
+    def on_item_changed(self, item):
+        parameters = list(getattr(self.component, self.name))
+        row, col = item.row(), item.column()
+        p, text = parameters[row], item.text().strip()
+        try:
+            if col == 1:
+                Q_(1, text)  # check that the unit is known
+                parameters[row] = replace(p, unit=text)
+            else:
+                number = float(text.replace(",", "."))
+                parameters[row] = replace(p, **{"lower" if col == 2 else "upper": number})
+            setattr(self.component, self.name, tuple(parameters))
+        except Exception as e:
+            logging.error(f"Invalid value '{text}' for {self.columns[col].lower()} of {p.display_name}: {e}")
+            self.refresh()
+
+
+def create_parameter_table(component, name, trait):
+    return ParameterTableWidget(component, name, trait)
+
+
 def create_plot_area(component, name, prettyName, trait):
     def draw(change):
         canvas.set_dataset_dict(change["new"])
@@ -613,6 +820,10 @@ def generate_component_ui(name, component):
                 field_widget = create_number_entry(component, name, trait)
         elif isinstance(trait, Bool):
             field_widget = create_checkbox(component, name, trait)
+        elif isinstance(trait, Unicode) and trait.metadata.get("latex", False):
+            field_widget = LatexView(component, name, trait)
+        elif isinstance(trait, Unicode) and trait.metadata.get("multiline", False) and not trait.read_only:
+            field_widget = create_multiline_edit(component, name, trait)
         elif isinstance(trait, Unicode):
             if trait.read_only:
                 field_widget = create_label(component, name, trait)
@@ -624,6 +835,8 @@ def generate_component_ui(name, component):
                 field_widget = create_path_selector(component, name, prettyName, trait)
         elif isinstance(trait, MultiPathSelection):
             field_widget = create_tree_path_selector(component, name, prettyName, trait)
+        elif isinstance(trait, FitParameterTable):
+            field_widget = create_parameter_table(component, name, trait)
 
         if field_widget:
             disable_label = trait.metadata.get("disable_label", False)

@@ -2,7 +2,9 @@ from enum import Enum
 from pathlib import Path
 import json
 from common.eval_component.eval_result import EvalResult
-from common.traits import ValueRange, Path as TPath, Quantity, MultiPathClass, MultiPathSelection
+from common.traits import (ValueRange, Path as TPath, Quantity, MultiPathClass, MultiPathSelection, FitParameter,
+                           FitParameterTable)
+from dataclasses import asdict
 from common.units import Q_
 from traitlets import Instance, Bool, Integer, Float, Enum as TEnum, Unicode
 from common.components import is_component_trait
@@ -73,6 +75,8 @@ class Settings(AppSettings):
                             val = [val[0], val[1]]
                     elif isinstance(val, MultiPathClass):
                         dump_dict[k] = [str(p) for p in val.selected_paths]
+                    elif isinstance(trait, FitParameterTable):
+                        val = [{**asdict(p), "value": None} for p in val]
                     if isinstance(val, simple_types):
                         dump_dict[k] = val
                 else:
@@ -157,6 +161,11 @@ class Settings(AppSettings):
                 elif issubclass(actual_type, MultiPathSelection):
                     value = getattr(instance, trait_name)
                     value.selected_paths = [Path(p) for p in dict_val]
+                elif issubclass(actual_type, FitParameterTable):
+                    try:
+                        set_trait(trait_name, tuple(FitParameter(**p) for p in dict_val))
+                    except TypeError:
+                        print(f"Could not load trait {trait_name}. Resetting to default on next load.")
 
         with open(config_path, "r") as f:
             json_dict = json.load(f)

@@ -1,6 +1,7 @@
 from common.components import ComponentBase
 from common.dataset import DataSet
 from common.eval_component.q_space_eval import QSpaceEval
+from common.eval_component.regression import Regression
 from common.settings import Settings
 from traitlets import Instance
 from common.dataset_plotter import ExtendedDataSetPlotter, ImagePlot
@@ -13,6 +14,7 @@ class AppRoot(ComponentBase):
     dataset_plotter = Instance(ExtendedDataSetPlotter, allow_none=True).tag(toggle=ComponentToggle.en_extended_dataset_plots)
     image_plot = Instance(ImagePlot, allow_none=True).tag(toggle=ComponentToggle.en_image_plot)
     q_space_eval = Instance(QSpaceEval, allow_none=True).tag(toggle=ComponentToggle.en_q_space_eval)
+    regression = Instance(Regression, allow_none=True).tag(toggle=ComponentToggle.en_regression)
 
     def __init__(self):
         super().__init__()
@@ -22,6 +24,7 @@ class AppRoot(ComponentBase):
         self.dataset_plotter = ExtendedDataSetPlotter(self.dataset, object_name="DataSet plotter")
         self.image_plot = ImagePlot(self.dataset, object_name="Image plot")
         self.q_space_eval = QSpaceEval(self.dataset, object_name="Q-space evaluation")
+        self.regression = Regression(self.dataset, object_name="Regression")
 
     def __enter__(self, *args):
         super().__enter__(*args)
