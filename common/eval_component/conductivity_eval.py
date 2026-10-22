@@ -128,7 +128,7 @@ class ConductivityEval(EvalComponentBase):
                             group=method_grp,
                             help="tmm_2layer_no_sub_echo: no substrate echoes (windowed / short traces), "
                                  "tmm_2layer and model_2layer: with all substrate echoes, t_model_2layer: "
-                                 "number of echoes from the Fabry-Perot count setting").tag(name="Two-layer model",
+                                 "number of echoes from the assumed Fabry-Perot echo count").tag(name="Two-layer model",
                                                                                            priority=1)
 
     def __init__(self, dataset, **kwargs):

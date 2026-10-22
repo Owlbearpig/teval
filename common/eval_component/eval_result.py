@@ -62,14 +62,16 @@ class EvalResult(ComponentBase):
                         group=transmission_res_grp_name).tag(priority=3, name="Timestamp")
     dataset_path = TPath(Path("."), must_exist=False, read_only=True,
                          group=transmission_res_grp_name).tag(priority=4, name="Dataset path")
-    sub_dataset_path = TPath(Path("."), must_exist=False, group=transmission_res_grp_name,
-                             read_only=True).tag(priority=5, name="Sub. dataset path")
     converged = Bool(False, read_only=True,
                      group=transmission_res_grp_name).tag(priority=6, name="Converged")
     q_val = Quantity(Q_(0.0, ""), read_only=True, group=transmission_res_grp_name,
                      significant_figures=5).tag(name="Q-val")
     gof = Quantity(Q_(0.0, ""), read_only=True, group=transmission_res_grp_name,
                    significant_figures=5).tag(name="GoF")
+    fp_time = Quantity(Q_(0.0, "ps"), read_only=True, group=transmission_res_grp_name,
+                       significant_figures=4).tag(name="FP round trip time")
+    q_space_f_max = Quantity(Q_(0.0, "THz"), read_only=True, group=transmission_res_grp_name,
+                             significant_figures=3).tag(name="Q-value range upper limit")
     nfev = Integer(0, read_only=True,
                    group=transmission_res_grp_name).tag(name="Number of function evaluations")
 
@@ -142,15 +144,18 @@ class EvalResult(ComponentBase):
             x_vals = np.array([res.d.magnitude for res in results], dtype=float)
             y_vals = np.array([res.optimization_info["q_val"].magnitude for res in results], dtype=float)
             sort_idx = np.argsort(x_vals)
-            q_argmin = np.argmin(y_vals)
-            d_opt, shift_opt = np.round(results[q_argmin].d, 3), np.round(results[q_argmin].shift, 3)
             plt.plot(x_vals[sort_idx], y_vals[sort_idx], label=f"shift={shift}", marker="o", zorder=1)
-            plt.scatter(x_vals[q_argmin], y_vals[q_argmin], c="red", label=f"Optimum (d={d_opt})", zorder=2)
 
+        opt_res = self.eval_result_data.results.get(self.eval_result_data.optimum_results.get(sel_meas))
+        if opt_res is not None:
+            d_opt, shift_opt = np.round(opt_res.d, 3), np.round(opt_res.shift, 3)
+            plt.scatter(opt_res.d.magnitude, opt_res.optimization_info["q_val"].magnitude, c="red",
+                        label=f"Optimum (d={d_opt})", zorder=2)
             logging.info(f"Optimum thickness: {d_opt} (shift: {shift_opt})")
 
         plt.xlabel("Thickness (µm)")
         plt.ylabel("Q-value")
+        plt.yscale("log")
         plt.legend()
         plt.grid(True)
         plt.show()
@@ -318,7 +323,7 @@ class EvalResult(ComponentBase):
 
         transmission_traits = list(self.traits(group=self.transmission_res_grp_name))
         if eval_result_data.result_type == "Regression":
-            transmission_only = ["q_val", "sub_dataset_path"]
+            transmission_only = ["q_val", "fp_time", "q_space_f_max"]
             self.toggle_traits([t for t in transmission_traits if t not in transmission_only],
                                group_filter=self.transmission_res_grp_name)
             self.toggle_traits(list(self.traits(group=self.reg_result_grp_name)),
@@ -327,12 +332,12 @@ class EvalResult(ComponentBase):
             self.toggle_traits(transmission_traits, group_filter=self.transmission_res_grp_name)
             self.toggle_traits([], group_filter=self.reg_result_grp_name)
         elif eval_result_data.result_type == "Conductivity":
-            hidden = ["q_val", "gof", "nfev", "sub_dataset_path"]
+            hidden = ["q_val", "fp_time", "q_space_f_max", "gof", "nfev"]
             self.toggle_traits([t for t in transmission_traits if t not in hidden],
                                group_filter=self.transmission_res_grp_name)
             self.toggle_traits([], group_filter=self.reg_result_grp_name)
         elif eval_result_data.result_type == "Sparse deconvolution":
-            hidden = ["q_val", "gof", "nfev", "sub_dataset_path"]
+            hidden = ["q_val", "fp_time", "q_space_f_max", "gof", "nfev"]
             self.toggle_traits([t for t in transmission_traits if t not in hidden],
                                group_filter=self.transmission_res_grp_name)
             self.toggle_traits(list(self.traits(group=self.reg_result_grp_name)),

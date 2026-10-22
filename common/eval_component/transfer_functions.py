@@ -128,7 +128,8 @@ def model_1layer_fp(n, freq, **opt_kwargs):
     exp1 = np.exp(1j * (d * w_ / c_thz) * (n - n1))
     exp2 = np.exp(1j * 2 * (d * w_ / c_thz) * n)
 
-    s = np.sum([(r_sa**2 * exp2)**i for i in np.arange(nfp+1)], axis=0)
+    x = r_sa ** 2 * exp2
+    s = 1 / (1 - x) if nfp == -1 else (1 - x ** (nfp + 1)) / (1 - x)
 
     t = (1 - r_as ** 2) * exp1 * s
 

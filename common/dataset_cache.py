@@ -1,6 +1,5 @@
 import numpy as np
 from pathlib import Path
-from tqdm import tqdm
 
 def _generate_id_map(measurements):
     # measurement index sorted by identifier (Higher identifier = later measurement time)

@@ -14,7 +14,7 @@ from enum import member, Enum
 from common.measurements import Measurement
 from common.dataset import Averaging
 from common.consts import c_thz
-from scipy.signal import iirnotch, filtfilt, detrend
+from scipy.signal import detrend, find_peaks
 from concurrent.futures import ProcessPoolExecutor, wait as futures_wait
 from concurrent.futures.process import BrokenProcessPool
 from functools import partial
@@ -31,6 +31,67 @@ from concurrent.futures import ThreadPoolExecutor
 from common.dataset_plotter import DataSetPlotter
 
 action = partial(action, check_init=True, rc_params=mpl_style_params)
+
+
+def fp_round_trip_time(freq_axis, t_exp, d):
+    phi = np.unwrap(np.angle(t_exp))
+    group_delay = np.abs(np.polyfit(2 * np.pi * freq_axis, phi, 1)[0])
+
+    return 2 * (group_delay + d / c_thz)
+
+
+def estimate_fp_echo_count(time_traces, t_rt):
+    counts = []
+    for trace in time_traces:
+        t, y_abs = trace[:, 0].real, np.abs(trace[:, 1].real)
+        recorded = np.flatnonzero(y_abs > 1e-6 * y_abs.max())
+        counts.append((t[recorded[-1]] - t[np.argmax(y_abs)]) / t_rt)
+
+    return max(int(np.floor(min(counts))), 0)
+
+
+def fp_echo_amplitude(freq_axis, n, d):
+    r = (n - 1) / (n + 1)
+    return np.abs(r) ** 2 * np.exp(-4 * np.pi * freq_axis * np.abs(n.imag) * 2 * d / c_thz)
+
+
+def q_space_spectrum(freq_axis, y, pad_factor=16):
+    y = detrend(y, type="linear")
+    n_fft = pad_factor * len(y)
+    q_spec = np.abs(np.fft.rfft(y, n=n_fft))
+    q_axis = np.fft.rfftfreq(n_fft, d=np.mean(np.diff(freq_axis)))
+
+    return q_axis, q_spec
+
+
+class OptimumCriterion(Enum):
+    prominent_min = "Most prominent local minimum"
+    global_min = "Global minimum"
+
+
+def select_optimum(results, criterion=OptimumCriterion.prominent_min):
+    def q_of(res):
+        return float(np.asarray(res.optimization_info["q_val"].magnitude))
+
+    global_best = min(results, key=q_of)
+    if criterion == OptimumCriterion.global_min:
+        return global_best
+
+    best_per_d = {}
+    for res in results:
+        d = round(float(res.d.magnitude), 6)
+        if d not in best_per_d or q_of(res) < q_of(best_per_d[d]):
+            best_per_d[d] = res
+    profile = [best_per_d[d] for d in sorted(best_per_d)]
+    if len(profile) < 3:
+        return global_best
+
+    log_q = np.log(np.maximum([q_of(res) for res in profile], 1e-300))
+    minima, props = find_peaks(-log_q, prominence=0)
+    if not len(minima):
+        return global_best
+
+    return profile[minima[np.argmax(props["prominences"])]]
 
 
 class OptimizationCancelled(Exception):
@@ -52,6 +113,8 @@ def limit_worker_threads():
     try:
         from threadpoolctl import threadpool_limits
     except ImportError:
+        logging.warning("threadpoolctl is not installed, worker processes are not limited to one BLAS thread. "
+                        "Install it (pip install threadpoolctl) to avoid slow spline fits")
         return
     threadpool_limits(limits=1)
 
@@ -93,6 +156,14 @@ class Preprocessing(DataSetPlotter):
     percent_of_spectral_max = Quantity(Q_(10, "%")).tag(name="Percent of spectral max", group=fit_range_grp,
                                                        priority=2002)
 
+    fp_grp = "Fabry-Perot echoes"
+    fp_period_est = Quantity(Q_(0.0, "GHz"), read_only=True, significant_figures=4).tag(
+        name="Fabry-Perot oscillation period", group=fp_grp, priority=3000, en_save=False)
+    fp_count_est = Integer(0, read_only=True).tag(name="Estimated number of echoes", group=fp_grp, priority=3001,
+                                                  en_save=False)
+    auto_fp_count = Bool(True).tag(name="Use estimated number of echoes", group=fp_grp, priority=3002, en_save=False)
+    fp_count = Integer(25, min=-1).tag(name="Assumed number of echoes", group=fp_grp, priority=3003, en_save=False)
+
     freq = None
     selected_quantity_enum = None
     d_sample = None
@@ -114,6 +185,7 @@ class Preprocessing(DataSetPlotter):
         self._spectral_amp_data_lines = []
         self.spectral_noise_floor_lines = []
         self._plotted_meas_list = []
+        self.fp_estimator = None
 
         self.observe(self.draw_noise_floor, "noise_starts_at")
         self.observe(self.draw_noise_floor, "percent_of_spectral_max")
@@ -123,6 +195,19 @@ class Preprocessing(DataSetPlotter):
     @observe("fit_range")
     def _on_fit_range(self, change):
         self._set_extents(self._span_fit, change["new"])
+        self.update_fp_estimate()
+
+    def update_fp_estimate(self):
+        if self.fp_estimator is None or not self._plotted_meas_list:
+            return
+        try:
+            t_rt, count = self.fp_estimator(self._plotted_meas_list)
+        except Exception:
+            logging.warning("Fabry-Perot estimate failed")
+            traceback.print_exc()
+            return
+        self.set_trait("fp_period_est", Q_(1e3 / t_rt, "GHz"))
+        self.set_trait("fp_count_est", count)
 
     @observe("phi_fit_range")
     def _on_phi_fit_range(self, change):
@@ -139,8 +224,6 @@ class Preprocessing(DataSetPlotter):
             span.ax.figure.canvas.draw_idle()
 
     def _sample_spectrum(self):
-        # spectrum of the plotted sample (average) over the full frequency axis, the plotted line only covers
-        # the plotted frequency range
         y_db = self.fd_db_data(self._plotted_meas_list)[:, :, 1]
         if self.averaging == Averaging.only_individual:
             return y_db[0]
@@ -189,7 +272,6 @@ class Preprocessing(DataSetPlotter):
             logging.warning("Plot the spectrum first to set the fit range automatically")
             return
 
-        # upper limit: first frequency above the lower limit where the spectrum drops below the choice floor
         x_min = self.phi_fit_range[0]
         below_floor = (x > x_min.to("THz").magnitude) & (y < floor)
         if not below_floor.any():
@@ -259,6 +341,7 @@ class Preprocessing(DataSetPlotter):
         self.draw_noise_floor()
         if self.auto_adjust_fit_range:
             self.auto_set_fit_range()
+        self.update_fp_estimate()
 
         fig.canvas.draw_idle()
 
@@ -293,7 +376,6 @@ class Preprocessing(DataSetPlotter):
         ax.figure.canvas.draw_idle()
 
     def _scale_phase_axis(self):
-        # y limits from the data and the fit lines in the visible x range, including the offsets at f = 0
         ax = self._phi_ax
         x0, x1 = ax.get_xlim()
         values = [0.0]
@@ -323,8 +405,16 @@ class QSpaceEval(EvalComponentBase):
     iterative_thickness_optimization = Bool(True,
                                             group=t_fit_grp_name).tag(name="Optimize thickness iteratively", priority=2)
     iteration_count = Integer(3, group=t_fit_grp_name).tag(name="Iteration count", priority=3)
-    bound_shrink_factor = Float(0.20, group=t_fit_grp_name).tag(name="Thickness bounds shrink factor",
-                                                                priority=4)
+    bound_shrink_factor = Float(0.20, group=t_fit_grp_name,
+                                help="Each refinement iteration evaluates the best thickness +- the previous "
+                                     "thickness step, with the step multiplied by this factor (0.5: 2 new "
+                                     "thicknesses per iteration, 0.2: 8)").tag(name="Thickness step shrink factor",
+                                                                                 priority=4)
+    optimum_criterion = TEnum(OptimumCriterion, default_value=OptimumCriterion.prominent_min, group=t_fit_grp_name,
+                              help="Most prominent local minimum: the deepest notch of log(q) along the thickness "
+                                   "axis, ignores the falling q-value trend towards large thicknesses (use a "
+                                   "thickness step that resolves the notch, ~10 µm). Global minimum: smallest "
+                                   "q-value").tag(name="Optimum selection", priority=5)
 
     n_guess_grp = "Initial refractive index guess"
     n_guess_method = TEnum(NGuessMethod, default_value=NGuessMethod.tof, group=n_guess_grp,
@@ -350,6 +440,18 @@ class QSpaceEval(EvalComponentBase):
         self._fit_range_link = link((self, "freq_range"), (self.preprocessing, "fit_range"))
         self._phi_fit_range_link = link((self.settings.eval_opt, "phi_fit_range"),
                                         (self.preprocessing, "phi_fit_range"))
+        self._fp_links = [link((self.settings.eval_opt, name), (self.preprocessing, name))
+                          for name in ("auto_fp_count", "fp_count")]
+        self.preprocessing.fp_estimator = lambda meas_list: self.fp_echo_estimate(list(meas_list))
+
+    def fp_echo_estimate(self, meas_list, ref_list=None, t_exp=None):
+        if t_exp is None:
+            t_exp = np.mean(self.dataset.transmission(meas_list, ref_list)[:, self.freq_range_idx], axis=0)
+        d = np.mean(self.d_opt_axis_bounds.magnitude)
+        t_rt = fp_round_trip_time(self.freq_axis, t_exp, d)
+        count = estimate_fp_echo_count(self.dataset.get_multi_data(meas_list, Domain.Time), t_rt)
+
+        return t_rt, count
 
     def reset_state(self):
         self.task_cnt_carrier.cnt_changed.emit(0)
@@ -485,74 +587,107 @@ class QSpaceEval(EvalComponentBase):
         opt_res.datasets["n"].uncert = Q_(delta_n + 1j * delta_k, "")
 
     def calc_q_val(self, res_data: SingleResultData):
-        if self.settings.eval_opt.use_separate_range:
-            q_space_range = self.settings.eval_opt.q_space_range
-        else:
-            q_space_range = self.freq_range
+        eval_opt = self.settings.eval_opt
+        q_space_range = eval_opt.q_space_range if eval_opt.use_separate_range else self.freq_range
 
         freq_axis = res_data.freq_axis.magnitude
         freq_range_idx = f_axis_idx_map(freq_axis, q_space_range)
+        freq_axis = freq_axis[freq_range_idx]
 
-        dt = np.mean(np.diff(freq_axis[freq_range_idx]))
-        q_space_q = self.settings.eval_opt.q_space_quantity
-
-        y = res_data.datasets["n"].data.magnitude
-        match q_space_q:
+        match eval_opt.q_space_quantity:
             case QSpaceQuantity.n:
-                y = y.real
+                y = res_data.datasets["n"].data.magnitude.real
             case QSpaceQuantity.k:
-                y = y.imag
+                y = res_data.datasets["n"].data.magnitude.imag
             case QSpaceQuantity.alpha:
                 y = res_data.datasets[QSpaceQuantity.alpha.name].data.magnitude
-
         y = y[freq_range_idx]
-        y = y - np.mean(y)
 
-        y = detrend(y, type="linear")
+        d = res_data.d.magnitude
+        if eval_opt.auto_fp_time:
+            t_exp = res_data.datasets["t_exp"].data.magnitude[freq_range_idx]
+            t_fp = fp_round_trip_time(freq_axis, t_exp, d)
+        else:
+            t_fp = eval_opt.fp_spacing.to("ps").magnitude
 
-        og_len = len(y)
-        y = np.concatenate([np.zeros(3 * len(y)), y, np.zeros(3 * len(y))])
+        n = res_data.datasets["n"].data.magnitude[freq_range_idx]
+        echo_amp = fp_echo_amplitude(freq_axis, n, d)
+        if eval_opt.auto_q_space_f_max:
+            below = np.flatnonzero(echo_amp < eval_opt.fp_amp_threshold.to("").magnitude)
+            f_max = freq_axis[below[0]] if len(below) else freq_axis[-1]
+            # keep at least two FP periods
+            f_max = min(max(f_max, freq_axis[0] + 2 / t_fp), freq_axis[-1])
+            band = freq_axis <= f_max
+            freq_axis, y = freq_axis[band], y[band]
+        res_data.optimization_info["q_space_f_max"] = Q_(freq_axis[-1], "THz")
 
-        y_ft = np.fft.rfft(y)
-        t_axis = np.fft.rfftfreq(len(y), d=dt)
+        q_axis, q_spec = q_space_spectrum(freq_axis, y)
+        # half the main lobe width of the unwindowed transform, the peak position is only known to ~1 / bandwidth
+        half_width = 0.5 / np.ptp(freq_axis)
+        window = np.abs(q_axis - t_fp) <= half_width
+        if not window.any():
+            window[np.argmin(np.abs(q_axis - t_fp))] = True
 
-        q_val_axis = np.abs(y_ft)[0:]
-        t_axis = t_axis[0:]
+        res_data.optimization_info["q_val"] = Q_(np.max(q_spec[window]), "")
+        res_data.optimization_info["q_sum"] = Q_(np.sum(q_spec[window]), "")
+        res_data.optimization_info["fp_time"] = Q_(t_fp, "ps")
+        res_data.optimization_info["fp_period"] = Q_(1 / t_fp, "THz")
 
-        fp_spacing = self.settings.eval_opt.fp_spacing.magnitude
-        t0 = np.argmin(np.abs(t_axis - (fp_spacing - 2)))
-        t1 = np.argmin(np.abs(t_axis - (fp_spacing + 2)))
+        q_name = eval_opt.q_space_quantity.name
+        res_data.datasets["q_space"] = QuantityDataSet(axes=[Q_(q_axis, "ps")],
+                                                       data=Q_(q_spec, ""),
+                                                       axes_labels=["Round trip time"],
+                                                       data_label=f"Q-space |FFT({q_name})|, "
+                                                                  f"FP time {t_fp:.3f} ps, "
+                                                                  f"{freq_axis[0]:.2f}-{freq_axis[-1]:.2f} THz")
+        res_data.datasets["fp_echo_amp"] = QuantityDataSet(axes=[res_data.freq_axis[freq_range_idx]],
+                                                           data=Q_(100 * echo_amp, "%"),
+                                                           axes_labels=["Frequency"],
+                                                           data_label="Estimated Fabry-Perot echo amplitude")
 
-        q_val, peak_idx = np.max(q_val_axis[t0:t1]), np.argmax(q_val_axis[t0:t1])
-        q_sum = np.sum(q_val_axis[t0:t1])
-
-        # plt.figure("TESTFFT")
-        # plt.plot(fft_freq_axis, np.abs(fft_), label=f"shift {shift}")
-
-        fs = 1 / np.mean(np.diff(freq_axis))
-        qual_factor = 0.5  # quality factor: higher = narrower
-
-        peak_freq = t_axis[t0:t1][peak_idx]
-        b, a = iirnotch(peak_freq / (fs / 2), qual_factor)
-
-        y_filtered = filtfilt(b, a, y)
-        q_val = Q_(q_val, "")
-
-        res_data.optimization_info["q_val"] = q_val
-        res_data.optimization_info["q_sum"] = Q_(q_sum, "")
-
-        return q_val
+        return res_data.optimization_info["q_val"]
 
     def build_context(self, selection) -> SelectionContext:
+        t_exp_dict = self.t_exp_dict(selection)
+        t_model_kwargs = self.get_t_model_kwargs()
+        if self.settings.eval_opt.auto_fp_count:
+            t_exp_0 = np.asarray(next(iter(t_exp_dict.values())))[:, 1]
+            t_rt, t_model_kwargs["nfp"] = self.fp_echo_estimate(list(selection.sams), list(selection.refs), t_exp_0)
+            logging.info(f"Fabry-Perot oscillation period {1e3 / t_rt:.1f} GHz, "
+                         f"estimated number of echoes {t_model_kwargs['nfp']}")
+
         return SelectionContext(
             selection=selection,
             ref_fd_dict=self.ref_fd_dict(selection),
-            t_exp_dict=self.t_exp_dict(selection),
+            t_exp_dict=t_exp_dict,
             n_guess=self.n_guess(selection),
-            t_model_kwargs=self.get_t_model_kwargs(),
+            t_model_kwargs=t_model_kwargs,
             smoothing=(self.settings.eval_opt.smoothing_avg_n,
                        self.settings.eval_opt.smoothing_avg_iters),
         )
+
+    def spline_knot_count(self, ctx: SelectionContext):
+        eval_opt = self.settings.eval_opt
+        knot_cnt = eval_opt.knot_cnt
+        if len(self.freq_axis) < 2:
+            return knot_cnt
+
+        t_exp_0 = np.asarray(next(iter(ctx.t_exp_dict.values())))[:, 1]
+        fp_period = 1 / fp_round_trip_time(self.freq_axis, t_exp_0, self.d_opt_axis_bounds[1].magnitude)
+        knots_per_period = eval_opt.knots_per_fp_period
+        min_knots = int(np.ceil(knots_per_period * np.ptp(self.freq_axis) / fp_period)) + 1
+
+        if eval_opt.auto_knot_cnt:
+            knot_cnt = int(np.clip(min_knots, 4, len(self.freq_axis)))
+            logging.info(f"Using {knot_cnt} splines ({knots_per_period} per Fabry-Perot period "
+                         f"of ~{fp_period:.3f} THz)")
+        elif knot_cnt < min_knots:
+            knot_spacing = np.ptp(self.freq_axis) / max(knot_cnt - 1, 1)
+            logging.warning(f"Spline knot spacing ({knot_spacing:.3f} THz) is too large to resolve the "
+                            f"Fabry-Perot oscillations (period ~{fp_period:.3f} THz), q-values will not "
+                            f"discriminate the thickness. Use at least {min_knots} splines")
+
+        return knot_cnt
 
     def eval_selection(self, selection) -> EvalResultData:
         ctx = self.build_context(selection)
@@ -577,39 +712,54 @@ class QSpaceEval(EvalComponentBase):
             **ctx.t_model_kwargs,
         }
         if self.optimization_method == OptimizationMethods.Spline:
-            common_opt_params["knot_count"] = self.settings.eval_opt.knot_cnt
+            common_opt_params["knot_count"] = self.spline_knot_count(ctx)
             common_opt_params["reg_n"] = self.settings.eval_opt.reg_n
             common_opt_params["reg_k"] = self.settings.eval_opt.reg_k
             common_opt_params["max_nfev"] = self.settings.eval_opt.max_nfev
+            common_opt_params["per_freq_refine"] = self.settings.eval_opt.per_freq_refine
         opt_configs = {meas: {**common_opt_params, "n_guess": ctx.n_guess[meas] if ctx.n_guess else None,
                               "t_exp": ctx.t_exp_dict[meas]} for meas in ctx.t_exp_dict}
 
-        def get_new_tasks():
-            shift_bnds = self.settings.eval_opt.shift_opt_axis_bounds
-            shift_step = self.settings.eval_opt.shift_opt_axis_step
-            shift_axis = np.arange(shift_bnds[0].magnitude,
-                                   shift_bnds[1].magnitude + shift_step.magnitude,
-                                   shift_step.magnitude)
-            if not self.settings.eval_opt.enable_shift_opt:
-                shift_axis = [0]
 
-            opt_d = self.opt_state["d"]
-            tasks = []
-            if not self.iterative_thickness_optimization or opt_d is None:
-                bnds = self.d_opt_axis_bounds
-                step = self.d_opt_axis_step
-                num_steps = int(round((bnds[1].magnitude - bnds[0].magnitude) / step.magnitude)) + 1
-                d_axis = np.linspace(bnds[0].magnitude, bnds[1].magnitude, num_steps)
+        shift_bnds = self.settings.eval_opt.shift_opt_axis_bounds
+        shift_step = self.settings.eval_opt.shift_opt_axis_step.magnitude
+        if self.settings.eval_opt.enable_shift_opt:
+            shift_axis = np.arange(shift_bnds[0].magnitude, shift_bnds[1].magnitude + shift_step, shift_step)
+        else:
+            shift_axis = np.array([0.0])
+
+        d_bnds = self.d_opt_axis_bounds
+        d_step0 = self.d_opt_axis_step.magnitude
+        num_steps = int(round((d_bnds[1].magnitude - d_bnds[0].magnitude) / d_step0)) + 1
+        d_axis0 = np.linspace(d_bnds[0].magnitude, d_bnds[1].magnitude, num_steps)
+        if num_steps > 1:
+            d_step0 = d_axis0[1] - d_axis0[0]
+
+        shrink_factor = min(max(self.bound_shrink_factor, 1e-3), 1.0)
+        refine_d_cnt = 2 * int(round(1 / shrink_factor)) + 1
+        refine_shift_cnt = min(3, len(shift_axis))
+        refine_task_cnt = refine_d_cnt * refine_shift_cnt
+
+        def task_key(d, shift):
+            return round(float(d), 6), round(float(shift), 6)
+
+        def get_new_tasks(iter_idx, d_step, done_keys):
+            if iter_idx == 0:
+                d_axis, shifts = d_axis0, shift_axis
             else:
-                shrink_factor = self.bound_shrink_factor
                 d0 = self.opt_state["d"].magnitude
-                d_min = np.round(d0 * (1 - shrink_factor), 3)
-                d_max = np.round(d0 * (1 + shrink_factor), 3)
-                d_axis = np.linspace(d_min, d_max, 5)
-            for d in d_axis:
-                for shift in shift_axis:
-                    tasks.append(np.array([d, shift], dtype=float))
+                d_axis = np.linspace(d0 - d_step, d0 + d_step, refine_d_cnt)
+                d_axis = d_axis[d_axis > 0]
+                s0 = self.opt_state["shift"].magnitude
+                shifts = shift_axis[np.argsort(np.abs(shift_axis - s0))[:refine_shift_cnt]]
 
+            tasks = []
+            for d in d_axis:
+                for shift in shifts:
+                    key = task_key(d, shift)
+                    if key not in done_keys:
+                        done_keys.add(key)
+                        tasks.append(np.array(key, dtype=float))
             return tasks
 
         def check_cancel():
@@ -626,47 +776,33 @@ class QSpaceEval(EvalComponentBase):
                 check_cancel()
                 raise
 
-        def process_tasks(tasks, opt_config, iteration_progress):
+        def process_tasks(executor, tasks, opt_config, iteration_progress):
             it_idx, tot_it = iteration_progress
             if it_idx == 0:
-                total_tasks = len(tasks) + 5 * (tot_it - 1)
+                total_tasks = len(tasks) + refine_task_cnt * (tot_it - 1)
                 self.task_cnt_carrier.cnt_changed.emit(total_tasks)
-                logging.info(f"Processing a total of {total_tasks} task{'s' * (total_tasks > 1)}")
-            if tot_it != 1:
-                logging.info(f"Starting thickness refinement iteration {it_idx+1} / {tot_it}")
+                logging.info(f"Processing up to {total_tasks} task{'s' * (total_tasks > 1)}")
+            else:
+                logging.info(f"Starting thickness refinement iteration {it_idx} / {tot_it - 1}")
+                for _ in range(refine_task_cnt - len(tasks)):
+                    self.task_cnt_carrier.cnt_changed.emit(1)
 
             check_cancel()
             task_results = []
-            with ProcessPoolExecutor(max_workers=self.number_of_workers,
-                                     initializer=limit_worker_threads) as executor:
-                self.current_process_executor = executor
-                try:
-                    worker_func = partial(self.optimization_method.value, config_dict=opt_config)
-                    futures = [executor.submit(worker_func, d, shift) for d, shift in tasks]
+            worker_func = partial(self.optimization_method.value, config_dict=opt_config)
+            futures = [executor.submit(worker_func, d, shift) for d, shift in tasks]
 
-                    for future in futures:
-                        res: SingleResultData = get_result(future)
-                        self.task_cnt_carrier.cnt_changed.emit(1)
+            for future in futures:
+                res: SingleResultData = get_result(future)
+                self.task_cnt_carrier.cnt_changed.emit(1)
 
-                        info_str = f"Finished optimizing thickness {np.round(res.d, 2)} "
-                        if self.settings.eval_opt.enable_shift_opt:
-                            info_str += f"with a shift of {res.shift}"
-                        logging.info(info_str)
+                info_str = f"Finished optimizing thickness {np.round(res.d, 3)} "
+                if self.settings.eval_opt.enable_shift_opt:
+                    info_str += f"with a shift of {res.shift}"
+                logging.info(info_str)
 
-                        q_val = self.calc_q_val(res)
-                        if q_val < self.opt_state["q_min"]:
-                            self.opt_state["d"] = res.d
-                            self.opt_state["shift"] = res.shift
-                            self.opt_state["q_min"] = q_val
-
-                        task_results.append(res)
-                except BaseException:
-                    kill_process_pool(executor)
-                    raise
-                finally:
-                    self.current_process_executor = None
-
-            task_results = sorted(task_results, key=lambda res_: res_.d)
+                self.calc_q_val(res)
+                task_results.append(res)
 
             return task_results
 
@@ -677,26 +813,48 @@ class QSpaceEval(EvalComponentBase):
         eval_result_data.model_name = self.transmission_model.name
         eval_result_data.measurement_quantity = "Transmission"
 
-        for meas_idx, meas in enumerate(ctx.t_exp_dict):
-            check_cancel()
-            if meas != "Average":
-                logging.info(f"Evaluating measurement {meas.filepath.name}")
-            self.reset_state()
+        check_cancel()
+        with ProcessPoolExecutor(max_workers=self.number_of_workers,
+                                 initializer=limit_worker_threads) as executor:
+            self.current_process_executor = executor
+            try:
+                for meas_idx, meas in enumerate(ctx.t_exp_dict):
+                    check_cancel()
+                    if meas != "Average":
+                        logging.info(f"Evaluating measurement {meas.filepath.name}")
+                    self.reset_state()
 
-            opt_results: list[SingleResultData] = []
-            for iter_idx in range(max(1, iteration_count)):
-                check_cancel()
-                new_tasks = get_new_tasks()
-                new_results = process_tasks(new_tasks, opt_configs[meas],
-                                            iteration_progress=(iter_idx, iteration_count))
-                opt_results.extend(new_results)
+                    opt_results: list[SingleResultData] = []
+                    done_keys = set()
+                    d_step = d_step0
+                    for iter_idx in range(max(1, iteration_count)):
+                        check_cancel()
+                        new_tasks = get_new_tasks(iter_idx, d_step, done_keys)
+                        if iter_idx > 0:
+                            d_step = 2 * d_step / (refine_d_cnt - 1)
+                        opt_results.extend(process_tasks(executor, new_tasks, opt_configs[meas],
+                                                         iteration_progress=(iter_idx, iteration_count)))
+                        if opt_results:
+                            best = select_optimum(opt_results, self.optimum_criterion)
+                            self.opt_state.update(d=best.d, shift=best.shift,
+                                                  q_min=best.optimization_info["q_val"])
 
-            ready_results = self.prepare_results(meas, opt_results, ctx)
-            meas_results = {f"result_{meas_idx}_{res_idx:03d}": res for res_idx, res in enumerate(ready_results)}
-            eval_result_data.results.update(meas_results)
+                    opt_results.sort(key=lambda res_: (res_.d.magnitude, res_.shift.magnitude))
+                    ready_results = self.prepare_results(meas, opt_results, ctx)
+                    meas_results = {f"result_{meas_idx}_{res_idx:03d}": res
+                                    for res_idx, res in enumerate(ready_results)}
+                    eval_result_data.results.update(meas_results)
 
-            best_key = min(meas_results, key=lambda k: meas_results[k].optimization_info["q_val"])
-            eval_result_data.optimum_results[ready_results[0].measurement] = best_key
+                    best = select_optimum(ready_results, self.optimum_criterion)
+                    best_key = next(k for k, res in meas_results.items() if res is best)
+                    logging.info(f"Optimum thickness {np.round(best.d, 3)}"
+                                 + f" (shift {best.shift})" * self.settings.eval_opt.enable_shift_opt)
+                    eval_result_data.optimum_results[ready_results[0].measurement] = best_key
+            except BaseException:
+                kill_process_pool(executor)
+                raise
+            finally:
+                self.current_process_executor = None
 
         return eval_result_data
 

@@ -11,11 +11,11 @@ from common.components import action
 from common.default_appsettings import ComponentToggle
 
 class AppRoot(ComponentBase):
-    settings = Instance(Settings, allow_none=True)
-    dataset = Instance(DataSet, allow_none=True)
+    settings = Instance(Settings, allow_none=True).tag(priority=1000)
+    dataset = Instance(DataSet, allow_none=True).tag(priority=10)
+    q_space_eval = Instance(QSpaceEval, allow_none=True).tag(toggle=ComponentToggle.en_q_space_eval, priority=11)
     dataset_plotter = Instance(ExtendedDataSetPlotter, allow_none=True).tag(toggle=ComponentToggle.en_extended_dataset_plots)
     image_plot = Instance(ImagePlot, allow_none=True).tag(toggle=ComponentToggle.en_image_plot)
-    q_space_eval = Instance(QSpaceEval, allow_none=True).tag(toggle=ComponentToggle.en_q_space_eval)
     regression = Instance(Regression, allow_none=True).tag(toggle=ComponentToggle.en_regression)
     conductivity_eval = Instance(ConductivityEval, allow_none=True).tag(
         toggle=ComponentToggle.en_conductivity_eval)

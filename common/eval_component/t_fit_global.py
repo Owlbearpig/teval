@@ -9,6 +9,41 @@ from common.units import Q_
 from common.eval_component.quantity_set import QuantityDataSet
 from datetime import datetime
 
+
+def refine_n_per_frequency(n, freq_axis, t_exp, transmission_model, model_kwargs, max_iter=50, max_step=0.01,
+                           tol=1e-10):
+    # Newton on Re/Im of the model residual per frequency (2x2 real system, so conjugated models work too),
+    # started from the spline solution to stay on its branch. Returns n and the per frequency convergence mask
+    def residual(n_):
+        return transmission_model(n_, freq_axis, **model_kwargs) - t_exp
+
+    n_ref = n.copy()
+    h = 1e-7
+    step_size = np.full(n.shape, np.inf)
+    for _ in range(max_iter):
+        r = residual(n)
+        dr_dn = (residual(n + h) - residual(n - h)) / (2 * h)
+        dr_dk = (residual(n + 1j * h) - residual(n - 1j * h)) / (2 * h)
+
+        det = dr_dn.real * dr_dk.imag - dr_dk.real * dr_dn.imag
+        det = np.where(np.abs(det) < 1e-30, np.nan, det)
+        step_n = (dr_dk.imag * r.real - dr_dk.real * r.imag) / det
+        step_k = (dr_dn.real * r.imag - dr_dn.imag * r.real) / det
+        step = np.nan_to_num(step_n + 1j * step_k)
+
+        step_size = np.abs(step)
+        step = np.where(step_size > max_step, max_step * step / np.maximum(step_size, 1e-30), step)
+        n = n - step
+        if np.max(step_size) < tol:
+            break
+
+    worse = ~np.isfinite(n) | (np.abs(residual(n)) > np.abs(residual(n_ref)))
+    n[worse] = n_ref[worse]
+    # the finite difference Jacobian limits the final step to ~h, a nonzero det marks a regular solution
+    converged = ~worse & (step_size < 1e-6) & np.isfinite(det)
+
+    return n, converged
+
 def spline_transmission_optimization(d, shift, config_dict):
     freq_axis = np.asarray(config_dict["freq_axis"])
     n0 = get_n_guess(d, shift, config_dict)
@@ -46,10 +81,12 @@ def spline_transmission_optimization(d, shift, config_dict):
     basis = unit_splines(freq_axis)
     basis_d2 = unit_splines(freq_axis, 2)
 
-    reg_n_mat = np.sqrt(lambda_n) / n_scale * basis_d2
-    reg_k_mat = np.sqrt(lambda_k) / k_scale * basis_d2
-    reg_jac = np.block([[reg_n_mat, np.zeros_like(basis_d2)],
-                        [np.zeros_like(basis_d2), reg_k_mat]])
+    # ||basis_d2 @ p|| == ||r_d2 @ p||, the K x K factor keeps the Jacobian (and its SVD) small
+    r_d2 = np.linalg.qr(basis_d2, mode="r")
+    reg_n_mat = np.sqrt(lambda_n) / n_scale * r_d2
+    reg_k_mat = np.sqrt(lambda_k) / k_scale * r_d2
+    reg_jac = np.block([[reg_n_mat, np.zeros_like(r_d2)],
+                        [np.zeros_like(r_d2), reg_k_mat]])
 
     def calculate_model(p):
         n = basis @ p[:n_knots] + 1j * (basis @ p[n_knots:])
@@ -117,6 +154,13 @@ def spline_transmission_optimization(d, shift, config_dict):
     )
 
     n_opt_res, t_mod_res = calculate_model(opt_res.x)
+    n_spline = n_opt_res
+    converged = opt_res.success
+    if config_dict.get("per_freq_refine", False):
+        # the spline fit is only the start value here, hitting max_nfev doesn't matter
+        n_opt_res, converged_f = refine_n_per_frequency(n_spline, freq_axis, t_exp, transmission_model, model_kwargs)
+        converged = bool(np.all(converged_f))
+        t_mod_res = transmission_model(n_opt_res, freq_axis, **model_kwargs)
 
     gof = np.sum(cost_fun(t_exp, t_mod_res))
 
@@ -137,7 +181,8 @@ def spline_transmission_optimization(d, shift, config_dict):
     result_data.optimization_info["njev"] = opt_res.njev
     result_data.optimization_info["status"] = opt_res.status
     result_data.optimization_info["optimizer_message"] = opt_res.message
-    result_data.optimization_info["converged"] = opt_res.success
+    result_data.optimization_info["converged"] = converged
+    result_data.optimization_info["spline_converged"] = opt_res.success
 
     result_data.optimization_info["n_knots"] = n_knots
     result_data.optimization_info["lambda_n"] = lambda_n
@@ -156,6 +201,14 @@ def spline_transmission_optimization(d, shift, config_dict):
         axes_labels=["Frequency"],
         data_label="Refractive index"
     )
+
+    if config_dict.get("per_freq_refine", False):
+        result_data.datasets["n_spline"] = QuantityDataSet(
+            axes=[Q_(freq_axis, "THz")],
+            data=Q_(n_spline, ""),
+            axes_labels=["Frequency"],
+            data_label="Refractive index (spline)"
+        )
 
     result_data.datasets["n"] = QuantityDataSet(
         axes=[Q_(freq_axis, "THz")],

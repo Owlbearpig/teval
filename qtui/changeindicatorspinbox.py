@@ -20,7 +20,8 @@ class ScientificDoubleSpinBox(QDoubleSpinBox):
 
 def ChangeIndicatorSpinBox(*args, actual_value_getter,
                            is_double_spinbox=False, **kwargs):
-    sb_decimals = 32
+    # QDoubleSpinBox rounds values to `decimals` places; 323 (DBL_MAX_10_EXP + DBL_DIG) keeps every double exact
+    sb_decimals = 323
     if is_double_spinbox:
         spinbox = ScientificDoubleSpinBox(*args, **kwargs)
         spinbox.setDecimals(sb_decimals)
@@ -38,9 +39,7 @@ def ChangeIndicatorSpinBox(*args, actual_value_getter,
     spinbox.changed_palette.setColor(QPalette.Base, highlightColor)
 
     def check_changed():
-        actualValue = actual_value_getter()
-        below_prec = actualValue < 10**-sb_decimals and spinbox.value() < 10**-sb_decimals
-        if spinbox.value() != actualValue and not below_prec:
+        if spinbox.value() != actual_value_getter():
             spinbox.setPalette(spinbox.changed_palette)
         else:
             spinbox.setPalette(spinbox.unchanged_palette)

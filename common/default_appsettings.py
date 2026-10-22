@@ -338,18 +338,22 @@ class EvalOpt(ComponentBase):
     spectral_similarity_range = ValueRange([Q_(0.15, "THz"), Q_(2.00, "THz")]).tag(name="Spectral similarity range")
 
     delta_d = TQuantity(Q_(2.0, "µm")).tag(name="Thickness uncertainty")
-    fp_count = Int(0).tag(name="Number of Fabry-Perots")
+    auto_fp_count = Bool(True, help="Number of Fabry-Perot echoes inside the recorded time window, estimated from "
+                                    "the trace length after the main pulse and the round trip time. Only used by "
+                                    "the truncated echo models (model_1layer_fp, t_model_2layer)").tag(
+        name="Use estimated number of Fabry-Perot echoes")
+    fp_count = Int(25, min=-1, help="-1: infinite number of echoes").tag(
+        name="Assumed number of Fabry-Perot echoes")
     phi_offset_correction = Bool(True).tag(name="Phase offset correction")
 
     d = TQuantity(Q_(0.0, "µm")).tag(name="Default nominal sample thickness")
     d_film = TQuantity(Q_(0.0, "µm")).tag(name="Film thickness")
-    fp_spacing = TQuantity(Q_(12, "fs")).tag(name="Approximate Fabry-perot spacing")
 
     transmission_sim_grp = "Transmission simulation"
     add_sim_to_res = Bool(False, group=transmission_sim_grp).tag(name="Add simulated transmission to result")
     sim_d = TQuantity(Q_(100, "µm"), group=transmission_sim_grp).tag(name="Simulation thickness")
-    sim_h = TQuantity(Q_(1, "µm"), group=transmission_sim_grp).tag(name="Simulation film thickness")
     sim_nfp = Int(8, group=transmission_sim_grp).tag(name="Fabry perot count")
+    sim_h = TQuantity(Q_(1, "µm"), group=transmission_sim_grp).tag(name="Simulation film thickness")
     sim_shift = TQuantity(Q_(0, "fs"), group=transmission_sim_grp).tag(name="Added phase shift")
     sim_n_sub = ValueRange([1, 0],
                            group=transmission_sim_grp).tag(name="Refractive index sub. (real, imag)")
@@ -365,12 +369,30 @@ class EvalOpt(ComponentBase):
                                                                        group=q_space_eval_grp)
     q_space_quantity = TEnum(QSpaceQuantity, QSpaceQuantity.n).tag(name="Quantity used for q-value calculation",
                                                                    group=q_space_eval_grp)
+    auto_fp_time = Bool(True, group=q_space_eval_grp,
+                        help="Estimate the Fabry-Perot round trip time 2 n_g d / c for each thickness from the "
+                             "group delay of the measured transmission").tag(name="Estimate Fabry-Perot round trip time")
+    fp_spacing = TQuantity(Q_(12, "ps"), group=q_space_eval_grp,
+                           help="Used when the estimate is disabled; position of the Fabry-Perot peak in the "
+                                "q-space spectrum").tag(name="Fabry-Perot round trip time")
+    auto_q_space_f_max = Bool(True, group=q_space_eval_grp,
+                              help="Limit the q-value range to frequencies where the estimated Fabry-Perot echo "
+                                   "amplitude |r|^2 exp(-2 alpha d) is above the threshold, above that n and k "
+                                   "contain no Fabry-Perot information").tag(name="Limit q-value range to visible echo")
+    fp_amp_threshold = TQuantity(Q_(0.3, "%"), group=q_space_eval_grp).tag(name="Echo amplitude threshold")
 
     regulated_spline_grp = "Regulated spline optimization"
     knot_cnt = Int(100, min=2).tag(name="Spline count", group=regulated_spline_grp)
+    auto_knot_cnt = Bool(True, group=regulated_spline_grp,
+                         help="Set the spline count from the estimated Fabry-Perot period at the upper thickness "
+                              "bound, the spline count above is then ignored").tag(name="Automatic spline count")
+    knots_per_fp_period = Float(4.0, min=1.0, group=regulated_spline_grp).tag(name="Splines per Fabry-Perot period")
     reg_k = Float(1e-10).tag(name="k regularization", group=regulated_spline_grp, significant_figures=3)
     reg_n = Float(1e-10).tag(name="n regularization", group=regulated_spline_grp, significant_figures=3)
     max_nfev = Int(100, min=1).tag(name="Maximum number of function evaluations", group=regulated_spline_grp)
+    per_freq_refine = Bool(True, group=regulated_spline_grp,
+                           help="Solve n per frequency (Newton) starting from the spline fit, keeps the Fabry-Perot "
+                                "residuals the q-value is based on").tag(name="Per frequency refinement")
 
     smoothing_avg_grp = "Smoothing average"
     smoothing_avg_en = Bool(False).tag(name="Enable smoothing average of n and k", group=smoothing_avg_grp)

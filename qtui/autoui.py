@@ -1,6 +1,7 @@
 from PySide6 import QtWidgets, QtCore, QtGui
 from traitlets import Integer, Float, Unicode, Bool, Enum
 from common.measurement_selection import MeasurementSelection
+from common.settings import Settings
 from common.eval_component.eval_result import EvalResult
 from qtui.changeindicatorspinbox import ChangeIndicatorSpinBox
 from qtui.changeindicatorlineedit import ChangeIndicatorLineEdit
@@ -966,7 +967,10 @@ def generate_ui(component):
         prettyName = component.object_name or name
         newItem = QtWidgets.QTreeWidgetItem(treeitem)
         newItem.setText(0, prettyName)
-        newItem.setExpanded(True)
+        if isinstance(component, Settings):
+            newItem.setExpanded(False)
+        else:
+            newItem.setExpanded(True)
 
         widget = generate_component_ui(prettyName, component)
         newItem.widgetId = stack.addWidget(widget)
