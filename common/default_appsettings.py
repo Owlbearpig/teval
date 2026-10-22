@@ -498,6 +498,7 @@ class ComponentToggle(ComponentBase):
     q_space_eval = "Q-Space evaluation"
     en_q_space_eval = Bool(True).tag(name="Main component", group=q_space_eval, priority=1000)
     en_preprocessing = Bool(True).tag(name="Preprocessing view", group=q_space_eval, priority=1001)
+    en_multilayer = Bool(True).tag(name="Multi-layer sample", group=q_space_eval, priority=1002)
 
     regression = "Regression"
     en_regression = Bool(True).tag(name="Main component", group=regression, priority=1000)

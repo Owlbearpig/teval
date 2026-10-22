@@ -175,6 +175,7 @@ class ResultSaver(ComponentBase):
             f.attrs["model_name"] = eval_data.model_name
             f.attrs["measurement_quantity"] = eval_data.measurement_quantity
             f.attrs["measurement_names"] = eval_data.measurement_names
+            f.attrs["reference_names"] = eval_data.reference_names
             f.create_group("optimum_results").attrs.update(
                 {meas: key for meas, key in eval_data.optimum_results.items() if key in saved_keys}
             )

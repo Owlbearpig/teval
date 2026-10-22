@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import h5py
 import numpy as np
 from PySide6.QtCore import QObject, Signal
+from PySide6 import QtWidgets
+from datetime import datetime
 from common.components import ComponentBase, action
 from common.eval_component.conductivity_models import parameter_label as model_parameter_label
 from common.eval_component.model_latex import identifier_label
@@ -42,6 +44,7 @@ class EvalResultData:
     model_name: str = ""
     measurement_quantity: str = ""
     measurement_names: list[str] = field(default_factory=list)
+    reference_names: list[str] = field(default_factory=list)
     results: dict[str, SingleResultData] = field(default_factory=dict)
     optimum_results: dict[str, str] = field(default_factory=dict)
 
@@ -62,6 +65,8 @@ class EvalResult(ComponentBase):
                         group=transmission_res_grp_name).tag(priority=3, name="Timestamp")
     dataset_path = TPath(Path("."), must_exist=False, read_only=True,
                          group=transmission_res_grp_name).tag(priority=4, name="Dataset path")
+    measurement_info = Unicode("", read_only=True, group=transmission_res_grp_name).tag(
+        priority=5, name="Measurements")
     converged = Bool(False, read_only=True,
                      group=transmission_res_grp_name).tag(priority=6, name="Converged")
     q_val = Quantity(Q_(0.0, ""), read_only=True, group=transmission_res_grp_name,
@@ -126,6 +131,82 @@ class EvalResult(ComponentBase):
             return next(selected_results, None)
 
         return selected_results
+
+    @staticmethod
+    def _timestamp(name):
+        try:
+            return datetime.strptime(str(name)[:26], "%Y-%m-%dT%H-%M-%S.%f")
+        except ValueError:
+            return None
+
+    def _measurement_summary(self):
+        sams = self.eval_result_data.measurement_names
+        refs = self.eval_result_data.reference_names
+        if not sams:
+            return ""
+        parts = [f"{len(sams)} sample{'s' * (len(sams) != 1)}"]
+        if refs:
+            unique = len(set(refs))
+            parts.append(f"{len(refs)} reference{'s' * (len(refs) != 1)}"
+                         + (f" ({unique} unique)" if unique != len(refs) else ""))
+        times = [t for t in map(self._timestamp, sams) if t is not None]
+        if times:
+            t0, t1 = min(times), max(times)
+            span = t0.strftime("%Y-%m-%d %H:%M:%S")
+            if t1 != t0:
+                span += " – " + t1.strftime("%H:%M:%S" if t1.date() == t0.date() else "%Y-%m-%d %H:%M:%S")
+            parts.append(span)
+        return ", ".join(parts)
+
+    def measurement_details(self):
+        data = self.eval_result_data
+        lines = [f"Result type: {data.result_type}", f"Model: {data.model_name}", f"Dataset: {data.dataset_path}", ""]
+
+        selected = self.measurement_list.selected_item
+        if selected == "Average":
+            lines.append(f"Selected result: average of the {len(data.measurement_names)} sample measurements below")
+        elif selected:
+            lines.append(f"Selected result: {selected}")
+        key = data.optimum_results.get(selected) if selected else None
+        layer_stack = data.results[key].optimization_info.get("layer_stack") if key in data.results else None
+        if layer_stack:
+            lines.append(f"Layer stack (propagation order): {layer_stack}")
+        lines.append("")
+
+        lines.append(f"Sample measurements ({len(data.measurement_names)}):")
+        lines += [f"  {name}" for name in data.measurement_names]
+        lines.append("")
+        if data.reference_names:
+            lines.append(f"Reference measurements ({len(data.reference_names)}, "
+                         f"{len(set(data.reference_names))} unique), in the order of the samples:")
+            lines += [f"  {name}" for name in data.reference_names]
+        else:
+            lines.append("Reference measurements: not stored in this result")
+
+        return "\n".join(lines)
+
+    @action(name="Show measurement details", group=transmission_res_grp_name)
+    def show_measurement_details(self):
+        if not self.eval_result_data.measurement_names:
+            logging.info("No result loaded")
+            return
+
+        dialog = getattr(self, "_details_dialog", None)
+        if dialog is None:
+            dialog = QtWidgets.QDialog(self._ui_control_widget)
+            dialog.setWindowTitle("Measurement details")
+            layout = QtWidgets.QVBoxLayout(dialog)
+            dialog.text_edit = QtWidgets.QPlainTextEdit(dialog)
+            dialog.text_edit.setReadOnly(True)
+            dialog.text_edit.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+            layout.addWidget(dialog.text_edit)
+            dialog.resize(900, 500)
+            self._details_dialog = dialog
+
+        dialog.text_edit.setPlainText(self.measurement_details())
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     @action(name="Show Q-space plot", group=transmission_res_grp_name)
     def plot_q_space(self):
@@ -278,6 +359,7 @@ class EvalResult(ComponentBase):
                 model_name=f.attrs.get("model_name", ""),
                 measurement_quantity=f.attrs.get("measurement_quantity", ""),
                 measurement_names=list(f.attrs.get("measurement_names", [])),
+                reference_names=list(f.attrs.get("reference_names", [])),
                 optimum_results=dict(f["optimum_results"].attrs) if "optimum_results" in f else {}
             )
 
@@ -316,6 +398,7 @@ class EvalResult(ComponentBase):
             return
         self.eval_result_data = eval_result_data
         self.set_simple_traits(asdict(eval_result_data))
+        self.set_trait("measurement_info", self._measurement_summary())
         self.measurement_list.items = list(set([res.measurement for res in eval_result_data.results.values()]))
         self.measurement_list.selected_item = None
         if self.measurement_list.items:

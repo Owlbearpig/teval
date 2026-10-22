@@ -25,9 +25,10 @@ from common.eval_component.n_guess import NGuessMethod
 from common.eval_component.layer_stack import LayerStack
 from dataclasses import dataclass
 from mpl_settings import mpl_style_params
-from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance, link
+from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance, Unicode, link
 from common.traits import Quantity, Q_, ValueRange, PlotFigure
 from common.components import action
+from PySide6.QtCore import QObject, Signal
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from common.dataset_plotter import DataSetPlotter
@@ -100,6 +101,11 @@ def select_optimum(results, criterion=OptimumCriterion.prominent_min):
 
 class OptimizationCancelled(Exception):
     """Raised inside the evaluation thread when the optimization is canceled."""
+
+
+class TaskStatusSignal(QObject):
+    # (trait name, text), emitted from the evaluation thread and applied in the GUI thread
+    changed = Signal(str, str)
 
 
 def kill_process_pool(executor):
@@ -430,8 +436,15 @@ class QSpaceEval(EvalComponentBase):
     n_scan_step = Float(0.02, group=n_guess_grp).tag(name="Scan step n", priority=12)
     k_scan_max = Float(0.5, group=n_guess_grp).tag(name="Maximum scanned k", priority=13)
 
+    current_stage = Unicode("", read_only=True).tag(name="Current stage", group=EvalComponentBase.process_status,
+                                                    priority=1010, en_save=False)
+    running_tasks = Unicode("", read_only=True).tag(name="Running tasks", group=EvalComponentBase.process_status,
+                                                    priority=1011, en_save=False)
+    current_optimum = Unicode("", read_only=True).tag(name="Current optimum", group=EvalComponentBase.process_status,
+                                                      priority=1012, en_save=False)
+
     preprocessing = Instance(Preprocessing, allow_none=True).tag(priority=1, toggle=ComponentToggle.en_preprocessing)
-    layer_stack = Instance(LayerStack, allow_none=True).tag(priority=2)
+    layer_stack = Instance(LayerStack, allow_none=True).tag(priority=2, toggle=ComponentToggle.en_multilayer)
 
     def __init__(self, dataset, **kwargs):
         super().__init__(dataset, **kwargs)
@@ -442,6 +455,9 @@ class QSpaceEval(EvalComponentBase):
 
         self.preprocessing = Preprocessing(self.dataset)
         self.layer_stack = LayerStack(object_name="Multi-layer sample")
+
+        self.task_status_carrier = TaskStatusSignal()
+        self.task_status_carrier.changed.connect(self.set_trait)
 
         self._fit_range_link = link((self, "freq_range"), (self.preprocessing, "fit_range"))
         self._phi_fit_range_link = link((self.settings.eval_opt, "phi_fit_range"),
@@ -476,8 +492,29 @@ class QSpaceEval(EvalComponentBase):
             return NGuessMethod.cost_scan
         return self.n_guess_method
 
+    def _set_status(self, name, text):
+        self.task_status_carrier.changed.emit(name, text)
+
+    def _task_range_text(self, tasks):
+        if not tasks:
+            return ""
+        d = sorted({float(task[0]) for task in tasks})
+        text = f"d = {d[0]:.1f} µm" if len(d) == 1 else f"d = {d[0]:.1f} … {d[-1]:.1f} µm"
+        if self.settings.eval_opt.enable_shift_opt:
+            shifts = sorted({float(task[1]) for task in tasks})
+            text += f", shift {shifts[0]:.1f} fs" if len(shifts) == 1 else f", shift {shifts[0]:.1f} … {shifts[-1]:.1f} fs"
+        return text + f" ({len(tasks)} running)"
+
+    def _optimum_text(self, best):
+        text = f"{best.d.to('µm').magnitude:.2f} µm"
+        if self.settings.eval_opt.enable_shift_opt:
+            text += f", shift {best.shift.to('fs').magnitude:.1f} fs"
+        return text + f" (q = {Q_(best.optimization_info['q_val']).magnitude:.4g})"
+
     def reset_state(self):
         self.task_cnt_carrier.cnt_changed.emit(0)
+        self._set_status("running_tasks", "")
+        self._set_status("current_optimum", "")
         self.opt_state["d"] = None
         self.opt_state["shift"] = Q_(0, "fs")
         self.opt_state["q_min"] = np.inf
@@ -828,10 +865,17 @@ class QSpaceEval(EvalComponentBase):
             worker_func = partial(self.optimization_method.value, config_dict=opt_config)
             futures = [executor.submit(worker_func, d, shift) for d, shift in tasks]
 
+            def update_running(start_idx):
+                # submitted in order, so the running tasks follow the last finished one
+                pending = [task for task, fut in zip(tasks[start_idx:], futures[start_idx:]) if not fut.done()]
+                self._set_status("running_tasks", self._task_range_text(pending[:self.number_of_workers]))
+
+            update_running(0)
             last_report = time.monotonic()
             for task_idx, future in enumerate(futures):
                 res: SingleResultData = get_result(future)
                 self.task_cnt_carrier.cnt_changed.emit(1)
+                update_running(task_idx + 1)
 
                 info_str = f"Finished optimizing thickness {np.round(res.d, 3)} "
                 if self.settings.eval_opt.enable_shift_opt:
@@ -854,6 +898,7 @@ class QSpaceEval(EvalComponentBase):
         eval_result_data.result_type = "Transmission fit"
         eval_result_data.dataset_path = self.dataset.data_path
         eval_result_data.measurement_names = [meas.filepath.name for meas in sel_meas_list]
+        eval_result_data.reference_names = [meas.filepath.name for meas in selection.refs]
         eval_result_data.model_name = self.transmission_model.name
         eval_result_data.measurement_quantity = "Transmission"
 
@@ -867,12 +912,16 @@ class QSpaceEval(EvalComponentBase):
                     if meas != "Average":
                         logging.info(f"Evaluating measurement {meas.filepath.name}")
                     self.reset_state()
+                    meas_label = (f"Average of {len(sel_meas_list)} measurements" if meas == "Average"
+                                  else meas.filepath.name)
 
                     opt_results: list[SingleResultData] = []
                     done_keys = set()
                     d_step = d_step0
                     for iter_idx in range(max(1, iteration_count)):
                         check_cancel()
+                        stage = "coarse scan" if iter_idx == 0 else f"refinement {iter_idx} / {iteration_count - 1}"
+                        self._set_status("current_stage", f"{meas_label}, {stage}")
                         new_tasks = get_new_tasks(iter_idx, d_step, done_keys)
                         if iter_idx > 0:
                             d_step = 2 * d_step / (refine_d_cnt - 1)
@@ -882,6 +931,7 @@ class QSpaceEval(EvalComponentBase):
                             best = select_optimum(opt_results, self.optimum_criterion)
                             self.opt_state.update(d=best.d, shift=best.shift,
                                                   q_min=best.optimization_info["q_val"])
+                            self._set_status("current_optimum", self._optimum_text(best))
                             if iter_idx < iteration_count - 1:
                                 logging.info(f"Current optimum {np.round(best.d, 3)}")
 
@@ -896,11 +946,15 @@ class QSpaceEval(EvalComponentBase):
                     logging.info(f"Optimum thickness {np.round(best.d, 3)}"
                                  + f" (shift {best.shift})" * self.settings.eval_opt.enable_shift_opt)
                     eval_result_data.optimum_results[ready_results[0].measurement] = best_key
-            except BaseException:
+                    self._set_status("current_stage", f"{meas_label}, finished")
+                    self._set_status("current_optimum", self._optimum_text(best))
+            except BaseException as e:
                 kill_process_pool(executor)
+                self._set_status("current_stage", "Cancelled" if isinstance(e, OptimizationCancelled) else "Failed")
                 raise
             finally:
                 self.current_process_executor = None
+                self._set_status("running_tasks", "")
 
         return eval_result_data
 
