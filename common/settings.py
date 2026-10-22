@@ -6,7 +6,7 @@ from common.traits import (ValueRange, Path as TPath, Quantity, MultiPathClass, 
                            FitParameterTable)
 from dataclasses import asdict
 from common.units import Q_
-from traitlets import Instance, Bool, Integer, Float, Enum as TEnum, Unicode
+from traitlets import Instance, Bool, Integer, Float, Enum as TEnum, Unicode, List
 from common.components import is_component_trait
 from common.default_appsettings import AppSettings
 from traitlets.traitlets import TraitError
@@ -158,6 +158,8 @@ class Settings(AppSettings):
                     else:
                         value = dict_val
                     set_trait(trait_name, value)
+                elif issubclass(actual_type, List):
+                    set_trait(trait_name, dict_val)
                 elif issubclass(actual_type, MultiPathSelection):
                     value = getattr(instance, trait_name)
                     value.selected_paths = [Path(p) for p in dict_val]

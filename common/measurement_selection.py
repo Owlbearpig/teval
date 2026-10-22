@@ -1,5 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
+from bisect import bisect_left, bisect_right
+import re
 import threading
 import logging
 import numpy as np
@@ -52,6 +54,20 @@ class ReferenceSelection(Enum):
     max_amp_measurement = "Maximum amplitude measurement"
     closest_distance = "Closest distance"
     fix_ref = "Use fixed index reference"
+
+class SampleGrouping(Enum):
+    consecutive_position = "Consecutive at same position"
+    position = "Same position"
+    name = "Same name"
+    name_position = "Same name and position"
+    single = "Each measurement"
+
+class QueueRefPairing(Enum):
+    auto = "Reference matching criterion"
+    nearest_block = "Nearest reference block"
+    nearest = "Nearest reference in time"
+    preceding = "Preceding reference"
+    following = "Following reference"
 
 
 @dataclass(frozen=True)
@@ -176,6 +192,27 @@ class MeasurementSelection(ComponentBase):
     selection_queue = Instance(SelectionQueue, allow_none=True).tag(toggle=ComponentToggle.en_queue)
 
     queue_grp = "Queue actions"
+    sample_grouping = TEnum(SampleGrouping, SampleGrouping.consecutive_position,
+                            help="How 'Auto queue' groups sample measurements into one selection.\n"
+                                 "Consecutive at same position: uninterrupted runs at one position\n"
+                                 "Same position / Same name: all measurements sharing the position or name, "
+                                 "also when other measurements were taken in between\n"
+                                 "Each measurement: one selection per measurement"
+                            ).tag(name="Sample grouping", group=queue_grp, priority=4)
+    group_name_pattern = Unicode("",
+                                 help="Regular expression applied to the file name (without extension) to get the "
+                                      "name used by the name groupings; the first capture group is used if there "
+                                      "is one. Files that don't match are not queued.\n"
+                                      "Empty: the file name without the timestamp and the coordinates"
+                                 ).tag(name="Name pattern", group=queue_grp, priority=5)
+    queue_ref_pairing = TEnum(QueueRefPairing, QueueRefPairing.auto,
+                              help="How 'Auto queue' assigns references to the samples of a group.\n"
+                                   "Reference matching criterion: nearest reference block for file selection, "
+                                   "otherwise the reference matching criterion\n"
+                                   "Nearest reference block: the run of references closest in time to the group\n"
+                                   "Nearest / Preceding / Following reference: one reference per sample "
+                                   "measurement, e.g. for alternating sample and reference measurements"
+                              ).tag(name="Reference pairing", group=queue_grp, priority=6)
 
     reference_paths = MultiPathSelection().tag(fullwidth=False, group="Direct reference file selection", combine=True)
     sample_paths = MultiPathSelection().tag(fullwidth=False, group="Direct sample file selection", combine=True)
@@ -278,37 +315,120 @@ class MeasurementSelection(ComponentBase):
         ref_blocks = [b for (is_ref, _), b in blocks if is_ref]
         return sam_blocks, ref_blocks
 
+    def measurement_name(self, meas):
+        stem = meas.filepath.stem
+        if self.group_name_pattern:
+            match = re.search(self.group_name_pattern, stem)
+            if match is None:
+                return None
+            return match.group(1) if match.groups() else match.group(0)
+
+        stem = stem[26:]
+        stem = re.sub(r"[-_ ]*[A-Za-z]*_?-?\d+(?:\.\d+)? ?mm", "", stem)
+        return stem.strip("-_ ")
+
+    def _group_samples(self):
+        if self.sample_grouping == SampleGrouping.consecutive_position:
+            return self._split_blocks()[0]
+
+        position_key = lambda m: self.cache.coord_map_key_func(m.position)
+        key_funcs = {
+            SampleGrouping.position: position_key,
+            SampleGrouping.name: self.measurement_name,
+            SampleGrouping.name_position: lambda m: (None if self.measurement_name(m) is None
+                                                     else (self.measurement_name(m), position_key(m))),
+            SampleGrouping.single: lambda m: m.identifier,
+        }
+        key_func = key_funcs[self.sample_grouping]
+
+        groups = {}
+        for meas in sorted(self.measurements["sams"], key=lambda m: m.meas_time):
+            key = key_func(meas)
+            if key is not None:
+                groups.setdefault(key, []).append(meas)
+
+        return list(groups.values())
+
+    def _pair_refs_per_measurement(self, sam_group):
+        refs = sorted(self.measurements["refs"], key=lambda m: m.meas_time)
+        ref_times = [m.meas_time for m in refs]
+
+        paired = []
+        for meas in sam_group:
+            before_idx = bisect_right(ref_times, meas.meas_time) - 1
+            after_idx = bisect_left(ref_times, meas.meas_time)
+            before = refs[before_idx] if before_idx >= 0 else None
+            after = refs[after_idx] if after_idx < len(refs) else None
+
+            if self.queue_ref_pairing == QueueRefPairing.preceding:
+                ref = before or after
+            elif self.queue_ref_pairing == QueueRefPairing.following:
+                ref = after or before
+            elif before is None or after is None:
+                ref = before or after
+            else:
+                ref = min(before, after, key=lambda r: abs((r.meas_time - meas.meas_time).total_seconds()))
+            paired.append(ref)
+
+        return paired
+
     @action("Auto queue", enable_checker=action_en_checker, priority=3, group="Queue actions")
     def auto_queue(self):
-        sam_blocks, ref_blocks = self._split_blocks()
-        if not sam_blocks:
+        sam_groups = self._group_samples()
+        if not sam_groups:
             self.dataset.logger.warning("No sample measurements to queue")
             return
 
         run_mid_time = lambda run: run[0].meas_time + (run[-1].meas_time - run[0].meas_time) / 2
 
-        use_blocks = self.ref_sel_criterion == ReferenceSelection.file_selection
-        if use_blocks and not ref_blocks:
+        pairing = self.queue_ref_pairing
+        if pairing == QueueRefPairing.auto:
+            use_file_sel = self.ref_sel_criterion == ReferenceSelection.file_selection
+            pairing = QueueRefPairing.nearest_block if use_file_sel else None
+
+        ref_blocks = self._split_blocks()[1] if pairing == QueueRefPairing.nearest_block else []
+        if pairing is not None and not self.measurements["refs"]:
             self.dataset.logger.warning("No reference measurements in dataset")
             return
 
-        n_queued = 0
-        for sam_block in sam_blocks:
-            if use_blocks:
-                t = run_mid_time(sam_block)
-                ref_block = min(ref_blocks, key=lambda b: abs(run_mid_time(b) - t))
-                refs = list(ref_block[:len(sam_block)])
-                refs += (len(sam_block) - len(refs)) * [refs[-1]]
-            else:
-                refs = self.get_matching_refs(sam_block)
+        order = {m: idx for idx, m in enumerate(sorted(self.measurements["all"], key=lambda m: m.meas_time))}
 
-            if len(refs) != len(sam_block):
-                self.dataset.logger.warning(f"Skipping {sam_block[0].filepath.name}: no references resolved")
+        def nearest_block_refs(sam_group):
+            # a group can consist of several runs (same name or position measured more than once),
+            # each run gets the reference block closest to it
+            runs = [[sam_group[0]]]
+            for prev, meas in zip(sam_group, sam_group[1:]):
+                if order[meas] == order[prev] + 1:
+                    runs[-1].append(meas)
+                else:
+                    runs.append([meas])
+
+            refs = []
+            for run in runs:
+                t = run_mid_time(run)
+                ref_block = min(ref_blocks, key=lambda b: abs(run_mid_time(b) - t))
+                run_refs = list(ref_block[:len(run)])
+                refs += run_refs + (len(run) - len(run_refs)) * [run_refs[-1]]
+            return refs
+
+        n_queued = 0
+        for sam_group in sam_groups:
+            if pairing == QueueRefPairing.nearest_block:
+                refs = nearest_block_refs(sam_group)
+            elif pairing is None:
+                refs = self.get_matching_refs(sam_group)
+            else:
+                refs = self._pair_refs_per_measurement(sam_group)
+
+            if len(refs) != len(sam_group):
+                self.dataset.logger.warning(f"Skipping {sam_group[0].filepath.name}: no references resolved")
                 continue
-            self.selection_queue.append(Selection(tuple(sam_block), tuple(refs)))
+            self.selection_queue.append(Selection(tuple(sam_group), tuple(refs)))
             n_queued += 1
 
-        self.dataset.logger.info(f"Auto queued {n_queued} selection{'s' if n_queued != 1 else ''}")
+        self.dataset.logger.info(f"Auto queued {n_queued} selection{'s' if n_queued != 1 else ''} "
+                                 f"({self.sample_grouping.value.lower()}, {len(self.measurements['sams'])} "
+                                 f"sample measurements)")
 
     def get_selection(self, must_match=True):
         sams = self.get_selected_measurements()

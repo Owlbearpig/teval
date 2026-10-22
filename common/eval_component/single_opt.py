@@ -16,7 +16,7 @@ def shgo_transmission_optimization(d, shift, config_dict) -> SingleResultData:
     minimizer_kwargs = config_dict["minimizer_kwargs"]
     shgo_options = config_dict["shgo_options"]
 
-    model_kwargs_keys = ["n_sub", "n1", "n4", "h", "nfp"]
+    model_kwargs_keys = ["n_sub", "n1", "n4", "h", "nfp", "layers"]
     model_kwargs = {k: config_dict[k] for k in model_kwargs_keys if k in config_dict}
     model_kwargs["shift"] = shift
     model_kwargs["d"] = d

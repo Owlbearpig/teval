@@ -857,6 +857,17 @@ def generate_component_ui(name, component):
             layout.addRow(None, btn)
 
     controlLayout = FlowLayout(controlWidget)
+
+    # QSplitter ignores heightForWidth, so a control pane inside a splitter only got the height of one
+    # flow row and wrapped group boxes were hidden behind the neighbouring pane
+    class FlowHeightFilter(QtCore.QObject):
+        def eventFilter(self, obj, event):
+            if event.type() in (QtCore.QEvent.Resize, QtCore.QEvent.LayoutRequest):
+                height = controlLayout.heightForWidth(obj.width())
+                if height > 0 and obj.minimumHeight() != height:
+                    obj.setMinimumHeight(height)
+            return super().eventFilter(obj, event)
+
     scrollArea = QtWidgets.QScrollArea()
     scrollArea.setFrameStyle(QtWidgets.QFrame.NoFrame)
     scrollArea.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
@@ -878,6 +889,9 @@ def generate_component_ui(name, component):
             if group.combine:
                 hSplitter.addWidget(group)
 
+        controlWidget._flow_height_filter = FlowHeightFilter()
+        controlWidget.installEventFilter(controlWidget._flow_height_filter)
+
         vSplitter.addWidget(hSplitter)
         vSplitter.addWidget(controlWidget)
 
@@ -896,6 +910,9 @@ def generate_component_ui(name, component):
         for group in groups.values():
             if group.combine:
                 hSplitter.addWidget(group)
+
+        controlWidget._flow_height_filter = FlowHeightFilter()
+        controlWidget.installEventFilter(controlWidget._flow_height_filter)
 
         vSplitter.addWidget(controlWidget)
         vSplitter.addWidget(hSplitter)
@@ -1023,6 +1040,15 @@ def generate_ui(component):
     msgPaneLayout = QtWidgets.QVBoxLayout(messagePane)
     msgBrowser = QtWidgets.QTextBrowser(messagePane)
     msgPaneLayout.addWidget(msgBrowser)
+
+    vSplitter.setStretchFactor(0, 1)
+    vSplitter.setStretchFactor(1, 0)
+
+    def set_message_pane_height():
+        total = sum(vSplitter.sizes())
+        msg_height = max(messagePane.minimumSizeHint().height(), total // 4)
+        vSplitter.setSizes([total - msg_height, msg_height])
+    QtCore.QTimer.singleShot(0, set_message_pane_height)
 
     return win, msgBrowser
 

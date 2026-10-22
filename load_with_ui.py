@@ -61,7 +61,11 @@ def run(globals, filename : str):
 
     with rootClass() as root:
         w, msgBrowser = generate_ui(root)
-        w.resize(1410, 792)
+        available = QtWidgets.QApplication.primaryScreen().availableGeometry()
+        size = QtCore.QSize(max(1410, int(0.9 * available.width())),
+                            max(792, int(0.9 * available.height())))
+        w.resize(size.boundedTo(available.size()))
+        w.move(available.center() - w.rect().center())
 
         logging.captureWarnings(True)
         handler = QHTMLTextBrowserLoggingHandler(msgBrowser)

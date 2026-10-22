@@ -28,7 +28,7 @@ def cost_scan_n_guess(d, shift, config_dict):
     n_step = config_dict["n_scan_step"]
     k_max = config_dict["k_scan_max"]
 
-    model_kwargs_keys = ["n_sub", "n1", "n4", "h", "nfp"]
+    model_kwargs_keys = ["n_sub", "n1", "n4", "h", "nfp", "layers"]
     model_kwargs = {k: config_dict[k] for k in model_kwargs_keys if k in config_dict}
     model_kwargs["shift"] = shift
     model_kwargs["d"] = d

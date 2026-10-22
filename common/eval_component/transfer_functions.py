@@ -89,6 +89,49 @@ def t_tmm_model_2layer_no_sub_echo(n, freq, **opt_kwargs):
     return np.nan_to_num(t)
 
 
+def layer_n(layer, freq):
+    n_grid = layer["n"]
+    if np.ndim(n_grid) == 0:
+        return n_grid
+    return np.interp(freq, layer["f"], n_grid.real) + 1j * np.interp(freq, layer["f"], n_grid.imag)
+
+
+@layer_cnt_decorator(layer_cnt=1)
+def t_tmm_model_multilayer(n, freq, **opt_kwargs):
+    # "layers" lists the layers in propagation order: known layers {"n": constant or n(f) on grid "f", "d": µm}
+    # and one unknown layer {"unknown": True}, which gets n and the optimized thickness d
+    layers = opt_kwargs.get("layers")
+    if not layers:
+        raise ValueError("The multi-layer model needs a layer stack with one unknown layer (Multi-layer sample)")
+    d = opt_kwargs["d"]
+    n1 = opt_kwargs["n1"]
+    n4 = opt_kwargs["n4"]
+    shift = opt_kwargs["shift"]
+
+    n_list, d_list = [n1], [np.inf]
+    for layer in layers:
+        if layer.get("unknown", False):
+            n_list.append(n)
+            d_list.append(d)
+        else:
+            n_list.append(layer_n(layer, freq))
+            d_list.append(layer["d"])
+    n_list.append(n4)
+    d_list.append(np.inf)
+
+    lam_vac = c_thz / freq
+    w_ = 2 * np.pi * freq
+
+    e_sam = coh_tmm_wrapper("s", n_list, d_list, 0, lam_vac)
+    e_ref = np.exp(1j * (np.sum(d_list[1:-1]) * w_ / c_thz))
+
+    t = np.conj(e_sam / e_ref)
+
+    t = shift_t(freq, t, shift)
+
+    return np.nan_to_num(t)
+
+
 @layer_cnt_decorator(layer_cnt=1)
 def model_1layer_inf(n, freq, **opt_kwargs):
     d = opt_kwargs["d"]
@@ -286,6 +329,7 @@ class TransmissionModels(Enum):
     tmm_1layer = member(t_tmm_model_1layer)
     tmm_2layer = member(t_tmm_model_2layer)
     tmm_2layer_no_sub_echo = member(t_tmm_model_2layer_no_sub_echo)
+    tmm_multilayer = member(t_tmm_model_multilayer)
     model_1layer_inf = member(model_1layer_inf)
     model_1layer_fp = member(model_1layer_fp)
     model_2layer = member(model_2layer)

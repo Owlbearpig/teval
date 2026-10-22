@@ -55,7 +55,7 @@ def spline_transmission_optimization(d, shift, config_dict):
     lambda_k = config_dict["reg_k"]
     max_nfev = config_dict["max_nfev"]
 
-    model_kwargs_keys = ["n_sub", "n1", "n4", "h", "nfp"]
+    model_kwargs_keys = ["n_sub", "n1", "n4", "h", "nfp", "layers"]
     model_kwargs = {k: config_dict[k] for k in model_kwargs_keys if k in config_dict}
     model_kwargs["shift"] = shift
     model_kwargs["d"] = d

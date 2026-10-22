@@ -1,4 +1,5 @@
 import logging
+import time
 import traceback
 import numpy as np
 import matplotlib as mpl
@@ -21,6 +22,7 @@ from functools import partial
 from common.eval_component.single_opt import shgo_transmission_optimization
 from common.eval_component.t_fit_global import spline_transmission_optimization
 from common.eval_component.n_guess import NGuessMethod
+from common.eval_component.layer_stack import LayerStack
 from dataclasses import dataclass
 from mpl_settings import mpl_style_params
 from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance, link
@@ -33,11 +35,12 @@ from common.dataset_plotter import DataSetPlotter
 action = partial(action, check_init=True, rc_params=mpl_style_params)
 
 
-def fp_round_trip_time(freq_axis, t_exp, d):
+def fp_round_trip_time(freq_axis, t_exp, d, known_delay=0.0):
+    # known_delay: part of the measured group delay caused by other (known) layers of the sample
     phi = np.unwrap(np.angle(t_exp))
     group_delay = np.abs(np.polyfit(2 * np.pi * freq_axis, phi, 1)[0])
 
-    return 2 * (group_delay + d / c_thz)
+    return 2 * (max(group_delay - known_delay, 0.0) + d / c_thz)
 
 
 def estimate_fp_echo_count(time_traces, t_rt):
@@ -50,9 +53,10 @@ def estimate_fp_echo_count(time_traces, t_rt):
     return max(int(np.floor(min(counts))), 0)
 
 
-def fp_echo_amplitude(freq_axis, n, d):
-    r = (n - 1) / (n + 1)
-    return np.abs(r) ** 2 * np.exp(-4 * np.pi * freq_axis * np.abs(n.imag) * 2 * d / c_thz)
+def fp_echo_amplitude(freq_axis, n, d, n_prev=1, n_next=1):
+    r_prev = (n - n_prev) / (n + n_prev)
+    r_next = (n - n_next) / (n + n_next)
+    return np.abs(r_prev * r_next) * np.exp(-4 * np.pi * freq_axis * np.abs(n.imag) * 2 * d / c_thz)
 
 
 def q_space_spectrum(freq_axis, y, pad_factor=16):
@@ -427,6 +431,7 @@ class QSpaceEval(EvalComponentBase):
     k_scan_max = Float(0.5, group=n_guess_grp).tag(name="Maximum scanned k", priority=13)
 
     preprocessing = Instance(Preprocessing, allow_none=True).tag(priority=1, toggle=ComponentToggle.en_preprocessing)
+    layer_stack = Instance(LayerStack, allow_none=True).tag(priority=2)
 
     def __init__(self, dataset, **kwargs):
         super().__init__(dataset, **kwargs)
@@ -436,6 +441,7 @@ class QSpaceEval(EvalComponentBase):
         self.opt_state = {}
 
         self.preprocessing = Preprocessing(self.dataset)
+        self.layer_stack = LayerStack(object_name="Multi-layer sample")
 
         self._fit_range_link = link((self, "freq_range"), (self.preprocessing, "fit_range"))
         self._phi_fit_range_link = link((self.settings.eval_opt, "phi_fit_range"),
@@ -448,10 +454,27 @@ class QSpaceEval(EvalComponentBase):
         if t_exp is None:
             t_exp = np.mean(self.dataset.transmission(meas_list, ref_list)[:, self.freq_range_idx], axis=0)
         d = np.mean(self.d_opt_axis_bounds.magnitude)
-        t_rt = fp_round_trip_time(self.freq_axis, t_exp, d)
+        t_rt = fp_round_trip_time(self.freq_axis, t_exp, d, self.known_layer_delay(self.freq_axis))
         count = estimate_fp_echo_count(self.dataset.get_multi_data(meas_list, Domain.Time), t_rt)
 
         return t_rt, count
+
+    def is_multilayer(self):
+        return self.transmission_model == TransmissionModels.tmm_multilayer
+
+    def known_layer_delay(self, freq_axis):
+        if not self.is_multilayer():
+            return 0.0
+        try:
+            return self.layer_stack.known_delay(freq_axis)
+        except ValueError:
+            return 0.0
+
+    @property
+    def effective_n_guess_method(self):
+        if self.is_multilayer() and self.n_guess_method == NGuessMethod.tof:
+            return NGuessMethod.cost_scan
+        return self.n_guess_method
 
     def reset_state(self):
         self.task_cnt_carrier.cnt_changed.emit(0)
@@ -470,7 +493,7 @@ class QSpaceEval(EvalComponentBase):
         return self.format_meas_dict(meas_list, t_exp)
 
     def n_guess(self, selection):
-        if self.n_guess_method == NGuessMethod.cost_scan:
+        if self.effective_n_guess_method == NGuessMethod.cost_scan:
             return None
         meas_list = list(selection.sams)
         d_init = np.mean(self.d_opt_axis_bounds.magnitude)
@@ -606,12 +629,13 @@ class QSpaceEval(EvalComponentBase):
         d = res_data.d.magnitude
         if eval_opt.auto_fp_time:
             t_exp = res_data.datasets["t_exp"].data.magnitude[freq_range_idx]
-            t_fp = fp_round_trip_time(freq_axis, t_exp, d)
+            t_fp = fp_round_trip_time(freq_axis, t_exp, d, self.known_layer_delay(freq_axis))
         else:
             t_fp = eval_opt.fp_spacing.to("ps").magnitude
 
         n = res_data.datasets["n"].data.magnitude[freq_range_idx]
-        echo_amp = fp_echo_amplitude(freq_axis, n, d)
+        n_prev, n_next = self.layer_stack.unknown_neighbor_n(freq_axis) if self.is_multilayer() else (1, 1)
+        echo_amp = fp_echo_amplitude(freq_axis, n, d, n_prev, n_next)
         if eval_opt.auto_q_space_f_max:
             below = np.flatnonzero(echo_amp < eval_opt.fp_amp_threshold.to("").magnitude)
             f_max = freq_axis[below[0]] if len(below) else freq_axis[-1]
@@ -650,6 +674,17 @@ class QSpaceEval(EvalComponentBase):
     def build_context(self, selection) -> SelectionContext:
         t_exp_dict = self.t_exp_dict(selection)
         t_model_kwargs = self.get_t_model_kwargs()
+        if self.is_multilayer():
+            try:
+                t_model_kwargs["layers"] = self.layer_stack.model_layers()
+            except ValueError as e:
+                logging.error(f"Multi-layer sample: {e}")
+                raise
+            self.layer_stack.check_frequency_range(self.freq_axis)
+            logging.info(f"Multi-layer sample (propagation order): {self.layer_stack.describe_stack()}")
+            if self.n_guess_method == NGuessMethod.tof:
+                logging.info("Using the model cost scan as initial guess, the time of flight guess "
+                             "doesn't account for the known layers")
         if self.settings.eval_opt.auto_fp_count:
             t_exp_0 = np.asarray(next(iter(t_exp_dict.values())))[:, 1]
             t_rt, t_model_kwargs["nfp"] = self.fp_echo_estimate(list(selection.sams), list(selection.refs), t_exp_0)
@@ -673,7 +708,8 @@ class QSpaceEval(EvalComponentBase):
             return knot_cnt
 
         t_exp_0 = np.asarray(next(iter(ctx.t_exp_dict.values())))[:, 1]
-        fp_period = 1 / fp_round_trip_time(self.freq_axis, t_exp_0, self.d_opt_axis_bounds[1].magnitude)
+        fp_period = 1 / fp_round_trip_time(self.freq_axis, t_exp_0, self.d_opt_axis_bounds[1].magnitude,
+                                           self.known_layer_delay(self.freq_axis))
         knots_per_period = eval_opt.knots_per_fp_period
         min_knots = int(np.ceil(knots_per_period * np.ptp(self.freq_axis) / fp_period)) + 1
 
@@ -705,7 +741,7 @@ class QSpaceEval(EvalComponentBase):
             "shgo_options": self.settings.shgo_options.get_shgo_options(),
             "n": self.settings.shgo_options.n,
             "iters": self.settings.shgo_options.iters,
-            "n_guess_method": self.n_guess_method,
+            "n_guess_method": self.effective_n_guess_method,
             "n_scan_range": tuple(float(v) for v in self.n_scan_range),
             "n_scan_step": self.n_scan_step,
             "k_scan_max": self.k_scan_max,
@@ -792,16 +828,24 @@ class QSpaceEval(EvalComponentBase):
             worker_func = partial(self.optimization_method.value, config_dict=opt_config)
             futures = [executor.submit(worker_func, d, shift) for d, shift in tasks]
 
-            for future in futures:
+            last_report = time.monotonic()
+            for task_idx, future in enumerate(futures):
                 res: SingleResultData = get_result(future)
                 self.task_cnt_carrier.cnt_changed.emit(1)
 
                 info_str = f"Finished optimizing thickness {np.round(res.d, 3)} "
                 if self.settings.eval_opt.enable_shift_opt:
                     info_str += f"with a shift of {res.shift}"
-                logging.info(info_str)
+                logging.debug(info_str)
+
+                is_last = task_idx == len(futures) - 1
+                if is_last or time.monotonic() - last_report > 5:
+                    last_report = time.monotonic()
+                    logging.info(f"Finished {task_idx + 1} / {len(futures)} tasks (thickness {np.round(res.d, 3)})")
 
                 self.calc_q_val(res)
+                if self.is_multilayer():
+                    res.optimization_info["layer_stack"] = self.layer_stack.describe_stack()
                 task_results.append(res)
 
             return task_results
@@ -838,6 +882,8 @@ class QSpaceEval(EvalComponentBase):
                             best = select_optimum(opt_results, self.optimum_criterion)
                             self.opt_state.update(d=best.d, shift=best.shift,
                                                   q_min=best.optimization_info["q_val"])
+                            if iter_idx < iteration_count - 1:
+                                logging.info(f"Current optimum {np.round(best.d, 3)}")
 
                     opt_results.sort(key=lambda res_: (res_.d.magnitude, res_.shift.magnitude))
                     ready_results = self.prepare_results(meas, opt_results, ctx)
