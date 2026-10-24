@@ -4,9 +4,8 @@ import matplotlib.pyplot as plt
 import h5py
 import numpy as np
 from PySide6.QtCore import QObject, Signal
-from PySide6 import QtWidgets
 from datetime import datetime
-from common.components import ComponentBase, action
+from common.components import ComponentBase, action, show_text_window
 from common.eval_component.conductivity_models import parameter_label as model_parameter_label
 from common.eval_component.model_latex import identifier_label
 from common.eval_component.quantity_set import QuantityDataSetDict, QuantityDataSet
@@ -191,22 +190,7 @@ class EvalResult(ComponentBase):
             logging.info("No result loaded")
             return
 
-        dialog = getattr(self, "_details_dialog", None)
-        if dialog is None:
-            dialog = QtWidgets.QDialog(self._ui_control_widget)
-            dialog.setWindowTitle("Measurement details")
-            layout = QtWidgets.QVBoxLayout(dialog)
-            dialog.text_edit = QtWidgets.QPlainTextEdit(dialog)
-            dialog.text_edit.setReadOnly(True)
-            dialog.text_edit.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
-            layout.addWidget(dialog.text_edit)
-            dialog.resize(900, 500)
-            self._details_dialog = dialog
-
-        dialog.text_edit.setPlainText(self.measurement_details())
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+        show_text_window(self, "Measurement details", self.measurement_details(), attr="_details_dialog")
 
     @action(name="Show Q-space plot", group=transmission_res_grp_name)
     def plot_q_space(self):

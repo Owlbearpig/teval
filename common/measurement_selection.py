@@ -5,7 +5,7 @@ import re
 import threading
 import logging
 import numpy as np
-from common.components import ComponentBase, action
+from common.components import ComponentBase, action, show_text_window
 from common.default_appsettings import ComponentToggle
 from common.traits import MultiPathSelection, ValueRange, MultiPathClass, StrListSelection, StrList
 from common.units import Q_
@@ -97,6 +97,76 @@ class Selection:
                 lines.append(f"Last sample: {self.sams[-1].filepath.name}")
         return "\n".join(lines)
 
+    def details(self, queue_id="") -> str:
+        # everything about the selection for the details window: summary, then every sample with its reference
+        def fmt_time(t):
+            return t.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+        def fmt_gap(seconds):
+            seconds = abs(seconds)
+            if seconds < 120:
+                return f"{seconds:.1f} s"
+            return f"{seconds / 60:.1f} min" if seconds < 7200 else f"{seconds / 3600:.2f} h"
+
+        def fmt_range(vals):
+            lo, hi = min(vals), max(vals)
+            return f"{lo:g} mm" if lo == hi else f"{lo:g} - {hi:g} mm"
+
+        def distance(a, b):
+            return float(np.hypot(a.position[0] - b.position[0], a.position[1] - b.position[1]))
+
+        sams, refs = self.sams, self.refs
+        pairs = list(zip(sams, refs)) if len(refs) == len(sams) else [(sam, None) for sam in sams]
+        lines = [f"Selection: {queue_id or self.label}", "",
+                 f"Samples: {len(sams)}",
+                 f"References: {len(refs)} ({len(set(refs))} unique)"]
+        if len(refs) != len(sams):
+            lines.append("  (the references are not paired one to one with the samples)")
+        if sams:
+            names = sorted({str(sam.sample_name) for sam in sams})
+            lines.append(f"Sample name{'s' * (len(names) > 1)}: {', '.join(names)}")
+            folders = sorted({str(sam.filepath.parent) for sam in sams})
+            lines.append(f"Sample folder{'s' * (len(folders) > 1)}: {'; '.join(folders)}")
+            times = sorted(sam.meas_time for sam in sams)
+            duration = (times[-1] - times[0]).total_seconds()
+            lines.append(f"Measured: {fmt_time(times[0])}" + (f" - {fmt_time(times[-1])} ({fmt_gap(duration)})"
+                                                               if duration else ""))
+            lines.append(f"Positions: {len({sam.position for sam in sams})} distinct, "
+                         f"x {fmt_range([sam.position[0] for sam in sams])}, "
+                         f"y {fmt_range([sam.position[1] for sam in sams])}")
+        paired = [(sam, ref) for sam, ref in pairs if ref is not None]
+        if paired:
+            gaps = np.array([(sam.meas_time - ref.meas_time).total_seconds() for sam, ref in paired])
+            dists = np.array([distance(sam, ref) for sam, ref in paired])
+            before = int(np.sum(gaps >= 0))
+            lines.append(f"Sample - reference time: median {fmt_gap(np.median(np.abs(gaps)))}, maximum "
+                         f"{fmt_gap(np.max(np.abs(gaps)))}; reference before the sample for {before} / "
+                         f"{len(paired)}")
+            lines.append(f"Sample - reference distance: median {np.median(dists):.2f} mm, maximum "
+                         f"{np.max(dists):.2f} mm")
+        if refs:
+            ref_folders = sorted({str(ref.filepath.parent) for ref in refs})
+            lines.append(f"Reference folder{'s' * (len(ref_folders) > 1)}: {'; '.join(ref_folders)}")
+        lines.append("")
+
+        lines.append("Sample measurements and their references (time: sample - reference, positive: reference "
+                     "measured before):")
+        width = max((len(sam.filepath.name) for sam in sams), default=0)
+        for i, (sam, ref) in enumerate(pairs, 1):
+            x, y = sam.position
+            line = f"  {i:>4}  {sam.filepath.name:<{width}}  ({x:g}, {y:g}) mm"
+            if ref is not None:
+                gap = (sam.meas_time - ref.meas_time).total_seconds()
+                line += (f"  ->  {ref.filepath.name}  {'+' if gap >= 0 else '-'}{fmt_gap(gap)}, "
+                         f"{distance(sam, ref):.2f} mm")
+            lines.append(line)
+        if len(refs) != len(sams) and refs:
+            lines.append("")
+            lines.append(f"Reference measurements ({len(refs)}):")
+            lines += [f"  {i:>4}  {ref.filepath.name}" for i, ref in enumerate(refs, 1)]
+
+        return "\n".join(lines)
+
     def __repr__(self) -> str:
         return self.label
 
@@ -135,6 +205,10 @@ class SelectionQueue(ComponentBase):
             self._queue[f"#{self._counter} {selection.label}"] = selection
             self._update_listing()
 
+    def pending(self):
+        with self._lock:
+            return list(self._queue.items())
+
     def pop_next(self):
         with self._lock:
             if not self._queue:
@@ -153,6 +227,16 @@ class SelectionQueue(ComponentBase):
 
     def __len__(self):
         return len(self._queue)
+
+    @action(name="Show selection details")
+    def show_selection_details(self):
+        with self._lock:
+            queue_id = self.queued_selections.selected_item
+            selection = self._queue.get(queue_id)
+        if selection is None:
+            logging.warning("Select a queued selection first")
+            return
+        show_text_window(self, f"Selection details: {queue_id}", selection.details(queue_id))
 
     @action(name="Remove selected selection")
     def remove_selected_item(self):
@@ -251,11 +335,19 @@ class MeasurementSelection(ComponentBase):
         ref_filenames = [f"{meas.filepath.name}" for meas in new_measurements["refs"]]
         sam_filenames = [f"{meas.filepath.name}" for meas in new_measurements["sams"]]
 
+        # a selection is kept if the new dataset has a file of the same name, but with the new dataset's path: the
+        # old path may not exist anymore (moved or renamed data folder) and would fail the path validation
+        def remap(selected, meas_list):
+            by_name = {meas.filepath.name: meas.filepath for meas in meas_list}
+            return [by_name[p.name] for p in selected if p.name in by_name]
+
         self.reference_paths = MultiPathClass(root_path=root_path,
-                                              selected_paths=self.reference_paths.selected_paths,
+                                              selected_paths=remap(self.reference_paths.selected_paths,
+                                                                   new_measurements["refs"]),
                                               shown_filenames=ref_filenames)
         self.sample_paths = MultiPathClass(root_path=root_path,
-                                           selected_paths=self.sample_paths.selected_paths,
+                                           selected_paths=remap(self.sample_paths.selected_paths,
+                                                                new_measurements["sams"]),
                                            shown_filenames=sam_filenames)
 
         self.reference_paths.observe(self.update_sel_cnt_info, names="selected_paths")

@@ -1,3 +1,4 @@
+import html
 import logging
 import sys
 from common.components import ComponentBase
@@ -16,10 +17,12 @@ class QHTMLTextBrowserLoggingHandler(QtCore.QObject, logging.Handler):
         'CRITICAL': 'darkred',
     }
 
-    def __init__(self, textBrowser):
+    def __init__(self, textBrowser, max_lines=lambda: 250):
+        # max_lines: callable, so a changed setting applies to the next message
         QtCore.QObject.__init__(self)
         logging.Handler.__init__(self)
         self.textBrowser = textBrowser
+        self.max_lines = max_lines
 
         self.log_signal.connect(self.append_log_to_ui)
 
@@ -29,10 +32,13 @@ class QHTMLTextBrowserLoggingHandler(QtCore.QObject, logging.Handler):
 
     def append_log_to_ui(self, msg):
         document = self.textBrowser.document()
-        if document.blockCount() > 100:
+        # one block per message, the new one is appended below
+        excess = document.blockCount() - max(int(self.max_lines()), 1) + 1
+        if excess > 0:
             cursor = self.textBrowser.textCursor()
             cursor.movePosition(cursor.MoveOperation.Start)
-            cursor.movePosition(cursor.MoveOperation.Down, cursor.MoveMode.KeepAnchor, document.blockCount() - 100)
+            # by blocks, not visual lines: Down would count wrapped lines
+            cursor.movePosition(cursor.MoveOperation.NextBlock, cursor.MoveMode.KeepAnchor, excess)
             cursor.removeSelectedText()
 
         self.textBrowser.append(msg)
@@ -51,6 +57,11 @@ class HTMLFormatter(logging.Formatter):
         obj_name = getattr(record, "object_name", record.name)
         obj_prefix = f"[{obj_name}] " if obj_name and obj_name != 'root' else ""
 
+        if getattr(record, "action_header", False):
+            # empty line, then the pressed button as a highlighted line
+            return (f'<br><span style="background-color:#dce6f4; color:#1f4e8c;">&nbsp;<b>&#9654; '
+                    f'{html.escape(record.getMessage())}</b>&nbsp;{html.escape(obj_prefix)}{asctime}&nbsp;</span>')
+
         level_html = f'<font color="{color}"><b>{record.levelname}</b></font>'
 
         return f"{asctime} {level_html} {obj_prefix}: {record.getMessage()}"
@@ -68,7 +79,7 @@ def run(globals, filename : str):
         w.move(available.center() - w.rect().center())
 
         logging.captureWarnings(True)
-        handler = QHTMLTextBrowserLoggingHandler(msgBrowser)
+        handler = QHTMLTextBrowserLoggingHandler(msgBrowser, max_lines=lambda: root.settings.max_log_lines)
         handler.setFormatter(HTMLFormatter())
         logging.getLogger().addHandler(handler)
         logging.getLogger().setLevel(logging.INFO)

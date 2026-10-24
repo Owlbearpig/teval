@@ -5,6 +5,8 @@ from common.dataset import Averaging, DataSetFormatter
 import numpy as np
 import threading
 import logging
+import time
+from datetime import datetime, timedelta
 from PySide6.QtCore import QObject, Signal, QTimer
 from common.eval_component.transfer_functions import TransmissionModels
 from common.eval_component.cost_functions import CostFunctions
@@ -44,6 +46,24 @@ class ResultSignal(QObject):
 class RemainingTaskCntSignal(QObject):
     cnt_changed = Signal(int)
 
+
+class ProgressSignal(QObject):
+    # emitted from the evaluation thread, applied in the GUI thread
+    started = Signal(int)
+    total_set = Signal(int)
+    total_added = Signal(int)
+    advanced = Signal(int)
+    stopped = Signal(str)
+
+
+def format_duration(seconds):
+    seconds = int(round(seconds))
+    if seconds < 60:
+        return f"{seconds} s"
+    if seconds < 3600:
+        return f"{seconds // 60} min {seconds % 60:02d} s"
+    return f"{seconds // 3600} h {seconds % 3600 // 60:02d} min"
+
 class EvalComponentBase(DataSetFormatter):
     selected_result_path = TPath(Path("")).tag(name="Load result", en_save=False, priority=-100)
     number_of_workers = Integer(8).tag(name="Number of cpu cores to assign", priority=2)
@@ -57,12 +77,16 @@ class EvalComponentBase(DataSetFormatter):
     process_status = "Processing"
     activity = Unicode("Idle", read_only=True).tag(name="Status", group=process_status,
                                                    priority=1004, en_save=False)
-    optimization_progress = Float(0, min=0, max=1, read_only=True).tag(name="Progress", group=process_status,
+    optimization_progress = Float(0, min=0, max=1, read_only=True).tag(name="Overall progress", group=process_status,
                                                                        priority=1005, en_save=False)
+    time_remaining = Unicode("", read_only=True).tag(name="Time remaining", group=process_status, priority=1005.5,
+                                                     en_save=False)
     completed_tasks = Integer(0, read_only=True).tag(name="Completed tasks",
                                                      priority=1006, group=process_status, en_save=False)
-    total_tasks = Integer(0, read_only=True).tag(name="Total tasks",
-                                                 priority=1007, group=process_status, en_save=False)
+    total_tasks = Integer(0, read_only=True,
+                          help="Exact for the q-space evaluation of selections. For the image evaluation an estimate, "
+                               "corrected while it runs").tag(name="Total tasks", priority=1007, group=process_status,
+                                                              en_save=False)
 
     current_result = Instance(EvalResult)
     result_saver = Instance(ResultSaver)
@@ -82,6 +106,17 @@ class EvalComponentBase(DataSetFormatter):
 
         self.task_cnt_carrier = RemainingTaskCntSignal()
         self.task_cnt_carrier.cnt_changed.connect(self.update_progress)
+
+        self.progress_carrier = ProgressSignal()
+        self.progress_carrier.started.connect(self._on_progress_started)
+        self.progress_carrier.total_set.connect(self._on_progress_total_set)
+        self.progress_carrier.total_added.connect(lambda n: self._on_progress_total_set(self.total_tasks + n))
+        self.progress_carrier.advanced.connect(self._on_progress_advanced)
+        self.progress_carrier.stopped.connect(self._on_progress_stopped)
+        self._progress_t0 = None
+        self._progress_t_first = None  # first completed task, the rate excludes the start up (pool, data preparation)
+        self._progress_cnt_first = 0
+        self._progress_last_text = 0.0
 
         self._cancel_event = threading.Event()
         self._thread_executor = None
@@ -121,21 +156,73 @@ class EvalComponentBase(DataSetFormatter):
         self._request_cancel()
         logging.info("Cancelling evaluation...")
 
+    # overall progress of an evaluation run, callable from the evaluation thread
+    def progress_start(self, total):
+        self.progress_carrier.started.emit(int(total))
+
+    def progress_set_total(self, total):
+        self.progress_carrier.total_set.emit(int(total))
+
+    def progress_add_total(self, cnt):
+        if cnt:
+            self.progress_carrier.total_added.emit(int(cnt))
+
+    def progress_advance(self, cnt=1):
+        if cnt:
+            self.progress_carrier.advanced.emit(int(cnt))
+
+    def progress_stop(self, state="Finished"):
+        self.progress_carrier.stopped.emit(state)
+
     def update_progress(self, task_cnt_change: int = 0):
-        if task_cnt_change == 0:
-            completed, total = 0, 0
-            progress = 0
-        elif task_cnt_change == 1:
-            completed, total = self.completed_tasks + task_cnt_change, self.total_tasks
+        # task_cnt_carrier: 0 resets, 1 completes a task, more sets a new total
+        if task_cnt_change == 1:
+            self._on_progress_advanced(1)
         else:
-            completed, total = 0, task_cnt_change
-            progress = 0
+            self._on_progress_started(task_cnt_change)
 
-        self.set_trait("completed_tasks", completed)
-        self.set_trait("total_tasks", total)
+    def _on_progress_started(self, total):
+        self._progress_t0 = time.monotonic()
+        self._progress_t_first, self._progress_cnt_first = None, 0
+        self.set_trait("completed_tasks", 0)
+        self.set_trait("time_remaining", "")
+        self._on_progress_total_set(total)
 
+    def _on_progress_total_set(self, total):
+        # an estimated total is never below the completed tasks
+        self.set_trait("total_tasks", max(int(total), self.completed_tasks))
+        self._update_progress_value()
+
+    def _on_progress_advanced(self, cnt):
+        self.set_trait("completed_tasks", self.completed_tasks + cnt)
+        if self.completed_tasks > self.total_tasks:
+            self.set_trait("total_tasks", self.completed_tasks)
+        now = time.monotonic()
+        if self._progress_t_first is None:
+            self._progress_t_first, self._progress_cnt_first = now, self.completed_tasks
+        self._update_progress_value()
+        if now - self._progress_last_text > 0.5 or self.completed_tasks == self.total_tasks:
+            self._progress_last_text = now
+            self.set_trait("time_remaining", self._remaining_text(now))
+
+    def _on_progress_stopped(self, state):
+        if self._progress_t0 is not None:
+            state += f" after {format_duration(time.monotonic() - self._progress_t0)}"
+        self.set_trait("time_remaining", state)
+        self._progress_t0 = None
+
+    def _update_progress_value(self):
         progress = 0 if not self.total_tasks else self.completed_tasks / self.total_tasks
         self.set_trait("optimization_progress", progress)
+
+    def _remaining_text(self, now):
+        elapsed = f"elapsed {format_duration(now - self._progress_t0)}" if self._progress_t0 is not None else ""
+        done = self.completed_tasks - self._progress_cnt_first
+        if done < 1 or now <= self._progress_t_first:
+            return elapsed
+        remaining = (self.total_tasks - self.completed_tasks) * (now - self._progress_t_first) / done
+        finish = datetime.now() + timedelta(seconds=remaining)
+        return f"~{format_duration(remaining)} (done ~{finish:%H:%M}), {elapsed}"
 
     @observe("selected_result_path")
     def set_selected_result(self, change):

@@ -5,6 +5,7 @@ from scipy.optimize import least_squares
 from common.consts import c_thz
 from common.eval_component.n_guess import get_n_guess
 from common.eval_component.eval_result import SingleResultData
+from common.eval_component import fast_kernels
 from common.units import Q_
 from common.eval_component.quantity_set import QuantityDataSet
 from datetime import datetime
@@ -49,6 +50,9 @@ def spline_transmission_optimization(d, shift, config_dict):
     n0 = get_n_guess(d, shift, config_dict)
     t_exp = np.asarray(config_dict["t_exp"])
     transmission_model = config_dict["transmission_model"]
+    use_fast = config_dict.get("use_compiled_kernels", False) and fast_kernels.fast_path_available(transmission_model)
+    if use_fast:
+        transmission_model = fast_kernels.t_slab_model
     cost_fun = config_dict["cost_fun"]
     n_knots = config_dict["knot_count"]
     lambda_n = config_dict["reg_n"]
@@ -124,15 +128,7 @@ def spline_transmission_optimization(d, shift, config_dict):
     kappa_0 = n0.imag[knot_idx]
 
     p0 = np.concatenate([n_real_0, kappa_0])
-    """
-    best = (np.inf, 1, 1)
-    for x in np.arange(0.50, 2.0, 0.10):
-        for y in np.arange(0.50, 2.0, 0.10):
-            p0_test = np.concatenate([x*n_real_0, y*kappa_0])
-            s = np.sum(residual_fun(p0_test))
-            if s < best[0]:
-                best = (s, x, y)
-    """
+
     n0_real_knots = n0.real[knot_idx]
     n0_imag_knots = n0.imag[knot_idx]
 
@@ -151,6 +147,7 @@ def spline_transmission_optimization(d, shift, config_dict):
         bounds=(lower_bounds, upper_bounds),
         x_scale="jac",
         max_nfev = max_nfev,
+        tr_solver=config_dict.get("tr_solver", "exact"),
     )
 
     n_opt_res, t_mod_res = calculate_model(opt_res.x)
@@ -158,7 +155,11 @@ def spline_transmission_optimization(d, shift, config_dict):
     converged = opt_res.success
     if config_dict.get("per_freq_refine", False):
         # the spline fit is only the start value here, hitting max_nfev doesn't matter
-        n_opt_res, converged_f = refine_n_per_frequency(n_spline, freq_axis, t_exp, transmission_model, model_kwargs)
+        if use_fast:
+            n_opt_res, converged_f = fast_kernels.refine_n_per_frequency(n_spline, freq_axis, t_exp, d, shift)
+        else:
+            n_opt_res, converged_f = refine_n_per_frequency(n_spline, freq_axis, t_exp, transmission_model,
+                                                            model_kwargs)
         converged = bool(np.all(converged_f))
         t_mod_res = transmission_model(n_opt_res, freq_axis, **model_kwargs)
 

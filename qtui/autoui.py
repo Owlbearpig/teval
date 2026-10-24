@@ -211,7 +211,14 @@ def create_action(component, action):
     qaction = QtGui.QAction(action.metadata.get('name', action.__name__), None)
     qaction.setToolTip(action.help)
 
-    qaction.triggered.connect(lambda: action())
+    def trigger():
+        # header record that separates the messages of each button press in the message panel (only here, not in the
+        # action wrapper: actions also call themselves or other actions, e.g. as callbacks, which isn't a new press)
+        logging.getLogger().info(action.metadata.get('name') or action.__name__,
+                                 extra={"action_header": True, "object_name": component.object_name or ""})
+        action()
+
+    qaction.triggered.connect(trigger)
 
     return qaction
 
@@ -990,15 +997,17 @@ def generate_ui(component):
             newItem.setExpanded(True)
 
         widget = generate_component_ui(prettyName, component)
-        newItem.widgetId = stack.addWidget(widget)
+        # stored on the Qt item: a Python attribute is lost when PySide re-wraps the item (e.g. in itemClicked)
+        widget_id = stack.addWidget(widget)
+        newItem.setData(0, QtCore.Qt.UserRole, widget_id)
 
         if toggle_trait is not None:
             toggle_name = toggle_trait.name
 
-            def apply_visibility(change=None, item=newItem, tn=toggle_name):
+            def apply_visibility(change=None, item=newItem, tn=toggle_name, wid=widget_id):
                 visible = bool(getattr(toggle_source, tn))
                 item.setHidden(not visible)
-                if not visible and stack.currentIndex() == item.widgetId:
+                if not visible and stack.currentIndex() == wid:
                     stack.setCurrentIndex(0)
 
             apply_visibility()
@@ -1032,7 +1041,7 @@ def generate_ui(component):
     splitter.setStretchFactor(0, 0)
     splitter.setStretchFactor(1, 1)
 
-    tree.itemClicked.connect(lambda x: stack.setCurrentIndex(x.widgetId))
+    tree.itemClicked.connect(lambda item: stack.setCurrentIndex(item.data(0, QtCore.Qt.UserRole)))
 
     messagePane = QtWidgets.QGroupBox("Messages", win)
     vSplitter.addWidget(messagePane)

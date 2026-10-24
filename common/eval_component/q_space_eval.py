@@ -7,7 +7,7 @@ from matplotlib.widgets import SpanSelector
 from common.eval_component.transfer_functions import TransmissionModels
 from common.eval_component.eval_component_base import EvalComponentBase
 from common.measurement_selection import Selection, SelectionQueue
-from common.default_appsettings import SimRISelection, Domain, QSpaceQuantity, ComponentToggle, AppSettings
+from common.default_appsettings import SimRISelection, Domain, ComponentToggle, AppSettings
 from common.functions import f_axis_idx_map, moving_average, do_ifft, to_db, avg_data_array
 from common.eval_component.quantity_set import QuantityDataSet
 from common.eval_component.eval_result import EvalResultData, SingleResultData
@@ -15,7 +15,7 @@ from enum import member, Enum
 from common.measurements import Measurement
 from common.dataset import Averaging
 from common.consts import c_thz
-from scipy.signal import detrend, find_peaks
+from scipy.signal import find_peaks
 from concurrent.futures import ProcessPoolExecutor, wait as futures_wait
 from concurrent.futures.process import BrokenProcessPool
 from functools import partial
@@ -23,7 +23,12 @@ from common.eval_component.single_opt import shgo_transmission_optimization
 from common.eval_component.t_fit_global import spline_transmission_optimization
 from common.eval_component.n_guess import NGuessMethod
 from common.eval_component.layer_stack import LayerStack
+from common.eval_component.q_space_scan import ScanTarget, OptimizationCancelled
+from common.eval_component.q_value import fp_round_trip_time, compute_q_value, optimize_and_rate
+from common.eval_component import fast_kernels
+from common.eval_component.q_space_image import QSpaceImageEval
 from dataclasses import dataclass
+from contextlib import contextmanager
 from mpl_settings import mpl_style_params
 from traitlets import Enum as TEnum, observe, Integer, Float, Bool, Instance, Unicode, link
 from common.traits import Quantity, Q_, ValueRange, PlotFigure
@@ -36,14 +41,6 @@ from common.dataset_plotter import DataSetPlotter
 action = partial(action, check_init=True, rc_params=mpl_style_params)
 
 
-def fp_round_trip_time(freq_axis, t_exp, d, known_delay=0.0):
-    # known_delay: part of the measured group delay caused by other (known) layers of the sample
-    phi = np.unwrap(np.angle(t_exp))
-    group_delay = np.abs(np.polyfit(2 * np.pi * freq_axis, phi, 1)[0])
-
-    return 2 * (max(group_delay - known_delay, 0.0) + d / c_thz)
-
-
 def estimate_fp_echo_count(time_traces, t_rt):
     counts = []
     for trace in time_traces:
@@ -52,21 +49,6 @@ def estimate_fp_echo_count(time_traces, t_rt):
         counts.append((t[recorded[-1]] - t[np.argmax(y_abs)]) / t_rt)
 
     return max(int(np.floor(min(counts))), 0)
-
-
-def fp_echo_amplitude(freq_axis, n, d, n_prev=1, n_next=1):
-    r_prev = (n - n_prev) / (n + n_prev)
-    r_next = (n - n_next) / (n + n_next)
-    return np.abs(r_prev * r_next) * np.exp(-4 * np.pi * freq_axis * np.abs(n.imag) * 2 * d / c_thz)
-
-
-def q_space_spectrum(freq_axis, y, pad_factor=16):
-    y = detrend(y, type="linear")
-    n_fft = pad_factor * len(y)
-    q_spec = np.abs(np.fft.rfft(y, n=n_fft))
-    q_axis = np.fft.rfftfreq(n_fft, d=np.mean(np.diff(freq_axis)))
-
-    return q_axis, q_spec
 
 
 class OptimumCriterion(Enum):
@@ -97,10 +79,6 @@ def select_optimum(results, criterion=OptimumCriterion.prominent_min):
         return global_best
 
     return profile[minima[np.argmax(props["prominences"])]]
-
-
-class OptimizationCancelled(Exception):
-    """Raised inside the evaluation thread when the optimization is canceled."""
 
 
 class TaskStatusSignal(QObject):
@@ -445,16 +423,17 @@ class QSpaceEval(EvalComponentBase):
 
     preprocessing = Instance(Preprocessing, allow_none=True).tag(priority=1, toggle=ComponentToggle.en_preprocessing)
     layer_stack = Instance(LayerStack, allow_none=True).tag(priority=2, toggle=ComponentToggle.en_multilayer)
+    image_eval = Instance(QSpaceImageEval, allow_none=True).tag(priority=3, toggle=ComponentToggle.en_q_space_image)
 
-    def __init__(self, dataset, **kwargs):
+    def __init__(self, dataset, image_plot=None, **kwargs):
         super().__init__(dataset, **kwargs)
 
         self.current_process_executor = None
 
-        self.opt_state = {}
-
         self.preprocessing = Preprocessing(self.dataset)
         self.layer_stack = LayerStack(object_name="Multi-layer sample")
+
+        self.image_eval = QSpaceImageEval(self, image_plot=image_plot, object_name="Image evaluation")
 
         self.task_status_carrier = TaskStatusSignal()
         self.task_status_carrier.changed.connect(self.set_trait)
@@ -512,12 +491,8 @@ class QSpaceEval(EvalComponentBase):
         return text + f" (q = {Q_(best.optimization_info['q_val']).magnitude:.4g})"
 
     def reset_state(self):
-        self.task_cnt_carrier.cnt_changed.emit(0)
         self._set_status("running_tasks", "")
         self._set_status("current_optimum", "")
-        self.opt_state["d"] = None
-        self.opt_state["shift"] = Q_(0, "fs")
-        self.opt_state["q_min"] = np.inf
 
     def ref_fd_dict(self, selection):
         ref_list = list(selection.refs)
@@ -528,6 +503,20 @@ class QSpaceEval(EvalComponentBase):
         meas_list = list(selection.sams)
         t_exp = self.dataset.transmission(meas_list, list(selection.refs))
         return self.format_meas_dict(meas_list, t_exp)
+
+    def selection_task_count(self, selection):
+        # tasks of eval_selection: one thickness / shift scan per evaluated measurement (individual and / or average)
+        sam_cnt = len(list(selection.sams))
+        if sam_cnt <= 1:
+            target_cnt = sam_cnt
+        else:
+            target_cnt = {Averaging.only_avg: 1, Averaging.only_individual: sam_cnt}.get(self.averaging, sam_cnt + 1)
+        d_axis, _ = self.thickness_axis()
+        shift_axis = self.shift_axis()
+        refine_d_cnt, refine_shift_cnt = self.refine_counts(shift_axis)
+
+        return target_cnt * (len(d_axis) * len(shift_axis)
+                             + refine_d_cnt * refine_shift_cnt * (max(1, self.iteration_cnt) - 1))
 
     def n_guess(self, selection):
         if self.effective_n_guess_method == NGuessMethod.cost_scan:
@@ -574,19 +563,27 @@ class QSpaceEval(EvalComponentBase):
         self._active_eval = evaluator
 
         def bg_worker():
+            state = "Failed"
             try:
+                counted = {queue_id: sel for queue_id, sel in queue.pending()}
+                self.progress_start(sum(self.selection_task_count(sel) for sel in counted.values()))
                 queue_id, next_selection = queue.pop_next()
                 while next_selection is not None and not self._cancel_event.is_set():
+                    if counted.pop(queue_id, None) is None:  # queued while running
+                        self.progress_add_total(self.selection_task_count(next_selection))
                     logging.info(f"Evaluating selection {queue_id}")
                     qs_eval_data = evaluator.eval_selection(next_selection)
                     if not self._cancel_event.is_set():
                         self._result_ready(qs_eval_data)
                     queue_id, next_selection = queue.pop_next()
+                state = "Cancelled" if self._cancel_event.is_set() else "Finished"
             except OptimizationCancelled:
+                state = "Cancelled"
                 logging.info("Optimization cancelled")
             except Exception:
                 traceback.print_exc()
             finally:
+                self.progress_stop(state)
                 if self._active_eval is evaluator:
                     self._active_eval = None
 
@@ -646,70 +643,28 @@ class QSpaceEval(EvalComponentBase):
         opt_res.datasets["alpha"].uncert = Q_(np.abs(4 * np.pi * f_axis * delta_k / (1e-4 * c_thz)), "1/cm")
         opt_res.datasets["n"].uncert = Q_(delta_n + 1j * delta_k, "")
 
-    def calc_q_val(self, res_data: SingleResultData):
-        eval_opt = self.settings.eval_opt
+    def q_value_params(self):
+        # everything compute_q_value needs from the settings, as a plain dict for the worker processes
+        eval_opt = self.settings.eval_opt.q_value
         q_space_range = eval_opt.q_space_range if eval_opt.use_separate_range else self.freq_range
+        q_idx = np.asarray(f_axis_idx_map(self.freq_axis, q_space_range))
+        q_freq_axis = self.freq_axis[q_idx]
+        n_prev, n_next = self.layer_stack.unknown_neighbor_n(q_freq_axis) if self.is_multilayer() else (1, 1)
 
-        freq_axis = res_data.freq_axis.magnitude
-        freq_range_idx = f_axis_idx_map(freq_axis, q_space_range)
-        freq_axis = freq_axis[freq_range_idx]
+        return {"q_idx": q_idx,
+                "quantity": eval_opt.q_space_quantity.name,
+                "fp_time": None if eval_opt.auto_fp_time else eval_opt.fp_spacing.to("ps").magnitude,
+                "known_delay": self.known_layer_delay(q_freq_axis),
+                "n_prev": n_prev,
+                "n_next": n_next,
+                "auto_f_max": eval_opt.auto_q_space_f_max,
+                "amp_threshold": eval_opt.fp_amp_threshold.to("").magnitude,
+                "remove_spikes": eval_opt.remove_q_spikes}
 
-        match eval_opt.q_space_quantity:
-            case QSpaceQuantity.n:
-                y = res_data.datasets["n"].data.magnitude.real
-            case QSpaceQuantity.k:
-                y = res_data.datasets["n"].data.magnitude.imag
-            case QSpaceQuantity.alpha:
-                y = res_data.datasets[QSpaceQuantity.alpha.name].data.magnitude
-        y = y[freq_range_idx]
+    def calc_q_val(self, res_data: SingleResultData):
+        return compute_q_value(res_data, self.q_value_params())
 
-        d = res_data.d.magnitude
-        if eval_opt.auto_fp_time:
-            t_exp = res_data.datasets["t_exp"].data.magnitude[freq_range_idx]
-            t_fp = fp_round_trip_time(freq_axis, t_exp, d, self.known_layer_delay(freq_axis))
-        else:
-            t_fp = eval_opt.fp_spacing.to("ps").magnitude
-
-        n = res_data.datasets["n"].data.magnitude[freq_range_idx]
-        n_prev, n_next = self.layer_stack.unknown_neighbor_n(freq_axis) if self.is_multilayer() else (1, 1)
-        echo_amp = fp_echo_amplitude(freq_axis, n, d, n_prev, n_next)
-        if eval_opt.auto_q_space_f_max:
-            below = np.flatnonzero(echo_amp < eval_opt.fp_amp_threshold.to("").magnitude)
-            f_max = freq_axis[below[0]] if len(below) else freq_axis[-1]
-            # keep at least two FP periods
-            f_max = min(max(f_max, freq_axis[0] + 2 / t_fp), freq_axis[-1])
-            band = freq_axis <= f_max
-            freq_axis, y = freq_axis[band], y[band]
-        res_data.optimization_info["q_space_f_max"] = Q_(freq_axis[-1], "THz")
-
-        q_axis, q_spec = q_space_spectrum(freq_axis, y)
-        # half the main lobe width of the unwindowed transform, the peak position is only known to ~1 / bandwidth
-        half_width = 0.5 / np.ptp(freq_axis)
-        window = np.abs(q_axis - t_fp) <= half_width
-        if not window.any():
-            window[np.argmin(np.abs(q_axis - t_fp))] = True
-
-        res_data.optimization_info["q_val"] = Q_(np.max(q_spec[window]), "")
-        res_data.optimization_info["q_sum"] = Q_(np.sum(q_spec[window]), "")
-        res_data.optimization_info["fp_time"] = Q_(t_fp, "ps")
-        res_data.optimization_info["fp_period"] = Q_(1 / t_fp, "THz")
-
-        q_name = eval_opt.q_space_quantity.name
-        res_data.datasets["q_space"] = QuantityDataSet(axes=[Q_(q_axis, "ps")],
-                                                       data=Q_(q_spec, ""),
-                                                       axes_labels=["Round trip time"],
-                                                       data_label=f"Q-space |FFT({q_name})|, "
-                                                                  f"FP time {t_fp:.3f} ps, "
-                                                                  f"{freq_axis[0]:.2f}-{freq_axis[-1]:.2f} THz")
-        res_data.datasets["fp_echo_amp"] = QuantityDataSet(axes=[res_data.freq_axis[freq_range_idx]],
-                                                           data=Q_(100 * echo_amp, "%"),
-                                                           axes_labels=["Frequency"],
-                                                           data_label="Estimated Fabry-Perot echo amplitude")
-
-        return res_data.optimization_info["q_val"]
-
-    def build_context(self, selection) -> SelectionContext:
-        t_exp_dict = self.t_exp_dict(selection)
+    def base_t_model_kwargs(self):
         t_model_kwargs = self.get_t_model_kwargs()
         if self.is_multilayer():
             try:
@@ -722,6 +677,12 @@ class QSpaceEval(EvalComponentBase):
             if self.n_guess_method == NGuessMethod.tof:
                 logging.info("Using the model cost scan as initial guess, the time of flight guess "
                              "doesn't account for the known layers")
+
+        return t_model_kwargs
+
+    def build_context(self, selection) -> SelectionContext:
+        t_exp_dict = self.t_exp_dict(selection)
+        t_model_kwargs = self.base_t_model_kwargs()
         if self.settings.eval_opt.auto_fp_count:
             t_exp_0 = np.asarray(next(iter(t_exp_dict.values())))[:, 1]
             t_rt, t_model_kwargs["nfp"] = self.fp_echo_estimate(list(selection.sams), list(selection.refs), t_exp_0)
@@ -738,14 +699,13 @@ class QSpaceEval(EvalComponentBase):
                        self.settings.eval_opt.smoothing_avg_iters),
         )
 
-    def spline_knot_count(self, ctx: SelectionContext):
-        eval_opt = self.settings.eval_opt
+    def spline_knot_count(self, t_exp):
+        eval_opt = self.settings.eval_opt.spline_fit
         knot_cnt = eval_opt.knot_cnt
         if len(self.freq_axis) < 2:
             return knot_cnt
 
-        t_exp_0 = np.asarray(next(iter(ctx.t_exp_dict.values())))[:, 1]
-        fp_period = 1 / fp_round_trip_time(self.freq_axis, t_exp_0, self.d_opt_axis_bounds[1].magnitude,
+        fp_period = 1 / fp_round_trip_time(self.freq_axis, t_exp, self.d_opt_axis_bounds[1].magnitude,
                                            self.known_layer_delay(self.freq_axis))
         knots_per_period = eval_opt.knots_per_fp_period
         min_knots = int(np.ceil(knots_per_period * np.ptp(self.freq_axis) / fp_period)) + 1
@@ -762,15 +722,9 @@ class QSpaceEval(EvalComponentBase):
 
         return knot_cnt
 
-    def eval_selection(self, selection) -> EvalResultData:
-        ctx = self.build_context(selection)
-
-        is_iterative = self.iterative_thickness_optimization
-        iteration_count = self.iteration_count if is_iterative else 1
-
-        sel_meas_list = list(selection.sams)
-
-        common_opt_params = {
+    def common_opt_params(self, t_model_kwargs, t_exp):
+        # worker config shared by all targets, t_exp: representative transmission for the spline knot count
+        params = {
             "freq_axis": self.freq_axis,
             "transmission_model": self.transmission_model.value,
             "cost_fun": self.selected_cost_fun.value,
@@ -782,99 +736,158 @@ class QSpaceEval(EvalComponentBase):
             "n_scan_range": tuple(float(v) for v in self.n_scan_range),
             "n_scan_step": self.n_scan_step,
             "k_scan_max": self.k_scan_max,
-            **ctx.t_model_kwargs,
+            **t_model_kwargs,
         }
         if self.optimization_method == OptimizationMethods.Spline:
-            common_opt_params["knot_count"] = self.spline_knot_count(ctx)
-            common_opt_params["reg_n"] = self.settings.eval_opt.reg_n
-            common_opt_params["reg_k"] = self.settings.eval_opt.reg_k
-            common_opt_params["max_nfev"] = self.settings.eval_opt.max_nfev
-            common_opt_params["per_freq_refine"] = self.settings.eval_opt.per_freq_refine
-        opt_configs = {meas: {**common_opt_params, "n_guess": ctx.n_guess[meas] if ctx.n_guess else None,
-                              "t_exp": ctx.t_exp_dict[meas]} for meas in ctx.t_exp_dict}
+            params["knot_count"] = self.spline_knot_count(t_exp)
+            params["reg_n"] = self.settings.eval_opt.spline_fit.reg_n
+            params["reg_k"] = self.settings.eval_opt.spline_fit.reg_k
+            params["max_nfev"] = self.settings.eval_opt.spline_fit.max_nfev
+            params["tr_solver"] = self.settings.eval_opt.spline_fit.tr_solver.name
+            params["per_freq_refine"] = self.settings.eval_opt.spline_fit.per_freq_refine
+        params["use_compiled_kernels"] = self.settings.eval_opt.spline_fit.use_compiled_kernels
+        if params["use_compiled_kernels"] and not fast_kernels.fast_path_available(params["transmission_model"]):
+            reason = "numba is not installed" if not fast_kernels.NUMBA_AVAILABLE else "only for the model tmm_1layer"
+            logging.info(f"Compiled kernels not used ({reason})")
 
+        return params
 
+    @property
+    def iteration_cnt(self):
+        return self.iteration_count if self.iterative_thickness_optimization else 1
+
+    def shift_axis(self):
+        if not self.settings.eval_opt.enable_shift_opt:
+            return np.array([0.0])
         shift_bnds = self.settings.eval_opt.shift_opt_axis_bounds
         shift_step = self.settings.eval_opt.shift_opt_axis_step.magnitude
-        if self.settings.eval_opt.enable_shift_opt:
-            shift_axis = np.arange(shift_bnds[0].magnitude, shift_bnds[1].magnitude + shift_step, shift_step)
-        else:
-            shift_axis = np.array([0.0])
 
-        d_bnds = self.d_opt_axis_bounds
-        d_step0 = self.d_opt_axis_step.magnitude
-        num_steps = int(round((d_bnds[1].magnitude - d_bnds[0].magnitude) / d_step0)) + 1
-        d_axis0 = np.linspace(d_bnds[0].magnitude, d_bnds[1].magnitude, num_steps)
+        return np.arange(shift_bnds[0].magnitude, shift_bnds[1].magnitude + shift_step, shift_step)
+
+    def thickness_axis(self, d_min=None, d_max=None, d_step=None):
+        # defaults: the thickness axis bounds and step
+        d_min = self.d_opt_axis_bounds[0].magnitude if d_min is None else d_min
+        d_max = self.d_opt_axis_bounds[1].magnitude if d_max is None else d_max
+        d_step = self.d_opt_axis_step.magnitude if d_step is None else d_step
+        num_steps = int(round((d_max - d_min) / d_step)) + 1
+        d_axis = np.linspace(d_min, d_max, max(num_steps, 1))
         if num_steps > 1:
-            d_step0 = d_axis0[1] - d_axis0[0]
+            d_step = d_axis[1] - d_axis[0]
 
+        return d_axis, d_step
+
+    def refine_counts(self, shift_axis):
         shrink_factor = min(max(self.bound_shrink_factor, 1e-3), 1.0)
         refine_d_cnt = 2 * int(round(1 / shrink_factor)) + 1
         refine_shift_cnt = min(3, len(shift_axis))
-        refine_task_cnt = refine_d_cnt * refine_shift_cnt
 
-        def task_key(d, shift):
-            return round(float(d), 6), round(float(shift), 6)
+        return refine_d_cnt, refine_shift_cnt
 
-        def get_new_tasks(iter_idx, d_step, done_keys):
-            if iter_idx == 0:
-                d_axis, shifts = d_axis0, shift_axis
-            else:
-                d0 = self.opt_state["d"].magnitude
-                d_axis = np.linspace(d0 - d_step, d0 + d_step, refine_d_cnt)
-                d_axis = d_axis[d_axis > 0]
-                s0 = self.opt_state["shift"].magnitude
-                shifts = shift_axis[np.argsort(np.abs(shift_axis - s0))[:refine_shift_cnt]]
+    def check_cancel(self):
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            raise OptimizationCancelled()
 
-            tasks = []
-            for d in d_axis:
-                for shift in shifts:
-                    key = task_key(d, shift)
-                    if key not in done_keys:
-                        done_keys.add(key)
-                        tasks.append(np.array(key, dtype=float))
-            return tasks
+    def _get_result(self, future):
+        while not future.done():
+            self.check_cancel()
+            futures_wait([future], timeout=0.2)
+        try:
+            return future.result()
+        except BrokenProcessPool:
+            self.check_cancel()
+            raise
 
-        def check_cancel():
-            if self._cancel_event is not None and self._cancel_event.is_set():
-                raise OptimizationCancelled()
-
-        def get_result(future):
-            while not future.done():
-                check_cancel()
-                futures_wait([future], timeout=0.2)
+    @contextmanager
+    def process_pool(self):
+        self.check_cancel()
+        with ProcessPoolExecutor(max_workers=self.number_of_workers,
+                                 initializer=limit_worker_threads) as executor:
+            self.current_process_executor = executor
             try:
-                return future.result()
-            except BrokenProcessPool:
-                check_cancel()
+                yield executor
+            except BaseException as e:
+                kill_process_pool(executor)
+                self._set_status("current_stage", "Cancelled" if isinstance(e, OptimizationCancelled) else "Failed")
                 raise
+            finally:
+                self.current_process_executor = None
+                self._set_status("running_tasks", "")
 
-        def process_tasks(executor, tasks, opt_config, iteration_progress):
-            it_idx, tot_it = iteration_progress
-            if it_idx == 0:
-                total_tasks = len(tasks) + refine_task_cnt * (tot_it - 1)
-                self.task_cnt_carrier.cnt_changed.emit(total_tasks)
+    def _new_tasks(self, target: ScanTarget, iter_idx, shift_axis, refine_d_cnt, refine_shift_cnt):
+        if iter_idx == 0:
+            d_axis, shifts = target.d_axis, shift_axis
+        else:
+            d0 = target.best.d.magnitude
+            d_axis = np.linspace(d0 - target.d_step, d0 + target.d_step, refine_d_cnt)
+            d_axis = d_axis[d_axis > 0]
+            s0 = target.best.shift.magnitude
+            shifts = shift_axis[np.argsort(np.abs(shift_axis - s0))[:refine_shift_cnt]]
+            target.d_step = 2 * target.d_step / (refine_d_cnt - 1)
+
+        tasks = []
+        for d in d_axis:
+            for shift in shifts:
+                key = round(float(d), 6), round(float(shift), 6)
+                if key not in target.done_keys:
+                    target.done_keys.add(key)
+                    tasks.append(np.array(key, dtype=float))
+        return tasks
+
+    def scan_task_count(self, targets, iteration_count, shift_axis):
+        refine_d_cnt, refine_shift_cnt = self.refine_counts(shift_axis)
+        coarse = sum(len(target.d_axis) for target in targets) * len(shift_axis)
+
+        return coarse + len(targets) * refine_d_cnt * refine_shift_cnt * (max(1, iteration_count) - 1)
+
+    def run_scan(self, executor, targets: list[ScanTarget], iteration_count, shift_axis, label="",
+                 kept_datasets=None, on_iteration=None, show_stage=True):
+        # scans all targets together (one task per target, thickness and shift), each iteration refines around
+        # the current optimum of each target. kept_datasets: names of the result datasets to keep (default all).
+        # Advances the overall progress by scan_task_count, the caller includes it in the progress total.
+        # show_stage=False keeps the current stage text, for short follow-up scans that would only make it flicker
+        refine_d_cnt, refine_shift_cnt = self.refine_counts(shift_axis)
+        refine_task_cnt = len(targets) * refine_d_cnt * refine_shift_cnt
+        iteration_count = max(1, iteration_count)
+        q_params = self.q_value_params()
+
+        for iter_idx in range(iteration_count):
+            self.check_cancel()
+            stage = "coarse scan" if iter_idx == 0 else f"refinement {iter_idx} / {iteration_count - 1}"
+            if show_stage:
+                self._set_status("current_stage", f"{label}, {stage}")
+
+            tasks = [(target, task) for target in targets
+                     for task in self._new_tasks(target, iter_idx, shift_axis, refine_d_cnt, refine_shift_cnt)]
+            if iter_idx == 0:
+                total_tasks = self.scan_task_count(targets, iteration_count, shift_axis)
                 logging.info(f"Processing up to {total_tasks} task{'s' * (total_tasks > 1)}")
             else:
-                logging.info(f"Starting thickness refinement iteration {it_idx} / {tot_it - 1}")
-                for _ in range(refine_task_cnt - len(tasks)):
-                    self.task_cnt_carrier.cnt_changed.emit(1)
+                logging.info(f"Starting thickness refinement iteration {iter_idx} / {iteration_count - 1}")
+                # already scanned thicknesses aren't repeated
+                self.progress_advance(refine_task_cnt - len(tasks))
 
-            check_cancel()
-            task_results = []
-            worker_func = partial(self.optimization_method.value, config_dict=opt_config)
-            futures = [executor.submit(worker_func, d, shift) for d, shift in tasks]
+            # the q-value is computed in the workers and unneeded datasets are dropped there, which keeps the main
+            # process (unpickling, bookkeeping) from becoming the bottleneck
+            futures = [executor.submit(partial(optimize_and_rate, config_dict=target.opt_config,
+                                               opt_func=self.optimization_method.value, q_params=q_params,
+                                               kept_datasets=kept_datasets),
+                                       *task) for target, task in tasks]
 
             def update_running(start_idx):
                 # submitted in order, so the running tasks follow the last finished one
-                pending = [task for task, fut in zip(tasks[start_idx:], futures[start_idx:]) if not fut.done()]
-                self._set_status("running_tasks", self._task_range_text(pending[:self.number_of_workers]))
+                running = []
+                for (_, task), fut in zip(tasks[start_idx:], futures[start_idx:]):
+                    if len(running) == self.number_of_workers:
+                        break
+                    if not fut.done():
+                        running.append(task)
+                self._set_status("running_tasks", self._task_range_text(running))
 
             update_running(0)
             last_report = time.monotonic()
-            for task_idx, future in enumerate(futures):
-                res: SingleResultData = get_result(future)
-                self.task_cnt_carrier.cnt_changed.emit(1)
+            for task_idx, ((target, _), future) in enumerate(zip(tasks, futures)):
+                res: SingleResultData = self._get_result(future)
+                self.progress_advance()
                 update_running(task_idx + 1)
 
                 info_str = f"Finished optimizing thickness {np.round(res.d, 3)} "
@@ -887,12 +900,24 @@ class QSpaceEval(EvalComponentBase):
                     last_report = time.monotonic()
                     logging.info(f"Finished {task_idx + 1} / {len(futures)} tasks (thickness {np.round(res.d, 3)})")
 
-                self.calc_q_val(res)
                 if self.is_multilayer():
                     res.optimization_info["layer_stack"] = self.layer_stack.describe_stack()
-                task_results.append(res)
+                target.results.append(res)
 
-            return task_results
+            for target in targets:
+                if target.results:
+                    target.best = select_optimum(target.results, self.optimum_criterion)
+            if on_iteration is not None:
+                on_iteration(iter_idx, iteration_count)
+
+    def eval_selection(self, selection) -> EvalResultData:
+        ctx = self.build_context(selection)
+        sel_meas_list = list(selection.sams)
+
+        t_exp_0 = np.asarray(next(iter(ctx.t_exp_dict.values())))[:, 1]
+        common_opt_params = self.common_opt_params(ctx.t_model_kwargs, t_exp_0)
+        d_axis0, d_step0 = self.thickness_axis()
+        shift_axis = self.shift_axis()
 
         eval_result_data = EvalResultData()
         eval_result_data.result_type = "Transmission fit"
@@ -902,59 +927,41 @@ class QSpaceEval(EvalComponentBase):
         eval_result_data.model_name = self.transmission_model.name
         eval_result_data.measurement_quantity = "Transmission"
 
-        check_cancel()
-        with ProcessPoolExecutor(max_workers=self.number_of_workers,
-                                 initializer=limit_worker_threads) as executor:
-            self.current_process_executor = executor
-            try:
-                for meas_idx, meas in enumerate(ctx.t_exp_dict):
-                    check_cancel()
-                    if meas != "Average":
-                        logging.info(f"Evaluating measurement {meas.filepath.name}")
-                    self.reset_state()
-                    meas_label = (f"Average of {len(sel_meas_list)} measurements" if meas == "Average"
-                                  else meas.filepath.name)
+        with self.process_pool() as executor:
+            for meas_idx, meas in enumerate(ctx.t_exp_dict):
+                self.check_cancel()
+                if meas != "Average":
+                    logging.info(f"Evaluating measurement {meas.filepath.name}")
+                self.reset_state()
+                meas_label = (f"Average of {len(sel_meas_list)} measurements" if meas == "Average"
+                              else meas.filepath.name)
 
-                    opt_results: list[SingleResultData] = []
-                    done_keys = set()
-                    d_step = d_step0
-                    for iter_idx in range(max(1, iteration_count)):
-                        check_cancel()
-                        stage = "coarse scan" if iter_idx == 0 else f"refinement {iter_idx} / {iteration_count - 1}"
-                        self._set_status("current_stage", f"{meas_label}, {stage}")
-                        new_tasks = get_new_tasks(iter_idx, d_step, done_keys)
-                        if iter_idx > 0:
-                            d_step = 2 * d_step / (refine_d_cnt - 1)
-                        opt_results.extend(process_tasks(executor, new_tasks, opt_configs[meas],
-                                                         iteration_progress=(iter_idx, iteration_count)))
-                        if opt_results:
-                            best = select_optimum(opt_results, self.optimum_criterion)
-                            self.opt_state.update(d=best.d, shift=best.shift,
-                                                  q_min=best.optimization_info["q_val"])
-                            self._set_status("current_optimum", self._optimum_text(best))
-                            if iter_idx < iteration_count - 1:
-                                logging.info(f"Current optimum {np.round(best.d, 3)}")
+                target = ScanTarget(key=meas, d_axis=d_axis0, d_step=d_step0,
+                                    opt_config={**common_opt_params,
+                                                "n_guess": ctx.n_guess[meas] if ctx.n_guess else None,
+                                                "t_exp": ctx.t_exp_dict[meas]})
 
-                    opt_results.sort(key=lambda res_: (res_.d.magnitude, res_.shift.magnitude))
-                    ready_results = self.prepare_results(meas, opt_results, ctx)
-                    meas_results = {f"result_{meas_idx}_{res_idx:03d}": res
-                                    for res_idx, res in enumerate(ready_results)}
-                    eval_result_data.results.update(meas_results)
+                def on_iteration(iter_idx, iteration_count, target_=target):
+                    self._set_status("current_optimum", self._optimum_text(target_.best))
+                    if iter_idx < iteration_count - 1:
+                        logging.info(f"Current optimum {np.round(target_.best.d, 3)}")
 
-                    best = select_optimum(ready_results, self.optimum_criterion)
-                    best_key = next(k for k, res in meas_results.items() if res is best)
-                    logging.info(f"Optimum thickness {np.round(best.d, 3)}"
-                                 + f" (shift {best.shift})" * self.settings.eval_opt.enable_shift_opt)
-                    eval_result_data.optimum_results[ready_results[0].measurement] = best_key
-                    self._set_status("current_stage", f"{meas_label}, finished")
-                    self._set_status("current_optimum", self._optimum_text(best))
-            except BaseException as e:
-                kill_process_pool(executor)
-                self._set_status("current_stage", "Cancelled" if isinstance(e, OptimizationCancelled) else "Failed")
-                raise
-            finally:
-                self.current_process_executor = None
-                self._set_status("running_tasks", "")
+                self.run_scan(executor, [target], self.iteration_cnt, shift_axis, label=meas_label,
+                              on_iteration=on_iteration)
+
+                opt_results = sorted(target.results, key=lambda res_: (res_.d.magnitude, res_.shift.magnitude))
+                ready_results = self.prepare_results(meas, opt_results, ctx)
+                meas_results = {f"result_{meas_idx}_{res_idx:03d}": res
+                                for res_idx, res in enumerate(ready_results)}
+                eval_result_data.results.update(meas_results)
+
+                best = select_optimum(ready_results, self.optimum_criterion)
+                best_key = next(k for k, res in meas_results.items() if res is best)
+                logging.info(f"Optimum thickness {np.round(best.d, 3)}"
+                             + f" (shift {best.shift})" * self.settings.eval_opt.enable_shift_opt)
+                eval_result_data.optimum_results[ready_results[0].measurement] = best_key
+                self._set_status("current_stage", f"{meas_label}, finished")
+                self._set_status("current_optimum", self._optimum_text(best))
 
         return eval_result_data
 
@@ -964,24 +971,24 @@ class QSpaceEval(EvalComponentBase):
         freq_axis = self.freq_axis
         one = np.ones_like(freq_axis, dtype=float)
 
-        if self.settings.eval_opt.sim_n_selection == SimRISelection.const:
-            sim_n_sub = self.settings.eval_opt.sim_n_sub
+        if self.settings.eval_opt.transmission_sim.sim_n_selection == SimRISelection.const:
+            sim_n_sub = self.settings.eval_opt.transmission_sim.sim_n_sub
             n_sub = (sim_n_sub[0] + 1j * sim_n_sub[1]) * one
 
-            sim_n_film = self.settings.eval_opt.sim_n_film
+            sim_n_film = self.settings.eval_opt.transmission_sim.sim_n_film
             n_film = (sim_n_film[0] + 1j * sim_n_film[1]) * one
         else:
             n_sub = 1 * one
             n_film = 1 * one
 
         model_kwargs = {k: v for k, v in model_kwargs.items()}
-        model_kwargs["d"] = self.settings.eval_opt.sim_d.magnitude
-        model_kwargs["nfp"] = self.settings.eval_opt.sim_nfp
-        model_kwargs["shift"] = self.settings.eval_opt.sim_shift.magnitude
+        model_kwargs["d"] = self.settings.eval_opt.transmission_sim.sim_d.magnitude
+        model_kwargs["nfp"] = self.settings.eval_opt.transmission_sim.sim_nfp
+        model_kwargs["shift"] = self.settings.eval_opt.transmission_sim.sim_shift.magnitude
 
         if self.is_two_layer_t_model():
             model_kwargs["n_sub"] = n_sub
-            model_kwargs["h"] = self.settings.eval_opt.sim_h.magnitude
+            model_kwargs["h"] = self.settings.eval_opt.transmission_sim.sim_h.magnitude
             n = n_film
         else:
             n = n_sub
@@ -1044,7 +1051,7 @@ class QSpaceEval(EvalComponentBase):
         ref_meas = ctx.selection.ref_map(meas)
         ref_fd = ctx.ref_fd_dict[ref_meas]
 
-        norm_q_vals = self.settings.eval_opt.normalize_q_vals
+        norm_q_vals = self.settings.eval_opt.q_value.normalize_q_vals
         q_vals = [opt_res.optimization_info["q_val"] for opt_res in opt_results]
         for opt_res in opt_results:
             opt_res.measurement = str(meas) if is_avg_meas else meas.filepath.name
@@ -1076,7 +1083,7 @@ class QSpaceEval(EvalComponentBase):
                                                            axes_labels=["Frequency"],
                                                            data_label="Residual")
 
-            if self.settings.eval_opt.add_sim_to_res:
+            if self.settings.eval_opt.transmission_sim.add_sim_to_res:
                 opt_res.datasets.update(self.calc_sim(t_model_kwargs, ref_fd))
 
             smoothed_quantities = ["n", "alpha"]

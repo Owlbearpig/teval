@@ -273,7 +273,8 @@ def moving_average(a, n=3, iterations=1):
 
     for _ in range(iterations):
         a_padded = np.pad(a, (el, el), mode='reflect')
-        ret = np.cumsum(a_padded, dtype=complex)
+        # keeps real input real (e.g. alpha), complex input complex (n)
+        ret = np.cumsum(a_padded, dtype=np.result_type(a_padded, float))
         ret[n:] = ret[n:] - ret[:-n]
         # a = np.concatenate((a[:el], ret[n - 1:] / n, a[-el:]))
         a = ret[n - 1:] / n

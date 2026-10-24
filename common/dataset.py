@@ -13,7 +13,7 @@ from PySide6.QtCore import QObject, Signal
 from common.components import ComponentBase
 from common.components import action
 from common.consts import c_thz
-from common.dataset_cache import DatasetCache
+from common.dataset_cache import DatasetCache, remove_cache_dir
 from common.default_appsettings import Dist, ReferenceClassification, Domain, QuantityEnum, WindowTypes, ComponentToggle
 from common.functions import (butter_filt, do_fft, f_axis_idx_map,
                               remove_offset, avg_data_array, calculate_bandwidth, to_db)
@@ -351,11 +351,15 @@ class DataSet(ComponentBase):
 
     @action("Clear cache")
     def clear_cache(self):
-        if self.cache is None:
-            self.logger.info("Cache is None. Reset dataset path")
-        else:
+        if self.cache is not None:
             self.cache.clear_cache()
-            self.set_trait("is_initialized", False)
+        elif self.data_path:
+            # also when building the cache failed, e.g. on a cache file of an older format
+            try:
+                self.logger.info(f"Cleared {remove_cache_dir(self.data_path)}")
+            except OSError as e:
+                self.logger.warning(f"Could not remove the cache directory: {e}")
+        self.set_trait("is_initialized", False)
 
     @action("Reparse measurements")
     def reparse_measurements(self):
@@ -366,30 +370,30 @@ class DataSet(ComponentBase):
         t, y = data_td[:, 0], data_td[:, 1]
         dt = np.mean(np.diff(t))
 
-        pp_opt = self.settings.pp_opt
-        win_enum = pp_opt.type
-        sym = pp_opt.symmetric
-        win_width = pp_opt.win_width
-        win_start = pp_opt.win_start
-        center_window = pp_opt.center_on_pulse
-        shift = pp_opt.shift
-        en_plot = pp_opt.en_plot
+        win_opt = self.settings.pp_opt.window
+        win_enum = win_opt.type
+        sym = win_opt.symmetric
+        win_width = win_opt.win_width
+        win_start = win_opt.win_start
+        center_window = win_opt.center_on_pulse
+        shift = win_opt.shift
+        en_plot = win_opt.en_plot
 
         HFT90D = [1, 1.942604, 1.340318, 0.440811, 0.043097]
 
         param_map = {
-            WindowTypes.tukey: (pp_opt.tukey_alpha,),
-            WindowTypes.chebwin: (pp_opt.chebwin_at,),
-            WindowTypes.dpss: (pp_opt.dpss_nw,),
-            WindowTypes.exponential: (pp_opt.exp_center if not sym else None,
-                                      pp_opt.exp_tau,),
-            WindowTypes.gaussian: (pp_opt.gaussian_std,),
+            WindowTypes.tukey: (win_opt.tukey_alpha,),
+            WindowTypes.chebwin: (win_opt.chebwin_at,),
+            WindowTypes.dpss: (win_opt.dpss_nw,),
+            WindowTypes.exponential: (win_opt.exp_center if not sym else None,
+                                      win_opt.exp_tau,),
+            WindowTypes.gaussian: (win_opt.gaussian_std,),
             WindowTypes.general_cosine: (HFT90D,),
-            WindowTypes.general_gaussian: (pp_opt.general_gauss_p, pp_opt.general_gauss_sig,),
-            WindowTypes.general_hamming: (pp_opt.general_hamming_alpha,),
-            WindowTypes.kaiser: (pp_opt.kaiser_beta,),
-            WindowTypes.kaiser_bessel_derived: (pp_opt.kaiser_bessel_beta,),
-            WindowTypes.taylor: (pp_opt.taylor_nbar, pp_opt.taylor_sll, pp_opt.taylor_norm,),
+            WindowTypes.general_gaussian: (win_opt.general_gauss_p, win_opt.general_gauss_sig,),
+            WindowTypes.general_hamming: (win_opt.general_hamming_alpha,),
+            WindowTypes.kaiser: (win_opt.kaiser_beta,),
+            WindowTypes.kaiser_bessel_derived: (win_opt.kaiser_bessel_beta,),
+            WindowTypes.taylor: (win_opt.taylor_nbar, win_opt.taylor_sll, win_opt.taylor_norm,),
         }
         win_param = (win_enum.name, *param_map.get(win_enum, ()))
 
@@ -442,7 +446,7 @@ class DataSet(ComponentBase):
         if pp_opt.remove_dc:
             data_td = remove_offset(data_td)
 
-        if pp_opt.window_enabled:
+        if pp_opt.window.window_enabled:
             data_td = self._apply_window(data_td)
 
         if pp_opt.filter_enabled:
@@ -759,7 +763,7 @@ class DataSet(ComponentBase):
     def windowing_eval(self, meas_, d=None) -> WindowEvalResult:
         ref_meas = self.measurement_selector.get_matching_refs(meas_)
 
-        with self.settings.pp_opt.override(window_enabled=True, win_width=Q_(10, "ps")):
+        with self.settings.pp_opt.window.override(window_enabled=True, win_width=Q_(10, "ps")):
             ref_fd = self.get_multi_data(ref_meas, Domain.Frequency)
             sam_fd = self.get_multi_data(meas_, Domain.Frequency)
 
@@ -1016,11 +1020,88 @@ class DataSet(ComponentBase):
 
         return np.abs(sam_fd[:, :, 1] / ref_fd[:, :, 1])
 
-    def transmission(self, meas_, ref_meas_=None):
+    def _raw_transmission(self, meas_, ref_meas_=None):
         t_abs = self.amplitude_transmission(meas_, ref_meas_)
         phase_difference = self.phase_difference(meas_, ref_meas_)
 
-        t = t_abs * np.exp(1j * phase_difference)
+        return t_abs * np.exp(1j * phase_difference)
+
+    def transmission(self, meas_, ref_meas_=None):
+        t = self._raw_transmission(meas_, ref_meas_)
+
+        drift = self.settings.pp_opt.ref_drift
+        if (drift.interpolate_refs or drift.block_median) and isinstance(meas_, (list, tuple, np.ndarray)) and len(meas_):
+            ref_list = list(ref_meas_) if ref_meas_ else self.measurement_selector.get_matching_refs(meas_)
+            t = self._drift_corrected_transmission(list(meas_), ref_list, t, drift)
+
+        return t
+
+    def _reference_blocks(self, drift):
+        # references sorted by time, split into blocks (each reference its own block without the block median), the
+        # mean measurement time of each block and the block index of each reference
+        refs = sorted(self.measurements["refs"], key=lambda m: m.meas_time)
+        times = np.array([r.meas_time.timestamp() for r in refs])
+        if drift.block_median:
+            splits = np.flatnonzero(np.diff(times) > drift.block_gap.to("s").magnitude) + 1
+        else:
+            splits = np.arange(1, len(refs))
+        bounds = list(zip(np.r_[0, splits], np.r_[splits, len(refs)]))
+        blocks = [refs[a:b] for a, b in bounds]
+        centers = np.array([times[a:b].mean() for a, b in bounds])
+        block_of = {ref: bi for bi, block in enumerate(blocks) for ref in block}
+
+        return blocks, centers, block_of
+
+    @staticmethod
+    def _geometric_interp(t0, t1, w):
+        # t0 * (t1 / t0)^w, w: (N, 1). The principal phase of the ratio is enough for drifts of ~100 fs up to 3 THz
+        ratio = t1 / np.where(t0 == 0, 1, t0)
+        return t0 * np.abs(ratio) ** w * np.exp(1j * w * np.angle(ratio))
+
+    def _drift_corrected_transmission(self, meas_list, ref_list, t, drift):
+        # t of each sample against its reference divided by the block median of that reference's block (relative to
+        # the reference), then interpolated in time to the reference (block) on the other side of the sample
+        blocks, centers, block_of = self._reference_blocks(drift)
+        if not blocks:
+            return t
+        median_cache = {}
+
+        def block_factor(bi, anchor):
+            # median over the block of R_k / R_anchor, so t(s, anchor) / factor = S / R_median
+            if not drift.block_median or len(blocks[bi]) < 2:
+                return 1.0
+            if (bi, anchor) not in median_cache:
+                ratios = self._raw_transmission(blocks[bi], [anchor] * len(blocks[bi]))
+                median_cache[(bi, anchor)] = (np.median(np.abs(ratios), axis=0)
+                                              * np.exp(1j * np.median(np.angle(ratios), axis=0)))
+            return median_cache[(bi, anchor)]
+
+        max_gap = drift.max_interp_gap.to("s").magnitude
+        t = np.array(t, dtype=complex)
+        partner_idx, partner_meas, partner_refs, weights, partner_blocks = [], [], [], [], []
+        for i, (meas, ref) in enumerate(zip(meas_list, ref_list)):
+            bi = block_of.get(ref)
+            if bi is None:
+                continue
+            t[i] = t[i] / block_factor(bi, ref)
+            if not drift.interpolate_refs:
+                continue
+            t_s = meas.meas_time.timestamp()
+            bj = bi + 1 if t_s >= centers[bi] else bi - 1
+            if not 0 <= bj < len(blocks) or abs(centers[bj] - centers[bi]) > max_gap:
+                continue
+            partner = min(blocks[bj], key=lambda r: abs(r.meas_time.timestamp() - t_s))
+            partner_idx.append(i)
+            partner_meas.append(meas)
+            partner_refs.append(partner)
+            partner_blocks.append(bj)
+            weights.append(np.clip((t_s - centers[bi]) / (centers[bj] - centers[bi]), 0.0, 1.0))
+
+        if partner_idx:
+            t_partner = self._raw_transmission(partner_meas, partner_refs)
+            for k, (bj, partner) in enumerate(zip(partner_blocks, partner_refs)):
+                t_partner[k] = t_partner[k] / block_factor(bj, partner)
+            t[partner_idx] = self._geometric_interp(t[partner_idx], t_partner, np.array(weights)[:, None])
 
         return t
 
@@ -1045,7 +1126,7 @@ class DataSet(ComponentBase):
         w = 2 * np.pi * self.freq_axis
         w = np.where(w == 0, w[1] if len(w) > 1 else 1e-12, w)
 
-        with self.settings.pp_opt.override(window_enabled=True, win_width=Q_(10, "ps")):
+        with self.settings.pp_opt.window.override(window_enabled=True, win_width=Q_(10, "ps")):
             t_amp = self.amplitude_transmission(meas_, ref_list)
             phi_diff = np.abs(self.phase_difference(meas_, ref_list))
 

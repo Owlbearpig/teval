@@ -1,5 +1,19 @@
+import os
+import shutil
 import numpy as np
 from pathlib import Path
+
+
+def cache_dir(data_dir):
+    return Path(data_dir) / "_cache"
+
+
+def remove_cache_dir(data_dir):
+    # the whole folder, so files of older cache formats go as well
+    path = cache_dir(data_dir)
+    if path.exists():
+        shutil.rmtree(path)
+    return path
 
 def _generate_id_map(measurements):
     # measurement index sorted by identifier (Higher identifier = later measurement time)
@@ -51,29 +65,17 @@ class DatasetCache:
         return coord_map
 
     def get_path(self):
-        self.path = Path(self.data_dir / "_cache")
+        self.path = cache_dir(self.data_dir)
         self.path.mkdir(parents=True, exist_ok=True)
 
         return self.path
 
     def clear_cache(self):
-        if self.path is None:
-            self.path = Path(self.data_dir / "_cache")
-
-        if self.path.exists():
-            td_file = self.path / "_td_cache.npy"
-            fd_file = self.path / "_fd_cache.npy"
-
-            if td_file.exists():
-                td_file.unlink()
-            if fd_file.exists():
-                fd_file.unlink()
-
-            try:
-                self.path.rmdir()
-            except OSError as e:
-                self.dataset.logger.warning(f"Could not remove directory {self.path}: {e}")
-
+        try:
+            self.path = remove_cache_dir(self.data_dir)
+        except OSError as e:
+            self.dataset.logger.warning(f"Could not remove the cache directory: {e}")
+        else:
             self.raw_data_td = None
             self.time_axis = None
 
@@ -90,13 +92,16 @@ class DatasetCache:
         self.time_axis = sample_data_td[:, 0].real
         td_cache_shape = (len(measurements), len(sample_data_td[:, 1]))
 
+        cache_file = path / "_td_cache.npy"
         try:
-            data_td = np.load(str(path / "_td_cache.npy"))
+            data_td = np.load(str(cache_file))
             shape_match = (data_td.shape == td_cache_shape)
             if not shape_match:
                 self.dataset.logger.error(f"Data <-> cache shape mismatch. Reloading data:")
                 raise FileNotFoundError
-        except FileNotFoundError:
+        except (FileNotFoundError, ValueError, EOFError, OSError) as e:
+            if not isinstance(e, FileNotFoundError):
+                self.dataset.logger.warning(f"Unreadable cache file {cache_file} ({e}), rebuilding it")
             data_td = np.zeros(td_cache_shape, dtype=sample_data_td.dtype)
 
             self.dataset.logger.info(f"Saving {len(measurements)} measurements as npy")
@@ -107,7 +112,10 @@ class DatasetCache:
                     progress = (1 + meas_idx) / len(measurements)
                     self.signal_carrier.progress_signal.emit(progress)
 
-            np.save(str(path / "_td_cache.npy"), data_td)
+            # written under a temporary name so an interrupted save can't leave a truncated cache behind
+            tmp_file = path / "_td_cache.tmp.npy"
+            np.save(str(tmp_file), data_td)
+            os.replace(tmp_file, cache_file)
 
         return data_td
 

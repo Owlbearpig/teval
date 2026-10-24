@@ -29,7 +29,7 @@ class AppRoot(ComponentBase):
 
         self.dataset_plotter = ExtendedDataSetPlotter(self.dataset, object_name="DataSet plotter")
         self.image_plot = ImagePlot(self.dataset, object_name="Image plot")
-        self.q_space_eval = QSpaceEval(self.dataset, object_name="Q-space evaluation")
+        self.q_space_eval = QSpaceEval(self.dataset, image_plot=self.image_plot, object_name="Q-space evaluation")
         self.regression = Regression(self.dataset, object_name="Regression")
         self.conductivity_eval = ConductivityEval(self.dataset, object_name="Conductivity evaluation")
         self.sparse_deconvolution = SparseDeconvolution(self.dataset, object_name="Sparse deconvolution")

@@ -2,6 +2,7 @@ import numpy as np
 from enum import Enum
 from scipy.optimize import minimize_scalar
 from common.eval_component.cost_functions import abs_cost_fun, phi_cost_fun
+from common.eval_component import fast_kernels
 
 
 class NGuessMethod(Enum):
@@ -56,6 +57,9 @@ def cost_scan_n_guess(d, shift, config_dict):
 
 def get_n_guess(d, shift, config_dict):
     if config_dict.get("n_guess_method") == NGuessMethod.cost_scan:
+        if (config_dict.get("use_compiled_kernels", False)
+                and fast_kernels.fast_path_available(config_dict["transmission_model"])):
+            return fast_kernels.cost_scan_n_guess(d, shift, config_dict)
         return cost_scan_n_guess(d, shift, config_dict)
 
     return np.asarray(config_dict["n_guess"])

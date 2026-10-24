@@ -25,6 +25,26 @@ def _dumb_list_of_actions(inst):
         except (AttributeError, traitlets.TraitError):
             pass
 
+def show_text_window(owner, title, text, attr="_text_window"):
+    # read-only text in a separate window, reused per owner and attr (shown again with the new text)
+    dialog = getattr(owner, attr, None)
+    if dialog is None:
+        dialog = QtWidgets.QDialog(getattr(owner, "_ui_control_widget", None))
+        layout = QtWidgets.QVBoxLayout(dialog)
+        dialog.text_edit = QtWidgets.QPlainTextEdit(dialog)
+        dialog.text_edit.setReadOnly(True)
+        dialog.text_edit.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        layout.addWidget(dialog.text_edit)
+        dialog.resize(900, 500)
+        setattr(owner, attr, dialog)
+
+    dialog.setWindowTitle(title)
+    dialog.text_edit.setPlainText(text)
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
+
+
 def action(name=None, help=None, check_init=False, **kwargs):
     if name is None:
         name = ''
@@ -107,6 +127,10 @@ class ComponentBase(HasTraits):
         class OverrideContext:
 
             def __enter__(ctx_self):
+                # setattr would silently create a plain attribute for a moved or misspelled setting
+                unknown = set(kwargs).difference(self.traits())
+                if unknown:
+                    raise AttributeError(f"{type(self).__name__} has no settings {sorted(unknown)}")
                 ctx_self.og_state = {
                     name: trait.get(self) for name, trait in self.traits().items()
                 }

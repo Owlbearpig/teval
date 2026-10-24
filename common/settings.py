@@ -7,9 +7,87 @@ from common.traits import (ValueRange, Path as TPath, Quantity, MultiPathClass, 
 from dataclasses import asdict
 from common.units import Q_
 from traitlets import Instance, Bool, Integer, Float, Enum as TEnum, Unicode, List
-from common.components import is_component_trait
-from common.default_appsettings import AppSettings
+from common.components import ComponentBase, is_component_trait
+from common.default_appsettings import AppSettings, EvalOpt, PpOpt, ImageEvalOpt
 from traitlets.traitlets import TraitError
+
+_simple_types = (float, str, list, bool, int)
+
+
+def _dump_settings(dump_dict, instance):
+    if instance is None:
+        return
+    for k, trait in instance.attributes.items():
+        en_save = trait.metadata.get("en_save", True)
+        if not en_save:
+            continue
+        val = trait.get(instance)
+        if not is_component_trait(trait):
+            if isinstance(val, Enum):
+                val = val.name
+            elif isinstance(val, Path):
+                val = str(val)
+            elif isinstance(val, Q_):
+                val = val.magnitude
+            elif issubclass(trait.__class__, ValueRange):
+                if isinstance(val[0], Q_):
+                    val = [val[0].magnitude, val[1].magnitude]
+                else:
+                    val = [val[0], val[1]]
+            elif isinstance(val, MultiPathClass):
+                dump_dict[k] = [str(p) for p in val.selected_paths]
+            elif isinstance(trait, FitParameterTable):
+                val = [{**asdict(p), "value": None} for p in val]
+            if isinstance(val, _simple_types):
+                dump_dict[k] = val
+        else:
+            if issubclass(trait.klass, EvalResult):
+                continue
+            dump_dict[k] = {}
+
+            _dump_settings(dump_dict[k], val)
+
+
+def component_settings(instance):
+    # the saved (en_save) trait values of the component and its sub-components, as in the config file
+    dump_dict = {}
+    _dump_settings(dump_dict, instance)
+    return dump_dict
+
+
+# option groups of the settings whose traits moved into sub-components (sub-tabs)
+_split_option_groups = {"eval_opt": EvalOpt, "pp_opt": PpOpt}
+
+
+def migrate_config(settings_dict, json_dict=None):
+    # entries saved at the old place (directly in the option group) are moved into the sub-component, unless the new
+    # place already has a value. json_dict: the whole config file, for settings that moved from another component
+    if json_dict is not None:
+        selector_dict = json_dict.get("DataSet", {}).get("measurement_selector", {})
+        if isinstance(selector_dict, dict) and "interpolate_refs" in selector_dict:
+            drift_dict = settings_dict.setdefault("pp_opt", {}).setdefault("ref_drift", {})
+            drift_dict.setdefault("interpolate_refs", selector_dict["interpolate_refs"])
+        image_dict = json_dict.get("QSpaceEval", {}).get("image_eval")
+        if isinstance(image_dict, dict):
+            moved_names = set(ImageEvalOpt.class_trait_names()) - set(ComponentBase.class_trait_names())
+            target = settings_dict.setdefault("eval_opt", {}).setdefault("image_eval", {})
+            for name in moved_names.intersection(image_dict):
+                target.setdefault(name, image_dict[name])
+    for group_name, group_cls in _split_option_groups.items():
+        group_dict = settings_dict.get(group_name)
+        if not isinstance(group_dict, dict):
+            continue
+        own_names = set(group_cls.class_trait_names())
+        for sub_name, trait in group_cls.class_traits().items():
+            if not is_component_trait(trait):
+                continue
+            moved_names = set(trait.klass.class_trait_names()) - own_names
+            moved = {name: group_dict.pop(name) for name in list(group_dict) if name in moved_names}
+            if moved:
+                sub_dict = group_dict.setdefault(sub_name, {})
+                for name, val in moved.items():
+                    sub_dict.setdefault(name, val)
+
 
 class Settings(AppSettings):
 
@@ -49,51 +127,22 @@ class Settings(AppSettings):
         if not self.config_path.parent.exists():
             self.config_path.parent.mkdir()
 
-        comp_class = component_instance.__class__
-        comp_class_name = comp_class.__name__
-        simple_types = (float, str, list, bool, int)
-
-        def make_dump_dict(dump_dict, instance):
-            if instance is None:
-                return
-            for k, trait in instance.attributes.items():
-                en_save = trait.metadata.get("en_save", True)
-                if not en_save:
-                    continue
-                val = trait.get(instance)
-                if not is_component_trait(trait):
-                    if isinstance(val, Enum):
-                        val = val.name
-                    elif isinstance(val, Path):
-                        val = str(val)
-                    elif isinstance(val, Q_):
-                        val = val.magnitude
-                    elif issubclass(trait.__class__, ValueRange):
-                        if isinstance(val[0], Q_):
-                            val = [val[0].magnitude, val[1].magnitude]
-                        else:
-                            val = [val[0], val[1]]
-                    elif isinstance(val, MultiPathClass):
-                        dump_dict[k] = [str(p) for p in val.selected_paths]
-                    elif isinstance(trait, FitParameterTable):
-                        val = [{**asdict(p), "value": None} for p in val]
-                    if isinstance(val, simple_types):
-                        dump_dict[k] = val
-                else:
-                    if issubclass(trait.klass, EvalResult):
-                        continue
-                    dump_dict[k] = {}
-
-                    make_dump_dict(dump_dict[k], val)
+        comp_class_name = component_instance.__class__.__name__
 
         if self.config_path.exists():
             with open(self.config_path, "r") as fp:
                 settings_dict = json.load(fp)
-                settings_dict[comp_class_name] = {}
         else:
-            settings_dict = {comp_class_name: {}}
+            settings_dict = {}
 
-        make_dump_dict(settings_dict[comp_class_name], component_instance)
+        if not self.save_settings_on_exit:
+            # only the option itself, otherwise the next start would load the stored "on" and save again
+            if component_instance is not self:
+                return
+            settings_dict.setdefault(comp_class_name, {})["save_settings_on_exit"] = False
+            print(f"Saving settings is disabled, only stored that in {self.config_path}")
+        else:
+            settings_dict[comp_class_name] = component_settings(component_instance)
 
         with open(self.config_path, 'w') as fp:
             json.dump(settings_dict, fp, indent=4)
@@ -172,6 +221,8 @@ class Settings(AppSettings):
         with open(config_path, "r") as f:
             json_dict = json.load(f)
             if component_class_name in json_dict:
+                if isinstance(component_instance, AppSettings):
+                    migrate_config(json_dict[component_class_name], json_dict)
                 set_trait_values(component_instance, json_dict[component_class_name])
             else:
                 print(f"No custom config found for component {component_class_name}. Using default values.")

@@ -16,16 +16,32 @@ def coh_tmm_wrapper(pol, n_list, d_list, th_0, lam_vac):
     d_list = np.asarray(d_list, dtype=float)
     num_layers = len(n_arr)
 
-    with np.errstate(invalid="ignore", over="ignore"):
-        th_arr = np.arcsin(n_arr[0] * np.sin(th_0) / n_arr)
-        for i in (0, -1):
-            th_arr[i] = np.where(_is_forward_angle(n_arr[i], th_arr[i]), th_arr[i], np.pi - th_arr[i])
+    if pol not in ("s", "p"):
+        raise ValueError("Polarization must be 's' or 'p'")
 
-        kz_arr = 2 * np.pi * n_arr * np.cos(th_arr) / lam_vac
+    with np.errstate(invalid="ignore", over="ignore"):
+        if th_0 == 0:
+            # normal incidence: every angle is 0 (pi for a backward outer medium), skips arcsin / cos of the
+            # complex arrays which dominate the cost of the scan grids
+            cos_arr = np.ones(n_arr.shape, dtype=complex)
+            for i in (0, -1):
+                cos_arr[i] = np.where(_is_forward_angle(n_arr[i], 0.0), 1.0, -1.0)
+        else:
+            th_arr = np.arcsin(n_arr[0] * np.sin(th_0) / n_arr)
+            for i in (0, -1):
+                th_arr[i] = np.where(_is_forward_angle(n_arr[i], th_arr[i]), th_arr[i], np.pi - th_arr[i])
+            cos_arr = np.cos(th_arr)
+
+        kz_arr = 2 * np.pi * n_arr * cos_arr / lam_vac
 
         def interface(i):
-            return (interface_t(pol, n_arr[i], n_arr[i + 1], th_arr[i], th_arr[i + 1]),
-                    interface_r(pol, n_arr[i], n_arr[i + 1], th_arr[i], th_arr[i + 1]))
+            # Fresnel amplitudes, same as tmm.interface_t / interface_r with the cosines computed once
+            n_i, n_f, c_i, c_f = n_arr[i], n_arr[i + 1], cos_arr[i], cos_arr[i + 1]
+            if pol == "s":
+                denom = n_i * c_i + n_f * c_f
+                return 2 * n_i * c_i / denom, (n_i * c_i - n_f * c_f) / denom
+            denom = n_f * c_i + n_i * c_f
+            return 2 * n_i * c_i / denom, (n_f * c_i - n_i * c_f) / denom
 
         # Mtilde = (1/t01) [[1, r01], [r01, 1]] @ M_1 @ ... @ M_(num_layers-2), elementwise 2x2 products
         t_, r_ = interface(0)

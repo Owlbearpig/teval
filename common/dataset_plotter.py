@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
-from common.default_appsettings import (Domain, PlotReferenceWaveform, Direction,
+from common.default_appsettings import (Domain, PlotReferenceWaveform, Direction, StripeDirection,
                                         ClimateQuantity, QuantityEnum, AppSettings, ComponentToggle, ComplexPart)
 from functools import partial
 from common.functions import moving_average, f_axis_idx_map, local_minima_1d, round_dx, to_db
@@ -749,6 +749,8 @@ class ImagePlot(DataSetPlotter):
         self.img_ax = None
         self.drawn_elements = {"patches": [], "text_labels": [], "points": []}
         self.grid_thread = None
+        # handler(x, y, meas_list) -> True if it handled the click, then the default on-click plot is skipped
+        self.click_handlers = []
 
         self.avg_val_rect = AverageValRect(self, object_name="Average value rectangle")
         self.slice_plots = SlicePlots(self, object_name="Slice plots")
@@ -794,7 +796,44 @@ class ImagePlot(DataSetPlotter):
     def real_grid_vals(self):
         if self.grid_vals is None:
             return None
-        return self.to_real(self.grid_vals)
+        vals = self.to_real(self.grid_vals)
+        if self.plot_settings.destripe:
+            vals = self._destripe(vals)
+        return vals
+
+    def _destripe(self, vals):
+        # line offset: median of the line in the region minus the median of the neighbouring lines' medians (the
+        # trend), removed from the whole line. Grid axis 0 is x, axis 1 is y: rows (constant y) are lines along axis 0
+        opt = self.plot_settings
+        shape = self.img_shape
+        rows = opt.destripe_direction == StripeDirection.rows
+        grid = vals if rows else vals.T
+        along, across = (shape["x_coords"], shape["y_coords"]) if rows else (shape["y_coords"], shape["x_coords"])
+        along_rng = opt.destripe_x_range if rows else opt.destripe_y_range
+        across_rng = opt.destripe_y_range if rows else opt.destripe_x_range
+
+        def in_range(coords, rng):
+            lo, hi = sorted(q.to("mm").magnitude for q in rng)
+            return np.ones(len(coords), bool) if hi <= lo else (coords >= lo) & (coords <= hi)
+
+        sel_along, sel_lines = in_range(along, along_rng), np.flatnonzero(in_range(across, across_rng))
+        if not sel_along.any() or len(sel_lines) < 3:
+            return vals
+        region = grid[np.ix_(sel_along, sel_lines)].astype(float)
+        region[~np.isfinite(region)] = np.nan
+        medians = np.nanmedian(region, axis=0)
+        half = max(opt.destripe_window, 3) // 2
+        trend = np.array([np.nanmedian(medians[max(i - half, 0):i + half + 1]) for i in range(len(medians))])
+
+        out = np.array(grid, dtype=float)
+        if opt.destripe_relative:
+            factor = np.where(np.isfinite(medians / trend) & (trend != 0), medians / trend, 1.0)
+            out[:, sel_lines] = out[:, sel_lines] / factor
+        else:
+            offset = np.where(np.isfinite(medians - trend), medians - trend, 0.0)
+            out[:, sel_lines] = out[:, sel_lines] - offset
+
+        return out if rows else out.T
 
     def _get_empty_grid(self):
         img_shape = self.img_shape
@@ -834,6 +873,22 @@ class ImagePlot(DataSetPlotter):
             return (area[0] <= x <= area[1]) * (area[2] <= y <= area[3])
 
         return False
+
+    def _auto_cbar_limits(self, shown_vals, missing):
+        # percentiles of the shown pixels that have a value, widened if they coincide (uniform image)
+        vals = np.asarray(shown_vals, dtype=float)[~missing]
+        vals = vals[np.isfinite(vals)]
+        if not vals.size:
+            return float(np.nanmin(shown_vals)), float(np.nanmax(shown_vals))
+        p_lo, p_hi = sorted(float(np.clip(getattr(p, "magnitude", p), 0, 100))
+                            for p in self.plot_settings.auto_cbar_percentiles)
+        lo, hi = (float(v) for v in np.percentile(vals, [p_lo, p_hi]))
+        if hi <= lo:
+            pad = abs(lo) * 1e-3 or 1e-12
+            lo, hi = lo - pad, hi + pad
+        shown = f"10^{lo:.4g} - 10^{hi:.4g}" if self.plot_settings.log_scale else f"{lo:.4g} - {hi:.4g}"
+        logging.info(f"Automatic color bar limits ({p_lo:g} - {p_hi:g} % of {vals.size} pixels): {shown}")
+        return lo, hi
 
     def _exclude_pixels(self, grid_vals):
         empty_grid = self._get_empty_grid()
@@ -878,6 +933,8 @@ class ImagePlot(DataSetPlotter):
             x = round_dx(event.xdata, dx)
             y = round_dx(event.ydata, dy)
             meas_list = self.measurement_selector.get_measurements_from_point(x, y)
+            if any(handler(x, y, meas_list) for handler in self.click_handlers):
+                return
             if self.selected_quantity_enum == QuantityEnum.P2P:
                 plotted_meas = self.plot_waveform_impl(meas_list)
             else:
@@ -897,6 +954,8 @@ class ImagePlot(DataSetPlotter):
         self.grid_thread.progress_changed.connect(lambda val: self.set_trait("grid_calc_progress", val))
 
         def _on_finish(new_grid_vals):
+            # pixels without a value become 0 for plotting, the mask keeps them out of the automatic color limits
+            self._grid_missing = ~np.isfinite(new_grid_vals)
             self.grid_vals = np.nan_to_num(new_grid_vals)
 
             if callback:
@@ -935,15 +994,23 @@ class ImagePlot(DataSetPlotter):
         ax = fig.add_subplot(111)
         fig.subplots_adjust(left=0.2)
 
-        if self.plot_settings.en_cbar_lim:
+        missing = getattr(self, "_grid_missing", None)
+        if missing is None or missing.shape != self.grid_vals.shape:
+            missing = np.zeros(self.grid_vals.shape, dtype=bool)
+        missing = missing[w0:w1, h0:h1]
+
+        # the limits are in the shown (possibly log10) values
+        if self.plot_settings.auto_cbar_lim:
+            cbar_min, cbar_max = self._auto_cbar_limits(shown_grid_vals, missing)
+        elif self.plot_settings.en_cbar_lim:
             cbar_min, cbar_max = self.plot_settings.cbar_lim
+            if self.plot_settings.log_scale:
+                cbar_min, cbar_max = np.log10(cbar_min), np.log10(cbar_max)
         else:
-            cbar_min = np.min(shown_grid_vals)
-            cbar_max = np.max(shown_grid_vals)
+            valid = np.asarray(shown_grid_vals, dtype=float)[~missing]
+            valid = valid[np.isfinite(valid)]  # log10 of empty (0) pixels is -inf
+            cbar_min, cbar_max = (float(valid.min()), float(valid.max())) if valid.size else (0.0, 1.0)
         np.savetxt("grid_values.txt", shown_grid_vals)
-        if self.plot_settings.log_scale:
-            cbar_min = np.log10(cbar_min)
-            cbar_max = np.log10(cbar_max)
 
         axes_extent = (float(img_extent[0] - shape_properties["dx"] / 2),
                        float(img_extent[1] + shape_properties["dx"] / 2),
@@ -1540,12 +1607,12 @@ class StabilityPlots(DataSetPlotter):
         x = system_stab_res_refs["meas_times"]
         y_ref = system_stab_res_refs["relative_delay"]
 
-        with self.settings.pp_opt.override(window_enabled=True, win_start=Q_(11, "ps"), center_on_pulse=False):
+        with self.settings.pp_opt.window.override(window_enabled=True, win_start=Q_(11, "ps"), center_on_pulse=False):
             system_stab_res_mon_pulse0 = self.get_stability_data(meas_set_kw=kw_filter_str)
         if system_stab_res_mon_pulse0 is None:
             return
 
-        with self.settings.pp_opt.override(window_enabled=True, win_start=Q_(27, "ps"), center_on_pulse=False):
+        with self.settings.pp_opt.window.override(window_enabled=True, win_start=Q_(27, "ps"), center_on_pulse=False):
             system_stab_res_mon_pulse1 = self.get_stability_data(meas_set_kw=kw_filter_str)
         if system_stab_res_mon_pulse1 is None:
             return

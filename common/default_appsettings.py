@@ -13,6 +13,12 @@ class QSpaceQuantity(Enum):
     k = "k"
     alpha = "alpha"
 
+class TrustRegionSolver(Enum):
+    # tr_solver of scipy.optimize.least_squares, member names are passed as is
+    exact = "Exact (SVD)"
+    lsmr = "Iterative (LSMR)"
+
+
 class SimRISelection(Enum):
     const = 0
 
@@ -330,38 +336,23 @@ class QuantityEnum(Enum):
     ExtCoe = DerivedQuantity("Extinction coefficient", domain=Domain.Frequency)
     AbsorptionCoe = DerivedQuantity("Absorption coe.", domain=Domain.Frequency, unit="1/cm")
     Conductivity = DerivedQuantity("Conductivity", domain=Domain.Frequency, unit="S/cm")
+    QSpaceThickness = DerivedQuantity("Q-space thickness", domain=Domain.Time, unit="µm")
+    QSpaceShift = DerivedQuantity("Q-space time shift", domain=Domain.Time, unit="fs")
+    QSpaceQVal = DerivedQuantity("Q-space q-value", domain=Domain.Time)
+    QSpaceRefractiveIdx = DerivedQuantity("Q-space refractive index", domain=Domain.Frequency)
+    QSpaceAbsorptionCoe = DerivedQuantity("Q-space absorption coe.", domain=Domain.Frequency, unit="1/cm")
+    QSpaceSampleMask = DerivedQuantity("Q-space sample mask", domain=Domain.Time)
+    QSpaceReliable = DerivedQuantity("Q-space reliable", domain=Domain.Time)
+    QSpaceMinWidth = DerivedQuantity("Q-space minimum width", domain=Domain.Time, unit="µm")
+    QSpaceQRatio = DerivedQuantity("Q-space q-value / neighbours", domain=Domain.Time)
+    QSpaceDDeviation = DerivedQuantity("Q-space thickness - neighbours", domain=Domain.Time, unit="µm")
+    QSpaceFullScan = DerivedQuantity("Q-space full scan", domain=Domain.Time)
+    QSpaceBandRefractiveIdx = DerivedQuantity("Q-space refractive index (band mean)", domain=Domain.Time)
+    QSpaceBandAbsorptionCoe = DerivedQuantity("Q-space absorption coe. (band mean)", domain=Domain.Time,
+                                              unit="1/cm")
 
 
-class EvalOpt(ComponentBase):
-    phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(name="Phase correction fit range")
-    avg_grp_delay_fit_range = ValueRange([Q_(0.25, "THz"), Q_(0.85, "THz")]).tag(name="Group delay fit range")
-    spectral_similarity_range = ValueRange([Q_(0.15, "THz"), Q_(2.00, "THz")]).tag(name="Spectral similarity range")
-
-    delta_d = TQuantity(Q_(2.0, "µm")).tag(name="Thickness uncertainty")
-    auto_fp_count = Bool(True, help="Number of Fabry-Perot echoes inside the recorded time window, estimated from "
-                                    "the trace length after the main pulse and the round trip time. Only used by "
-                                    "the truncated echo models (model_1layer_fp, t_model_2layer)").tag(
-        name="Use estimated number of Fabry-Perot echoes")
-    fp_count = Int(25, min=-1, help="-1: infinite number of echoes").tag(
-        name="Assumed number of Fabry-Perot echoes")
-    phi_offset_correction = Bool(True).tag(name="Phase offset correction")
-
-    d = TQuantity(Q_(0.0, "µm")).tag(name="Default nominal sample thickness")
-    d_film = TQuantity(Q_(0.0, "µm")).tag(name="Film thickness")
-
-    transmission_sim_grp = "Transmission simulation"
-    add_sim_to_res = Bool(False, group=transmission_sim_grp).tag(name="Add simulated transmission to result")
-    sim_d = TQuantity(Q_(100, "µm"), group=transmission_sim_grp).tag(name="Simulation thickness")
-    sim_nfp = Int(8, group=transmission_sim_grp).tag(name="Fabry perot count")
-    sim_h = TQuantity(Q_(1, "µm"), group=transmission_sim_grp).tag(name="Simulation film thickness")
-    sim_shift = TQuantity(Q_(0, "fs"), group=transmission_sim_grp).tag(name="Added phase shift")
-    sim_n_sub = ValueRange([1, 0],
-                           group=transmission_sim_grp).tag(name="Refractive index sub. (real, imag)")
-    sim_n_film = ValueRange([1, 0],
-                           group=transmission_sim_grp).tag(name="Refractive index film (real, imag)")
-    sim_n_selection = TEnum(SimRISelection, SimRISelection.const,
-                            group=transmission_sim_grp).tag(name="Simulation refractive index")
-
+class QValueOpt(ComponentBase):
     q_space_eval_grp = "Q-value calculation"
     normalize_q_vals = Bool(False, group=q_space_eval_grp).tag(name="Normalize q-values")
     use_separate_range = Bool(False, group=q_space_eval_grp).tag(name="Use separate range for calculation")
@@ -380,7 +371,14 @@ class EvalOpt(ComponentBase):
                                    "amplitude |r|^2 exp(-2 alpha d) is above the threshold, above that n and k "
                                    "contain no Fabry-Perot information").tag(name="Limit q-value range to visible echo")
     fp_amp_threshold = TQuantity(Q_(0.3, "%"), group=q_space_eval_grp).tag(name="Echo amplitude threshold")
+    remove_q_spikes = Bool(False, group=q_space_eval_grp,
+                           help="Replace isolated single-frequency spikes (e.g. a per-frequency solution on another "
+                                "branch, or noise) in the quantity by the mean of their neighbours before the "
+                                "q-value is calculated. The extracted n and k are not changed").tag(
+        name="Remove single-frequency spikes")
 
+
+class SplineFitOpt(ComponentBase):
     regulated_spline_grp = "Regulated spline optimization"
     knot_cnt = Int(100, min=2).tag(name="Spline count", group=regulated_spline_grp)
     auto_knot_cnt = Bool(True, group=regulated_spline_grp,
@@ -390,9 +388,139 @@ class EvalOpt(ComponentBase):
     reg_k = Float(1e-10).tag(name="k regularization", group=regulated_spline_grp, significant_figures=3)
     reg_n = Float(1e-10).tag(name="n regularization", group=regulated_spline_grp, significant_figures=3)
     max_nfev = Int(100, min=1).tag(name="Maximum number of function evaluations", group=regulated_spline_grp)
+    tr_solver = TEnum(TrustRegionSolver, default_value=TrustRegionSolver.exact, group=regulated_spline_grp,
+                      help="Solver of the trust region subproblem in each spline fit step. Exact: SVD of the "
+                           "Jacobian, the largest part of a fit. Iterative: LSMR, cheaper per step. With the per "
+                           "frequency refinement both give the same thickness and q-value").tag(
+        name="Trust region solver")
+    use_compiled_kernels = Bool(True, group=regulated_spline_grp,
+                                help="Compiled (numba) model, initial guess scan and per frequency refinement for "
+                                     "the single layer model, same results as the numpy code. Other models and a "
+                                     "missing numba installation use the numpy code").tag(
+        name="Use compiled kernels (numba)")
     per_freq_refine = Bool(True, group=regulated_spline_grp,
                            help="Solve n per frequency (Newton) starting from the spline fit, keeps the Fabry-Perot "
                                 "residuals the q-value is based on").tag(name="Per frequency refinement")
+
+
+class TransmissionSimOpt(ComponentBase):
+    transmission_sim_grp = "Transmission simulation"
+    add_sim_to_res = Bool(False, group=transmission_sim_grp).tag(name="Add simulated transmission to result")
+    sim_d = TQuantity(Q_(100, "µm"), group=transmission_sim_grp).tag(name="Simulation thickness")
+    sim_nfp = Int(8, group=transmission_sim_grp).tag(name="Fabry perot count")
+    sim_h = TQuantity(Q_(1, "µm"), group=transmission_sim_grp).tag(name="Simulation film thickness")
+    sim_shift = TQuantity(Q_(0, "fs"), group=transmission_sim_grp).tag(name="Added phase shift")
+    sim_n_sub = ValueRange([1, 0],
+                           group=transmission_sim_grp).tag(name="Refractive index sub. (real, imag)")
+    sim_n_film = ValueRange([1, 0],
+                           group=transmission_sim_grp).tag(name="Refractive index film (real, imag)")
+    sim_n_selection = TEnum(SimRISelection, SimRISelection.const,
+                            group=transmission_sim_grp).tag(name="Simulation refractive index")
+
+
+class ImageEvalOpt(ComponentBase):
+    # tuning of the q-space image evaluation (QSpaceImageEval), rarely changed per image
+    nbr_grp = "Neighbour guided scan"
+    seed_stride = Int(4, min=1, group=nbr_grp,
+                      help="Every n-th pixel in x and y gets the full thickness scan (settings of the q-space "
+                           "evaluation), then the spacing is halved and each new pixel only scans the window "
+                           "around its evaluated neighbours. 1: full scan for every pixel").tag(
+        name="Seed pixel spacing", priority=0)
+    nbr_d_window = TQuantity(Q_(10.0, "µm"), group=nbr_grp,
+                             help="Half width of the scanned thickness window around the median thickness of the "
+                                  "evaluated neighbours, should cover the pixel to pixel scatter of the thickness. "
+                                  "If the optimum ends up at the edge of the window, the window is moved there").tag(
+        name="Thickness window around neighbours", priority=1)
+    nbr_d_step = TQuantity(Q_(5.0, "µm"), group=nbr_grp).tag(name="Thickness window step", priority=2)
+    max_window_shifts = Int(2, min=0, group=nbr_grp,
+                            help="How often the window is moved to an optimum at its edge before the pixel gets "
+                                 "the full thickness scan").tag(name="Maximum window moves", priority=3)
+    nbr_iteration_count = Int(1, min=1, group=nbr_grp,
+                              help="Coarse window scan plus refinement iterations, the refinement uses the "
+                                   "thickness step shrink factor of the q-space evaluation. With the "
+                                   "interpolated minimum, refinement iterations are rarely worth their cost").tag(
+        name="Iteration count (window scan)", priority=4)
+    max_q_ratio = Float(1.5, group=nbr_grp,
+                        help="A window optimum whose q-value is more than this factor above the median q-value of "
+                             "the neighbours is not trusted (the window probably misses a thickness step): the pixel "
+                             "gets the full thickness scan, in the outlier re-evaluation the previous result is "
+                             "kept").tag(name="Maximum q-value ratio to neighbours", priority=5)
+
+    search_grp = "Thickness search"
+    probe_pixel_count = Int(32, min=0, group=search_grp,
+                            help="Number of random pixels that get the full thickness scan of the q-space "
+                                 "evaluation first. All later full scans only cover the thickness range of the "
+                                 "probe results (pixels with a q-value above twice the median are ignored) plus "
+                                 "the margin; an optimum at the edge of that range gets the full range scan. "
+                                 "0: always scan the full range").tag(name="Probe pixels", priority=10)
+    probe_range_margin = TQuantity(Q_(20.0, "µm"), group=search_grp).tag(name="Probe range margin", priority=11)
+    interpolate_minimum = Bool(True, group=search_grp,
+                               help="The thickness of the minimum is the vertex of the parabola through the q-values "
+                                    "of the best scanned thickness and its two neighbours, followed by one fit at "
+                                    "that thickness (for n and q). Replaces the refinement iterations of the full "
+                                    "scans").tag(name="Interpolate the q-value minimum", priority=12)
+
+    outlier_grp = "Outlier re-evaluation"
+    outlier_passes = Int(1, min=0, group=outlier_grp,
+                         help="After the scan, pixels whose thickness deviates from the median of their 8 "
+                              "neighbours by more than the threshold (and by more than 3x the scatter of the "
+                              "neighbours) are scanned again in the window around the consistent neighbours. The "
+                              "new result is only used if its optimum lies inside the window and passes the "
+                              "q-value check, real thickness steps keep their value").tag(
+        name="Re-evaluation passes", priority=20)
+    outlier_threshold = TQuantity(Q_(10.0, "µm"), group=outlier_grp).tag(name="Thickness deviation threshold",
+                                                                        priority=21)
+
+    inspect_grp = "Reliability and inspection"
+    max_width_ratio = Float(2.0, min=1.0, group=inspect_grp,
+                            help="A pixel is reliable if its q(d) minimum is about as sharp as in the rest of the "
+                                 "image (width: distance at which a parabola through the minimum doubles the "
+                                 "q-value, at most this factor times the median width of all pixels), its q-value is "
+                                 "at most the maximum q-value ratio above the median of its 8 neighbours and its "
+                                 "thickness deviates from theirs by at most the outlier threshold (or 3x their "
+                                 "scatter). Image plot quantities: Q-space reliable, minimum width, q-value / "
+                                 "neighbours, thickness - neighbours").tag(
+        name="Maximum width of the q-value minimum / median", priority=30)
+    inspect_on_click = Bool(True, group=inspect_grp,
+                            help="Clicking a pixel in the image plot of a Q-space quantity plots its q(d) curve, n "
+                                 "and alpha instead of the default on-click plot").tag(
+        name="Inspect pixel on click", priority=31)
+
+    general_grp = "General"
+    min_time_of_flight = TQuantity(Q_(0.1, "ps"), group=general_grp,
+                                   help="Pixels whose mean time of flight (sample to reference delay) is below this "
+                                        "value have no sample in the beam (air) and are not evaluated. 0: evaluate "
+                                        "all pixels").tag(name="Minimum time of flight", priority=40)
+    autosave_interval = TQuantity(Q_(60.0, "s"), group=general_grp,
+                                  help="The results are saved to q_space_image_autosave.npz in the result directory "
+                                       "during the evaluation at this interval and when it ends (also when cancelled "
+                                       "or failed). Load it and continue the evaluation to resume. 0: off").tag(
+        name="Autosave interval", priority=41)
+
+
+class EvalOpt(ComponentBase):
+    # sub-tabs of Settings -> Evaluation; settings saved before they existed are moved there on load
+    # (common.settings.migrate_config)
+    q_value = Instance(QValueOpt, kw={"object_name": "Q-value calculation"})
+    spline_fit = Instance(SplineFitOpt, kw={"object_name": "Spline fit"})
+    transmission_sim = Instance(TransmissionSimOpt, kw={"object_name": "Transmission simulation"})
+    image_eval = Instance(ImageEvalOpt, kw={"object_name": "Image evaluation"})
+
+    phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(name="Phase correction fit range")
+    avg_grp_delay_fit_range = ValueRange([Q_(0.25, "THz"), Q_(0.85, "THz")]).tag(name="Group delay fit range")
+    spectral_similarity_range = ValueRange([Q_(0.15, "THz"), Q_(2.00, "THz")]).tag(name="Spectral similarity range")
+
+    delta_d = TQuantity(Q_(2.0, "µm")).tag(name="Thickness uncertainty")
+    auto_fp_count = Bool(True, help="Number of Fabry-Perot echoes inside the recorded time window, estimated from "
+                                    "the trace length after the main pulse and the round trip time. Only used by "
+                                    "the truncated echo models (model_1layer_fp, t_model_2layer)").tag(
+        name="Use estimated number of Fabry-Perot echoes")
+    fp_count = Int(25, min=-1, help="-1: infinite number of echoes").tag(
+        name="Assumed number of Fabry-Perot echoes")
+    phi_offset_correction = Bool(True).tag(name="Phase offset correction")
+
+    d = TQuantity(Q_(0.0, "µm")).tag(name="Default nominal sample thickness")
+    d_film = TQuantity(Q_(0.0, "µm")).tag(name="Film thickness")
 
     smoothing_avg_grp = "Smoothing average"
     smoothing_avg_en = Bool(False).tag(name="Enable smoothing average of n and k", group=smoothing_avg_grp)
@@ -405,10 +533,33 @@ class EvalOpt(ComponentBase):
                                        group=shift_grp).tag(name="Shift axis bounds")
     shift_opt_axis_step = TQuantity(Q_(1, "fs"), group=shift_grp).tag(name="Shift axis step")
 
-class PpOpt(ComponentBase):
-    remove_dc = Bool(True).tag(name="Subtract DC")
-    normalize_data = Bool(False).tag(name="Normalize waveform")
+class StripeDirection(Enum):
+    rows = "Rows (constant y)"
+    columns = "Columns (constant x)"
 
+
+class RefDriftOpt(ComponentBase):
+    # correction of a drift of the THz pulse between references, e.g. references measured once per scan row
+    interpolate_refs = Bool(False,
+                            help="The transmission of a sample uses its matching reference and the reference (block) "
+                                 "measured on the other side of it in time, interpolated to the sample's "
+                                 "measurement time (amplitude and phase). Compensates slow drifts of the THz pulse "
+                                 "between references, which shift the thickness of a q-space evaluation by about "
+                                 "0.3 um per fs of timing drift").tag(name="Interpolate reference in time", priority=0)
+    max_interp_gap = TQuantity(Q_(30.0, "min"),
+                               help="Interpolate only between references (blocks) at most this far apart in time, "
+                                    "otherwise the matching reference is used alone").tag(
+        name="Maximum time between interpolated references", priority=1)
+    block_median = Bool(False,
+                        help="References measured in a row (less than the block gap apart, e.g. the air spots of one "
+                             "opening of a sample holder) form a block, and the reference is the median of the "
+                             "block (amplitude and phase). Keeps single references, e.g. partly blocked ones at the "
+                             "edge of an opening, from setting the amplitude").tag(
+        name="Median of reference blocks", priority=2)
+    block_gap = TQuantity(Q_(60.0, "s")).tag(name="Maximum time between references of a block", priority=3)
+
+
+class WindowOpt(ComponentBase):
     window_group = "Window options"
     window_enabled = Bool(False, group=window_group).tag(name="Enable window")
     win_width = TQuantity(Q_(10, "ps"), group=window_group).tag(name="Window width")
@@ -435,6 +586,16 @@ class PpOpt(ComponentBase):
     taylor_nbar = Int(4, group=window_param_group).tag(name="Taylor nbar", priority=2000)
     taylor_sll = Float(30, group=window_param_group).tag(name="Taylor sll", priority=2000)
     taylor_norm = Bool(True, group=window_param_group).tag(name="Taylor normalize", priority=2000)
+
+
+class PpOpt(ComponentBase):
+    # sub-tab of Settings -> Preprocessing; settings saved before it existed are moved there on load
+    # (common.settings.migrate_config)
+    window = Instance(WindowOpt, kw={"object_name": "Window"})
+    ref_drift = Instance(RefDriftOpt, kw={"object_name": "Reference drift"})
+
+    remove_dc = Bool(True).tag(name="Subtract DC")
+    normalize_data = Bool(False).tag(name="Normalize waveform")
 
     filter_group = "Frequency filter options"
     filter_enabled = Bool(False, group=filter_group, name="Enabled").tag(name="Enable filter")
@@ -478,6 +639,35 @@ class PlotOpt(ComponentBase):
     img_title = Unicode("", group=image_group).tag(name="Image title")
     en_cbar_label = Bool(True, group=image_group).tag(name="Enable color bar label")
     en_cbar_lim = Bool(default_value=False, group=image_group).tag(name="Enable custom color bar limits")
+    auto_cbar_lim = Bool(False, group=image_group,
+                         help="Color bar limits from percentiles of the shown pixels, so that outliers (sample "
+                              "edges, holder, single bad pixels) don't stretch the color scale. Pixels without a value "
+                              "(e.g. not evaluated) are ignored. The limits are logged, they can be copied to the "
+                              "custom limits. Takes precedence over the custom limits").tag(
+        name="Automatic color bar limits")
+    auto_cbar_percentiles = ValueRange([1.0, 99.0], group=image_group).tag(
+        name="Automatic limits: percentiles (%)")
+
+    destripe_group = "Image destriping"
+    destripe = Bool(False, group=destripe_group,
+                    help="Removes stripes along the scan lines (e.g. from a drift of the system between scan rows): "
+                         "the median of each line within the region is compared to the median of the neighbouring "
+                         "lines, and the difference is removed from the whole line. Assumes that the sample in the "
+                         "region has no real structure from line to line, real steps along the lines stay").tag(
+        name="Remove stripes", priority=0)
+    destripe_direction = TEnum(StripeDirection, StripeDirection.rows, group=destripe_group).tag(
+        name="Stripe direction", priority=1)
+    destripe_window = Int(15, min=3, group=destripe_group,
+                          help="Number of neighbouring lines whose median is the reference of a line").tag(
+        name="Lines for the trend", priority=2)
+    destripe_x_range = ValueRange([Q_(0.0, "mm"), Q_(0.0, "mm")], group=destripe_group,
+                                  help="Region used to determine the line offsets, equal bounds: the whole image").tag(
+        name="Region x-range", priority=3)
+    destripe_y_range = ValueRange([Q_(0.0, "mm"), Q_(0.0, "mm")], group=destripe_group).tag(
+        name="Region y-range", priority=4)
+    destripe_relative = Bool(False, group=destripe_group,
+                             help="Divide the lines by their relative offset instead of subtracting it, for "
+                                  "amplitude like quantities").tag(name="Relative offsets", priority=5)
 
 class ComponentToggle(ComponentBase):
     image_plot_grp = "Image plot"
@@ -499,6 +689,7 @@ class ComponentToggle(ComponentBase):
     en_q_space_eval = Bool(True).tag(name="Main component", group=q_space_eval, priority=1000)
     en_preprocessing = Bool(True).tag(name="Preprocessing view", group=q_space_eval, priority=1001)
     en_multilayer = Bool(True).tag(name="Multi-layer sample", group=q_space_eval, priority=1002)
+    en_q_space_image = Bool(True).tag(name="Image evaluation", group=q_space_eval, priority=1003)
 
     regression = "Regression"
     en_regression = Bool(True).tag(name="Main component", group=regression, priority=1000)
@@ -510,7 +701,13 @@ class ComponentToggle(ComponentBase):
     en_sparse_deconvolution = Bool(True).tag(name="Main component", group=sparse_deconvolution, priority=1000)
 
 class AppSettings(ComponentBase):
+    save_settings_on_exit = Bool(True, help="Off: the settings are not written to the config file when the app closes "
+                                            "(also not by the command line interface), changes are lost. Only this "
+                                            "option itself is stored, so saving stays off until it is switched on "
+                                            "again").tag(name="Save settings on exit")
     log_level = TEnum(LogLevel, default_value=LogLevel.info).tag(name="Log level")
+    max_log_lines = Int(250, min=10, help="Number of the newest messages kept in the message panel, older ones "
+                                          "are removed").tag(name="Maximum message lines")
 
     save_settings = Instance(SaveSettings, args=())
     pp_opt = Instance(PpOpt, args=())
