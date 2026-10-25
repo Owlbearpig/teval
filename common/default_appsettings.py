@@ -7,6 +7,8 @@ from traitlets import (Bool, Int, Float, Unicode, Dict as TDict, Enum as TEnum, 
 from common.eval_component.shgo_settings import SHGOOptions
 from common.components import ComponentBase
 from common.remote.options import RemoteOpt
+from common.visualization.image_deconvolution import DeconvolutionMethod
+from common.eval_component.dynamic_range import DynamicRangeOpt
 from common.traits import ValueRange, Path as TPath, Q_, Quantity as TQuantity
 
 class QSpaceQuantity(Enum):
@@ -352,6 +354,7 @@ class QuantityEnum(Enum):
     QSpaceBandAbsorptionCoe = DerivedQuantity("Q-space absorption coe. (band mean)", domain=Domain.Time,
                                               unit="1/cm")
     QSpaceThicknessUncertainty = DerivedQuantity("Q-space thickness uncertainty", domain=Domain.Time, unit="µm")
+    EMTVolumeFraction = DerivedQuantity("Effective medium volume fraction", domain=Domain.Time)
 
 
 class QValueOpt(ComponentBase):
@@ -554,6 +557,7 @@ class EvalOpt(ComponentBase):
     transmission_sim = Instance(TransmissionSimOpt, kw={"object_name": "Transmission simulation"})
     image_eval = Instance(ImageEvalOpt, kw={"object_name": "Image evaluation"})
     uncertainty = Instance(UncertaintyOpt, kw={"object_name": "Uncertainty"})
+    dynamic_range = Instance(DynamicRangeOpt, kw={"object_name": "Dynamic range"})
 
     phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(name="Phase correction fit range")
     avg_grp_delay_fit_range = ValueRange([Q_(0.25, "THz"), Q_(0.85, "THz")]).tag(name="Group delay fit range")
@@ -725,15 +729,42 @@ class PlotOpt(ComponentBase):
                              help="Divide the lines by their relative offset instead of subtracting it, for "
                                   "amplitude like quantities").tag(name="Relative offsets", priority=5)
 
+    sharpen_group = "Image sharpening"
+    sharpen = Bool(False, group=sharpen_group,
+                   help="Deconvolves the shown image with the beam profile (Gaussian intensity profile with the 1/e^2 "
+                        "radius below), which sharpens edges and small features. Pixels without a value are left "
+                        "out. Exact for quantities that are linear in the transmission (field, power), "
+                        "approximate for derived ones (thickness, n). Stronger settings amplify noise").tag(
+        name="Deconvolve with the beam profile", priority=10)
+    sharpen_method = TEnum(DeconvolutionMethod, DeconvolutionMethod.richardson_lucy, group=sharpen_group,
+                           help="Richardson-Lucy: iterative, stays smooth, more iterations sharpen more. Wiener: "
+                                "one step, the signal to noise ratio sets the strength, also for values that "
+                                "change sign").tag(name="Method", priority=11)
+    beam_radius = TQuantity(Q_(0.5, "mm"), group=sharpen_group,
+                            help="1/e^2 intensity radius w of the focus, e.g. the beam radius of the knife-edge "
+                                 "fit (Image plot, slice plots). Too large a radius over-sharpens: the values "
+                                 "overshoot and ring at edges").tag(name="Beam radius (1/e²)", priority=12)
+    use_knife_edge_radius = Bool(True, group=sharpen_group,
+                                 help="Use the beam radius of the last knife-edge fit of this session instead of "
+                                      "the value above, if there is one").tag(name="Use the knife-edge radius",
+                                                                              priority=13)
+    sharpen_iterations = Int(20, min=1, group=sharpen_group).tag(name="Richardson-Lucy iterations", priority=14)
+    wiener_snr = Float(100.0, min=1.0, group=sharpen_group,
+                       help="Signal to noise power ratio of the Wiener filter: larger sharpens more").tag(
+        name="Wiener signal to noise ratio", priority=15)
+
 class ComponentToggle(ComponentBase):
     image_plot_grp = "Image plot"
     en_image_plot = Bool(True).tag(name="Main component", group=image_plot_grp, priority=1000)
     en_avg_val_rect = Bool(True).tag(name="Average value rectangle", group=image_plot_grp, priority=1001)
     en_slice_plots = Bool(True).tag(name="Slice plots", group=image_plot_grp, priority=1002)
+    en_time_scans = Bool(True).tag(name="B-scan / C-scan", group=image_plot_grp, priority=1003)
+    en_spectral_explorer = Bool(True).tag(name="Spectral explorer", group=image_plot_grp, priority=1004)
 
     dataset_plotter_grp = "Dataset plots"
     en_extended_dataset_plots = Bool(True).tag(name="Main component", group=dataset_plotter_grp, priority=1000)
     en_stability_plots = Bool(True).tag(name="Climate plots", group=dataset_plotter_grp, priority=1001)
+    en_spectrogram = Bool(True).tag(name="Spectrogram", group=dataset_plotter_grp, priority=1002)
 
     measurement_selection = "Measurement selection"
     en_queue = Bool(True).tag(name="Queue", group=measurement_selection)
@@ -755,6 +786,9 @@ class ComponentToggle(ComponentBase):
 
     sparse_deconvolution = "Sparse deconvolution"
     en_sparse_deconvolution = Bool(True).tag(name="Main component", group=sparse_deconvolution, priority=1000)
+
+    effective_medium = "Effective medium"
+    en_effective_medium = Bool(True).tag(name="Main component", group=effective_medium, priority=1000)
 
 class AppSettings(ComponentBase):
     save_settings_on_exit = Bool(True, help="Off: the settings are not written to the config file when the app closes "

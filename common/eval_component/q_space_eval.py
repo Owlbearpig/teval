@@ -27,6 +27,7 @@ from common.eval_component.q_space_scan import ScanTarget, OptimizationCancelled
 from common.eval_component.q_value import fp_round_trip_time, compute_q_value, optimize_and_rate
 from common.eval_component import fast_kernels
 from common.eval_component.q_space_image import QSpaceImageEval, alpha_of
+from common.eval_component.dynamic_range import noise_floor, alpha_max_dataset, limit_frequency, alpha_max
 from common.eval_component.uncertainty import (estimator_for, random_generator, perturbed_transmissions,
                                                replicate_optimum, ThicknessUncertainty, TransmissionUncertainty)
 from dataclasses import dataclass
@@ -796,6 +797,17 @@ class QSpaceEval(EvalComponentBase):
 
         return refine_d_cnt, refine_shift_cnt
 
+    @staticmethod
+    def _log_dynamic_range_limit(res):
+        if "alpha_max" not in res.datasets or "alpha" not in res.datasets:
+            return
+        freq = res.datasets["alpha"].axes[0].to("THz").magnitude
+        f_lim = limit_frequency(freq, res.datasets["alpha"].data.magnitude.real,
+                                res.datasets["alpha_max"].data.magnitude)
+        if f_lim is not None:
+            logging.info(f"The absorption reaches 90 % of the maximum measurable absorption (dynamic range) at "
+                         f"{f_lim:.2f} THz, above that it is set by the noise")
+
     def check_cancel(self):
         if self._cancel_event is not None and self._cancel_event.is_set():
             raise OptimizationCancelled()
@@ -990,6 +1002,7 @@ class QSpaceEval(EvalComponentBase):
                 best_key = next(k for k, res in meas_results.items() if res is best)
                 logging.info(f"Optimum thickness {np.round(best.d, 3)}"
                              + f" (shift {best.shift})" * self.settings.eval_opt.enable_shift_opt)
+                self._log_dynamic_range_limit(best)
                 if self.settings.eval_opt.uncertainty.qspace_enabled:
                     self._selection_thickness_uncertainty(executor, ctx, meas, target, best, meas_label)
                 eval_result_data.optimum_results[ready_results[0].measurement] = best_key
@@ -1174,6 +1187,12 @@ class QSpaceEval(EvalComponentBase):
 
         norm_q_vals = self.settings.eval_opt.q_value.normalize_q_vals
         q_vals = [opt_res.optimization_info["q_val"] for opt_res in opt_results]
+        alpha_noise = None
+        if self.settings.eval_opt.dynamic_range.enabled:
+            try:
+                alpha_noise = noise_floor(self.dataset, len(ctx.selection.sams) if is_avg_meas else 1)
+            except Exception as e:
+                logging.warning(f"No noise floor for the maximum measurable absorption: {e}")
         for opt_res in opt_results:
             opt_res.measurement = str(meas) if is_avg_meas else meas.filepath.name
 
@@ -1203,6 +1222,10 @@ class QSpaceEval(EvalComponentBase):
                                                            data=Q_(residual, ""),
                                                            axes_labels=["Frequency"],
                                                            data_label="Residual")
+            if alpha_noise is not None:
+                opt_res.datasets["alpha_max"] = alpha_max_dataset(
+                    opt_res.freq_axis, ref_fd[:, 1], alpha_noise, opt_res.datasets["n"].data.magnitude.real,
+                    opt_res.d.to("µm").magnitude)
 
             if self.settings.eval_opt.transmission_sim.add_sim_to_res:
                 opt_res.datasets.update(self.calc_sim(t_model_kwargs, ref_fd))

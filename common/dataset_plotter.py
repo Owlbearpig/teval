@@ -11,6 +11,10 @@ from common.default_appsettings import (Domain, PlotReferenceWaveform, Direction
                                         ClimateQuantity, QuantityEnum, AppSettings, ComponentToggle, ComplexPart)
 from functools import partial
 from common.functions import moving_average, f_axis_idx_map, local_minima_1d, round_dx, to_db
+from common.visualization.image_deconvolution import deconvolve_image
+from common.visualization.spectral_explorer import SpectralExplorer
+from common.visualization.spectrogram import Spectrogram
+from common.visualization.time_scans import TimeScans
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -666,6 +670,7 @@ class SlicePlots(ComponentBase):
         )
 
         perr = np.sqrt(np.diag(pcov))
+        self.image_plot_inst.knife_edge_radius = float(abs(popt[2]))
 
         plt.figure(fig_num)
         plt.scatter(pos_axis, vals, label="Measurement", s=30, c="red", zorder=3)
@@ -743,6 +748,8 @@ class ImagePlot(DataSetPlotter):
 
     avg_val_rect = Instance(AverageValRect, allow_none=True).tag(toggle=ComponentToggle.en_avg_val_rect)
     slice_plots = Instance(SlicePlots, allow_none=True).tag(toggle=ComponentToggle.en_slice_plots)
+    time_scans = Instance(TimeScans, allow_none=True).tag(toggle=ComponentToggle.en_time_scans)
+    spectral_explorer = Instance(SpectralExplorer, allow_none=True).tag(toggle=ComponentToggle.en_spectral_explorer)
 
     def __init__(self, dataset, **kwargs):
         super().__init__(dataset=dataset, **kwargs)
@@ -755,6 +762,10 @@ class ImagePlot(DataSetPlotter):
 
         self.avg_val_rect = AverageValRect(self, object_name="Average value rectangle")
         self.slice_plots = SlicePlots(self, object_name="Slice plots")
+        self.time_scans = TimeScans(self, object_name="B-scan / C-scan")
+        self.spectral_explorer = SpectralExplorer(self, object_name="Spectral explorer")
+        # mm, 1/e^2 intensity radius of the last knife-edge fit (image sharpening)
+        self.knife_edge_radius = None
 
     @property
     def img_shape(self):
@@ -800,7 +811,22 @@ class ImagePlot(DataSetPlotter):
         vals = self.to_real(self.grid_vals)
         if self.plot_settings.destripe:
             vals = self._destripe(vals)
+        if self.plot_settings.sharpen:
+            vals = self._sharpen(vals)
         return vals
+
+    def _sharpen(self, vals):
+        opt = self.plot_settings
+        radius = opt.beam_radius.to("mm").magnitude
+        if opt.use_knife_edge_radius and self.knife_edge_radius:
+            radius = self.knife_edge_radius
+        missing = getattr(self, "_grid_missing", None)
+        valid = np.isfinite(vals) if missing is None or missing.shape != vals.shape else ~missing & np.isfinite(vals)
+        if radius <= 0 or valid.sum() < 2:
+            return vals
+        shape = self.img_shape
+        return deconvolve_image(vals, valid, shape["dx"], shape["dy"], radius, opt.sharpen_method,
+                                opt.sharpen_iterations, opt.wiener_snr)
 
     def _destripe(self, vals):
         # line offset: median of the line in the region minus the median of the neighbouring lines' medians (the
@@ -1682,10 +1708,12 @@ class ExtendedDataSetPlotter(DataSetPlotter):
     printed_freqs = Unicode(default_value="1.0, 2.0").tag(name="Printed frequencies (THz)", group=print_eval_win_grp)
 
     stability_plotter = Instance(StabilityPlots, allow_none=True).tag(toggle=ComponentToggle.en_stability_plots)
+    spectrogram = Instance(Spectrogram, allow_none=True).tag(toggle=ComponentToggle.en_spectrogram)
 
     def __init__(self, dataset: DataSet, **kwargs):
         super().__init__(dataset=dataset, **kwargs)
         self.stability_plotter = StabilityPlots(self.dataset, object_name="Stability plots")
+        self.spectrogram = Spectrogram(self, object_name="Spectrogram")
 
 
     @action("Calculate quantity value", priority=1011)

@@ -415,6 +415,77 @@ python cli.py --set q_space_eval.transmission_model=tmm_multilayer \
               qspace --out results.csv
 ```
 
+## Additional views and tools
+
+Each of these can be switched off on its own: the views and the effective medium tab in Settings → Component toggle
+("B-scan / C-scan", "Spectral explorer" under Image plot, "Spectrogram" under Dataset plots, "Effective medium"), the
+absorption limit in Settings → Evaluation → Dynamic range, the image sharpening in the plot settings (group "Image
+sharpening", off by default).
+
+### B-scan / C-scan (Image plot)
+
+- **B-scan**: the time traces along a line as an image, position along the line against delay. Echoes and layer
+  interfaces of the sample are horizontal lines, steps in the thickness shift them. The line is the one of the slice
+  plots ("Use the slice plot line") or its own. "Envelope (dB)" shows the envelope (magnitude of the analytic signal)
+  relative to the maximum, so the echoes are visible independent of their sign.
+- **C-scan**: an image at one delay, with a slider for the delay (depth). "Shown value": the field at the delay, the
+  envelope maximum in a gate (gate width), or the delay of the envelope maximum in the gate (after the gate start), a
+  depth map of a reflection or echo. Below the image the mean trace with the gate. "Delay range" limits the traces
+  (all traces of the image are kept in memory: e.g. 7777 x 4001 delays = 124 MB, about 2 s).
+
+### Spectral explorer (Image plot)
+
+Uses the selected quantity of the image plot, which has to be a spectrum (e.g. amplitude transmission, absorbance,
+phase, Q-space refractive index / absorption), on the frequency range of the image grid calculation.
+- **Frequency explorer**: the image with a slider over the frequencies, and the median spectrum (with the 10 - 90 %
+  band of the pixels); a click on a pixel adds its spectrum.
+- **False-color image**: the band means of three frequency bands as red, green and blue. Each band is stretched to its
+  1 - 99 % range, or one scale for all three ("Common scale for the bands"). Regions of different material show up in
+  different colors even where the quantity at a single frequency is similar.
+
+Both take as long as an image of the quantity (most of it is finding the reference of every measurement).
+
+### Spectrogram (Dataset plots)
+
+"Spectrogram of the selection": when which frequencies arrive, for the (mean of the) selected sample measurements and
+their references. Short-time Fourier transform with a Gaussian window ("Window width": longer gives a finer frequency
+resolution and a coarser time resolution) or Morlet wavelets ("Wavelet cycles", the same trade-off; at low frequencies
+coarser in time). Fabry-Perot echoes repeat the pulse later, water vapour lines ring long after it at their
+frequencies, dispersion tilts the arrival time with frequency.
+
+### Maximum measurable absorption (Settings → Evaluation → Dynamic range)
+
+Where the sample attenuates the reference down to the noise floor, the extracted absorption coefficient no longer
+follows the sample: alpha_max d = 2 ln(DR 4n / (n+1)^2) (Jepsen & Fischer, Opt. Lett. 30, 29 (2005)), with DR the
+reference amplitude spectrum over the noise floor (the additive noise of the noise model, see Uncertainty, divided by
+the square root of the number of averaged measurements). The q-space results get the quantity "alpha_max" (check it
+together with alpha in the result view), the log says from which frequency on alpha reaches 90 % of it, and the pixel
+view of the image evaluation shows it (with its smallest value in the legend, as it is often far above alpha).
+
+### Image sharpening (plot settings, group "Image sharpening")
+
+Deconvolves the shown image with the beam profile, a Gaussian intensity profile with the 1/e^2 radius "Beam radius" or,
+with "Use the knife-edge radius", the beam radius of the last knife-edge fit (slice plots, integrated power). Pixels
+without a value are left out. Richardson-Lucy (iterations: more is sharper) or a Wiener filter (signal to noise ratio:
+larger is sharper). Exact for quantities linear in the transmission, approximate for derived ones (thickness, n). With
+too large a radius the values overshoot and ring at edges: on the sapphire image (0.5 mm pixels, edges within ~1 mm) a
+radius of 0.5 mm sharpens slightly, 1 mm already rings.
+
+### Effective medium (own tab)
+
+Mixtures of a host (matrix, e.g. PE powder, or air for porosity) and inclusions with volume fraction f. Models:
+Bruggeman (both phases equivalent, any fraction), Maxwell Garnett (dilute spherical inclusions), Landau-Lifshitz-
+Looyenga (shape independent, powders and porosity) and linear in n (time of flight adds up). Host and inclusion index:
+a constant n, k or the optimum result of a q-space result file. "Calculate":
+- **Volume fraction from the mixture**: fits f (0 - 1) to the mixture index of a q-space result file over the frequency
+  range. At 0 or 1 the measured index is outside of what the model gives with these components.
+- **Inclusion index from the mixture**: the index of the inclusions at the given fraction (e.g. a substance in a PE
+  pellet with known mass and density).
+- **Mixture index from the fraction**: the model prediction.
+
+Image quantity "Effective medium volume fraction": the fitted fraction of every pixel of the q-space image evaluation
+(its n(f) over the frequency range), with the host and inclusion settings of the tab.
+
 ## Remote workers
 
 The fits of the q-space evaluation (selections, image evaluation, Monte Carlo uncertainty) can run on another

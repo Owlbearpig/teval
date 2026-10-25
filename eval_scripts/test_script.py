@@ -4,6 +4,7 @@ from common.eval_component.q_space_eval import QSpaceEval
 from common.eval_component.regression import Regression
 from common.eval_component.conductivity_eval import ConductivityEval
 from common.eval_component.sparse_deconvolution import SparseDeconvolution
+from common.eval_component.effective_medium import EffectiveMedium
 from common.settings import Settings
 from traitlets import Instance
 from common.dataset_plotter import ExtendedDataSetPlotter, ImagePlot
@@ -21,6 +22,7 @@ class AppRoot(ComponentBase):
         toggle=ComponentToggle.en_conductivity_eval)
     sparse_deconvolution = Instance(SparseDeconvolution, allow_none=True).tag(
         toggle=ComponentToggle.en_sparse_deconvolution)
+    effective_medium = Instance(EffectiveMedium, allow_none=True).tag(toggle=ComponentToggle.en_effective_medium)
 
     def __init__(self):
         super().__init__()
@@ -33,6 +35,8 @@ class AppRoot(ComponentBase):
         self.regression = Regression(self.dataset, object_name="Regression")
         self.conductivity_eval = ConductivityEval(self.dataset, object_name="Conductivity evaluation")
         self.sparse_deconvolution = SparseDeconvolution(self.dataset, object_name="Sparse deconvolution")
+        self.effective_medium = EffectiveMedium(self.dataset, q_space_eval=self.q_space_eval,
+                                                object_name="Effective medium")
 
     def __enter__(self, *args):
         super().__enter__(*args)

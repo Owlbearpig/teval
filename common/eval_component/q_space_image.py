@@ -20,10 +20,11 @@ from traitlets import Bool, Enum as TEnum, Integer, Unicode
 from common.components import action
 from common.consts import c_thz
 from common.dataset import DataSetFormatter
-from common.default_appsettings import QuantityEnum
+from common.default_appsettings import QuantityEnum, Domain
 from common.eval_component.n_guess import NGuessMethod
 from common.eval_component.q_space_scan import ScanTarget, OptimizationCancelled
 from common.eval_component.uncertainty import estimator_for
+from common.eval_component.dynamic_range import noise_floor, alpha_max
 from common.settings import component_settings
 from common.traits import Q_, ValueRange, Path as PathTrait
 from mpl_settings import mpl_style_params
@@ -1114,6 +1115,14 @@ class QSpaceImageEval(DataSetFormatter):
             ax_a.plot(freq, alpha_of(freq, nbr.n), color="0.7", lw=0.7, label=label)
         ax_n.plot(freq, res.n.real, color="C0", label="Pixel")
         ax_a.plot(freq, alpha_of(freq, res.n), color="C0", label="Pixel")
+        a_max = self._pixel_alpha_max(key, res)
+        if a_max is not None:
+            # the limit is far above alpha where the dynamic range is large, it shouldn't squeeze alpha
+            top = 1.5 * np.nanmax(np.r_[alpha_of(freq, res.n).real, [nbr_a for nbr in nbrs
+                                                                    for nbr_a in alpha_of(freq, nbr.n).real]])
+            ax_a.plot(freq, a_max, color="C3", ls="--", label=f"Maximum measurable (min. {np.nanmin(a_max):.0f} 1/cm)")
+            if np.isfinite(top) and top > ax_a.get_ylim()[0]:
+                ax_a.set_ylim(top=top)
         ax_n.set_ylabel("Refractive index")
         ax_a.set_ylabel("Absorption coefficient (1/cm)")
         for ax in (ax_n, ax_a):
@@ -1121,6 +1130,22 @@ class QSpaceImageEval(DataSetFormatter):
             ax.legend()
         fig.tight_layout()
         plt.show()
+
+    def _pixel_alpha_max(self, key, res):
+        # alpha_max of the pixel (dynamic range of its reference spectrum, its measurements averaged), None if off
+        if not self.settings.eval_opt.dynamic_range.enabled or self._freq_idx is None:
+            return None
+        meas_list = self._pixel_meas.get(key)
+        if not meas_list:
+            return None
+        try:
+            refs = self.dataset.measurement_selector.get_matching_refs(meas_list)
+            ref_fd = self.dataset.get_multi_data(refs, Domain.Frequency)[:, self._freq_idx, 1]
+            noise = noise_floor(self.dataset, len(meas_list))
+        except Exception as e:
+            logging.debug(f"No maximum measurable absorption for the pixel: {e}")
+            return None
+        return alpha_max(self._freq_axis, np.mean(np.abs(ref_fd), axis=0), noise, res.n.real, res.d)
 
     def _results_arrays(self):
         # everything of the image results as arrays for np.savez, including what loading them needs to continue or
