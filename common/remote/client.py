@@ -9,6 +9,7 @@ open and checks a random key of the session; closing the ssh session (or this pr
 """
 import atexit
 import base64
+import getpass
 import hashlib
 import importlib.metadata
 import io
@@ -31,7 +32,17 @@ from pathlib import Path
 
 repo_root = Path(__file__).resolve().parents[2]
 remote_home = "~/.teval_remote"
-default_remote_python = f"{remote_home}/venv/bin/python"
+# one Python environment per local user: several people share the remote account, and the setup installs the
+# package versions of whoever runs it
+local_user = re.sub(r"[^A-Za-z0-9_.-]", "_", getpass.getuser()) or "user"
+user_venv = f"{remote_home}/venv-{local_user}"
+# the environment that the setup used to create for everyone, migrated to the own one (common.settings.migrate_config)
+shared_venv_python = f"{remote_home}/venv/bin/python"
+
+
+def remote_python_path(python=""):
+    # empty: the own environment of setup_environment
+    return python.strip() or f"{user_venv}/bin/python"
 
 BOOTSTRAP = """
 import io, os, shutil, sys, zipfile
@@ -93,8 +104,8 @@ def popen_flags():
 
 
 class RemoteConnection:
-    def __init__(self, host, python=default_remote_python, workers=0, ssh_options="", remote_port=0):
-        self.host, self.python, self.requested_workers = host, python, workers
+    def __init__(self, host, python="", workers=0, ssh_options="", remote_port=0):
+        self.host, self.python, self.requested_workers = host, remote_python_path(python), workers
         self.ssh_options, self.remote_port = ssh_options, remote_port
         self.proc, self.conn, self.info = None, None, {}
         self.workers = 0
@@ -142,6 +153,10 @@ class RemoteConnection:
         if ready != "READY":
             self.close()
             details = "; ".join(self._stderr_tail)
+            # 127: the shell didn't find the command (the messages are in the remote's language)
+            if self.proc.returncode == 127:
+                details += (" (the Python environment doesn't exist on the remote: \"Set up the Python environment "
+                            "on the remote\", or set \"Python on the remote\")")
             raise ConnectionError(ready or f"The worker server didn't start{f': {details}' if details else ''}")
 
         deadline = time.monotonic() + 15
@@ -423,7 +438,7 @@ def active_connection() -> RemoteConnection | None:
     return _connection if _connection is not None and _connection.alive else None
 
 
-def connect(host, python=default_remote_python, workers=0, ssh_options="", remote_port=0):
+def connect(host, python="", workers=0, ssh_options="", remote_port=0):
     global _connection
     with _connection_lock:
         if _connection is not None:
@@ -480,17 +495,18 @@ def pinned_requirements(requirements):
 
 
 def setup_environment(host, base_python="python3", ssh_options=""):
-    # virtual environment in ~/.teval_remote/venv with the packages of requirements.txt (the optional ones too), in
-    # the local versions if pip has them for the remote's Python, otherwise as in requirements.txt
+    # own virtual environment (user_venv) with the packages of requirements.txt (the optional ones too), in the local
+    # versions if pip has them for the remote's Python, otherwise as in requirements.txt
     requirements = (repo_root / "requirements.txt").read_text(encoding="utf-8")
     separator = "#---- requirements.txt"
     stdin_data = f"{pinned_requirements(requirements)}\n{separator}\n{requirements}\n".encode()
-    venv = f"{remote_home}/venv"
+    venv = user_venv
     pip = f"{venv}/bin/python -m pip install --progress-bar off"
-    script = (f"set -e; mkdir -p {remote_home}; cd {remote_home}; cat > requirements_all.txt; "
+    script = (f"set -e; mkdir -p {remote_home}; "
+              f"if [ ! -x {venv}/bin/python ]; then {base_python} -m venv {venv}; fi; "
+              f"cd {venv}; cat > requirements_all.txt; "
               f"sed '/^{separator}$/,$d' requirements_all.txt > requirements_pinned.txt; "
               f"sed '1,/^{separator}$/d' requirements_all.txt > requirements.txt; "
-              f"if [ ! -x {venv}/bin/python ]; then {base_python} -m venv {venv}; fi; "
               f"{venv}/bin/python -m pip install --upgrade pip -q; "
               f"if ! {pip} -r requirements_pinned.txt; then "
               f"echo 'The local package versions are not available for this Python, installing requirements.txt'; "

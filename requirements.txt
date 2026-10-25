@@ -1,0 +1,14 @@
+# tested with Python 3.13 and the versions below
+numpy>=2.2
+scipy>=1.16
+matplotlib>=3.10
+PySide6>=6.11
+traitlets>=5.15
+pint>=0.25
+pandas>=2.3
+h5py>=3.16
+tmm>=0.2
+# optional: compiled kernels of the q-space evaluation (falls back to numpy without it)
+numba>=0.61
+# optional: limits the worker processes to one BLAS thread (much slower spline fits without it)
+threadpoolctl>=3.6

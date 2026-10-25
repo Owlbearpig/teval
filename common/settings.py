@@ -12,6 +12,7 @@ from common.default_appsettings import AppSettings, EvalOpt, PpOpt, ImageEvalOpt
 from traitlets.traitlets import TraitError
 from PySide6 import QtWidgets
 from common.components import action
+from common.remote.client import shared_venv_python
 
 _simple_types = (float, str, list, bool, int)
 
@@ -111,6 +112,10 @@ def migrate_config(settings_dict, json_dict=None):
             target = settings_dict.setdefault("eval_opt", {}).setdefault("image_eval", {})
             for name in moved_names.intersection(image_dict):
                 target.setdefault(name, image_dict[name])
+    remote_dict = settings_dict.get("remote")
+    if isinstance(remote_dict, dict) and remote_dict.get("remote_python") == shared_venv_python:
+        # the environment that was shared by all users, each user has an own one now
+        remote_dict["remote_python"] = ""
     for group_name, group_cls in _split_option_groups.items():
         group_dict = settings_dict.get(group_name)
         if not isinstance(group_dict, dict):

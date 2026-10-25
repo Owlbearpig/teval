@@ -424,25 +424,52 @@ It stops when you disconnect, close the program or the ssh connection drops (e.g
 during an evaluation, the local workers finish it.
 
 One-time setup:
-1. Login without a password: on Windows (PowerShell), with the remote's name or IP address for `HOST`:
+1. Login without a password: generate a key, send it to the remote (this asks for the password of the teval account
+   once) and check the login.
+
+   Windows (PowerShell):
    ```
    ssh-keygen -t ed25519
-   type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh alex@HOST "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
-   ssh alex@HOST echo ok
+   type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh teval@pc13203.physik.uni-marburg.de "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+   ssh teval@pc13203.physik.uni-marburg.de echo ok
    ```
-   The last command must print `ok` without asking for a password. If the key has a passphrase, load it into the
-   ssh agent (Windows service "OpenSSH Authentication Agent", then `ssh-add`).
-2. Settings, "Remote workers": "Host" `alex@HOST`. Inside the institute network and over the VPN this is usually the
-   same name or address. A host alias of `~/.ssh/config` works as well (e.g. for a jump host).
-3. "Set up the Python environment on the remote": creates `~/.teval_remote/venv` on the remote with the packages of
-   `requirements.txt`, in the versions installed on this computer (a few minutes, the output appears in the message
-   panel; run it again after updating packages here). It needs Python 3.11 or newer
+
+   Linux / macOS (terminal):
+   ```
+   ssh-keygen -t ed25519
+   ssh-copy-id -i ~/.ssh/id_ed25519.pub teval@pc13203.physik.uni-marburg.de
+   ssh teval@pc13203.physik.uni-marburg.de echo ok
+   ```
+
+   The last command must print `ok` without asking for a password.
+   - If you already have a key, `ssh-keygen` asks `Overwrite (y/n)?`: answer `n` and use the existing key (skip the
+     first command). Overwriting it locks you out wherever that key is used (e.g. GitHub).
+   - The second command appends your key to the remote's `~/.ssh/authorized_keys` (`>>`, `ssh-copy-id` does the
+     same), the keys of the others stay. Each line there is one key and ends with a comment like `name@computer`;
+     deleting the line removes that person's access.
+   - If you gave the key a passphrase, load it into the ssh agent once per login, otherwise the program can't use the
+     key (it can't ask for the passphrase). Windows: start the service "OpenSSH Authentication Agent" (Services,
+     startup type "Automatic"), then `ssh-add`. Linux / macOS: `ssh-add` (desktop sessions usually run an agent
+     already; otherwise first `eval "$(ssh-agent)"`).
+2. Settings, "Remote workers": "Host" is `teval@pc13203.physik.uni-marburg.de` by default (the account made for
+   the remote workers), the same inside the institute network and over the VPN. A host alias of `~/.ssh/config`
+   works as well (e.g. for a jump host).
+3. "Set up the Python environment on the remote": creates your own environment `~/.teval_remote/venv-<your user
+   name on this computer>` on the remote with the packages of `requirements.txt`, in the versions installed on this
+   computer (under a minute when the packages are already in the remote's pip cache, otherwise a few minutes; the
+   output appears in the message panel; run it again after updating packages here). It needs Python 3.11 or newer
    ("Python for the setup") with the `venv` module (on Debian / Ubuntu the package `python3-venv`). Alternatively
-   set "Python on the remote" to an existing Python environment with the requirements.
+   set "Python on the remote" to an existing Python environment with the requirements (empty: your own environment).
 
 Use: "Connect" (or "Connect on start"). The message panel shows the remote's name, worker count, Python version and
 load. Evaluations then use the remote workers plus the local ones ("Use the local workers too", "Number of cpu cores to
 assign" of the evaluation). "Remote workers" 0 uses all cores of the remote; leave some free if others work on it.
+
+Sharing the remote account: several people can be connected at the same time, each connection has its own server,
+socket and key, and everyone has an own Python environment (so one person's setup doesn't change the package versions
+of the others). The code is cached per version, so different code versions don't interfere either. The cores are
+shared, though: with "Remote workers" 0 every connection starts a worker per core, so if you expect to evaluate at the
+same time, agree on e.g. 10 workers each.
 
 What to expect (sapphire image, 1681 pixels, local AMD Ryzen 7 9800X3D, remote Intel Xeon W-2255 with 10 cores / 20
 threads): 6 local workers 144 s, 6 local + 20 remote 96 s, 20 remote only 212 s. A remote core is about half as fast
@@ -459,7 +486,9 @@ the fits behave the same otherwise.
 Command line: `python cli.py --remote qspace ...` connects before the evaluation (with the host etc. of the settings).
 
 Troubleshooting:
-- "Connection failed": the message panel has the ssh / server error. Check `ssh alex@HOST echo ok` first.
+- "Connection failed": the message panel has the ssh / server error. Check
+  `ssh teval@pc13203.physik.uni-marburg.de echo ok` first. "The Python environment doesn't exist on the remote": run
+  the setup step 3.
 - "Python package ... missing on the remote": run the setup step 3, or install the requirements in the configured
   Python.
 - If the ssh client can't forward to a Unix socket, set "Remote port" to a free port number (e.g. 47000): the server

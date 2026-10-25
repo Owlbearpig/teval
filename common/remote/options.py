@@ -16,14 +16,15 @@ class RemoteOpt(ComponentBase):
     uncertainty) on another computer through ssh, together with the local workers.
     """
     connection_group = "Connection"
-    host = Unicode("", help="ssh destination, user@host (e.g. alex@192.168.1.20 or alex@pcname.institute.de) or a "
-                            "host alias of ~/.ssh/config. The login must work without a password prompt (ssh key, "
-                            "see the README)").tag(name="Host", group=connection_group, priority=0)
-    remote_python = Unicode(client.default_remote_python,
-                            help="Python on the remote with the packages of requirements.txt (at least Python 3.11). "
-                                 "The default is the environment that \"Set up the Python environment on the "
-                                 "remote\" creates").tag(name="Python on the remote", group=connection_group,
-                                                         priority=1)
+    host = Unicode("teval@pc13203.physik.uni-marburg.de",
+                   help="ssh destination, user@host (default: the teval account of the group's computer) or a "
+                        "host alias of ~/.ssh/config. The login must work without a password prompt (ssh key, see "
+                        "the README)").tag(name="Host", group=connection_group, priority=0, fullwidth=True)
+    remote_python = Unicode("", help=f"Python on the remote with the packages of requirements.txt (at least Python "
+                                     f"3.11). Empty: your own environment {client.user_venv} (per user of this "
+                                     f"computer), which \"Set up the Python environment on the remote\" "
+                                     f"creates").tag(name="Python on the remote (empty: own environment)",
+                                                     group=connection_group, priority=1, fullwidth=True)
     remote_workers = Int(0, min=0, help="Worker processes on the remote, 0: one per core. Leave some cores free if "
                                         "others use the computer as well").tag(name="Remote workers",
                                                                                group=connection_group, priority=2)
@@ -42,7 +43,7 @@ class RemoteOpt(ComponentBase):
                                                           en_save=False)
 
     setup_group = "Remote Python environment"
-    base_python = Unicode("python3", help="Python used to create the environment in ~/.teval_remote/venv").tag(
+    base_python = Unicode("python3", help=f"Python used to create the environment {client.user_venv}").tag(
         name="Python for the setup", group=setup_group, priority=20)
 
     def __init__(self, **kwargs):
@@ -78,7 +79,7 @@ class RemoteOpt(ComponentBase):
             return None
         logging.info(f"Connected to the remote workers, {conn.describe()}")
         conn.on_lost = lambda: self._set_status("Connection lost")
-        self._set_status(f"Connected: {conn.describe()}")
+        self._set_status(self._connection_status())
         return conn
 
     @action("Connect", group=connection_group, priority=10)
@@ -95,7 +96,7 @@ class RemoteOpt(ComponentBase):
     def setup_environment(self):
         def run():
             self._set_status("Setting up the remote environment...")
-            logging.info(f"Installing the requirements in {client.remote_home}/venv on {self.host} "
+            logging.info(f"Installing the requirements in {client.user_venv} on {self.host} "
                          f"(takes a few minutes the first time)")
             try:
                 code = client.setup_environment(self.host, self.base_python, self.ssh_options)
@@ -106,5 +107,10 @@ class RemoteOpt(ComponentBase):
                 logging.info("The remote environment is ready")
             elif code > 0:
                 logging.error(f"Setting up the remote environment failed (exit code {code}), see the messages above")
-            self._set_status("Not connected" if client.active_connection() is None else self.status)
+            self._set_status(self._connection_status())
         self._in_background(run)
+
+    @staticmethod
+    def _connection_status():
+        conn = client.active_connection()
+        return "Not connected" if conn is None else f"Connected: {conn.describe()}"
