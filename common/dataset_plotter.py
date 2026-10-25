@@ -1010,7 +1010,6 @@ class ImagePlot(DataSetPlotter):
             valid = np.asarray(shown_grid_vals, dtype=float)[~missing]
             valid = valid[np.isfinite(valid)]  # log10 of empty (0) pixels is -inf
             cbar_min, cbar_max = (float(valid.min()), float(valid.max())) if valid.size else (0.0, 1.0)
-        np.savetxt("grid_values.txt", shown_grid_vals)
 
         axes_extent = (float(img_extent[0] - shape_properties["dx"] / 2),
                        float(img_extent[1] + shape_properties["dx"] / 2),

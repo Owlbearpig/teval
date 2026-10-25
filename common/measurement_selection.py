@@ -131,6 +131,10 @@ class Selection:
             duration = (times[-1] - times[0]).total_seconds()
             lines.append(f"Measured: {fmt_time(times[0])}" + (f" - {fmt_time(times[-1])} ({fmt_gap(duration)})"
                                                                if duration else ""))
+            for attr in sorted({attr for sam in sams for attr in sam.attributes}):
+                vals = sorted({sam.attributes[attr] for sam in sams if attr in sam.attributes}, key=str)
+                shown = ", ".join(map(str, vals[:8])) + (f", ... ({len(vals)} values)" if len(vals) > 8 else "")
+                lines.append(f"{attr}: {shown}")
             lines.append(f"Positions: {len({sam.position for sam in sams})} distinct, "
                          f"x {fmt_range([sam.position[0] for sam in sams])}, "
                          f"y {fmt_range([sam.position[1] for sam in sams])}")
@@ -409,6 +413,8 @@ class MeasurementSelection(ComponentBase):
 
     def measurement_name(self, meas):
         stem = meas.filepath.stem
+        if meas.name is not None and not self.group_name_pattern:
+            return meas.name
         if self.group_name_pattern:
             match = re.search(self.group_name_pattern, stem)
             if match is None:

@@ -1,3 +1,4 @@
+import hashlib
 import os
 import shutil
 import numpy as np
@@ -93,11 +94,20 @@ class DatasetCache:
         td_cache_shape = (len(measurements), len(sample_data_td[:, 1]))
 
         cache_file = path / "_td_cache.npy"
+        # the rows are in identifier order, which depends on the file name format: a cache of other files or another
+        # order has to be rebuilt. Caches from before the key was stored are only checked by their shape
+        key_file = path / "_td_cache_key.txt"
+        ordered = sorted(measurements, key=lambda meas: meas.identifier)
+        rel_paths = "\n".join(str(Path(meas.filepath).relative_to(self.data_dir)) for meas in ordered)
+        key = hashlib.sha1(rel_paths.encode("utf-8")).hexdigest()
         try:
             data_td = np.load(str(cache_file))
             shape_match = (data_td.shape == td_cache_shape)
             if not shape_match:
                 self.dataset.logger.error(f"Data <-> cache shape mismatch. Reloading data:")
+                raise FileNotFoundError
+            if key_file.exists() and key_file.read_text().strip() != key:
+                self.dataset.logger.info("The measurement files or their order changed, rebuilding the cache")
                 raise FileNotFoundError
         except (FileNotFoundError, ValueError, EOFError, OSError) as e:
             if not isinstance(e, FileNotFoundError):
@@ -116,6 +126,8 @@ class DatasetCache:
             tmp_file = path / "_td_cache.tmp.npy"
             np.save(str(tmp_file), data_td)
             os.replace(tmp_file, cache_file)
+        if not key_file.exists() or key_file.read_text().strip() != key:
+            key_file.write_text(key)
 
         return data_td
 

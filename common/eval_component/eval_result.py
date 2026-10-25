@@ -72,6 +72,10 @@ class EvalResult(ComponentBase):
                      significant_figures=5).tag(name="Q-val")
     gof = Quantity(Q_(0.0, ""), read_only=True, group=transmission_res_grp_name,
                    significant_figures=5).tag(name="GoF")
+    d_uncertainty = Quantity(Q_(np.nan, "µm"), read_only=True, group=transmission_res_grp_name,
+                             significant_figures=3,
+                             help="Monte Carlo thickness uncertainty of the optimum (Settings -> Evaluation -> "
+                                  "Uncertainty), nan if not estimated").tag(name="Thickness uncertainty")
     fp_time = Quantity(Q_(0.0, "ps"), read_only=True, group=transmission_res_grp_name,
                        significant_figures=4).tag(name="FP round trip time")
     q_space_f_max = Quantity(Q_(0.0, "THz"), read_only=True, group=transmission_res_grp_name,
@@ -283,6 +287,7 @@ class EvalResult(ComponentBase):
                     "d": selected_result.d,
                     "shift": selected_result.shift,
                     "measurement": selected_result.measurement,
+                    "d_uncertainty": Q_(np.nan, "µm"),
                     **selected_result.optimization_info
                 }
                 self.set_simple_traits(scalar_values)

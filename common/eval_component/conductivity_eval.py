@@ -2,6 +2,7 @@ import logging
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -17,6 +18,7 @@ from common.eval_component.eval_component_base import EvalComponentBase
 from common.eval_component.eval_result import EvalResultData, SingleResultData
 from common.eval_component.quantity_set import QuantityDataSet
 from common.eval_component.transfer_functions import TransmissionModels
+from common.eval_component.uncertainty import estimator_for, random_generator, perturbed_transmissions
 
 """
 Conductivity of a thin film on a substrate. All calculations use the e^{-iωt} (physics) convention, the measured
@@ -103,6 +105,10 @@ class ConductivityEval(EvalComponentBase):
                                help="Positive if the pulse through the film sample is delayed by this time compared "
                                     "to the substrate (e.g. a thicker substrate), it is removed before the "
                                     "evaluation").tag(name="Film pulse time shift", priority=2)
+    d_film_uncert = Quantity(Q_(0.0, "µm"), group=film_grp,
+                             help="Standard uncertainty of the film thickness, for the conductivity uncertainty "
+                                  "(Settings -> Evaluation -> Uncertainty)").tag(name="Film thickness uncertainty",
+                                                                                priority=3)
 
     sub_grp = "Substrate"
     sub_pnt = ValueRange([Q_(0.0, "mm"), Q_(0.0, "mm")], group=sub_grp,
@@ -117,6 +123,11 @@ class ConductivityEval(EvalComponentBase):
     use_result_thickness = Bool(True, group=sub_grp).tag(name="Use substrate thickness from result", priority=3)
     d_sub = Quantity(Q_(500.0, "µm"), group=sub_grp).tag(name="Substrate thickness", priority=4)
     n_sub_const = ValueRange([3.4, 0.0], group=sub_grp).tag(name="Substrate n, k", priority=5)
+    d_sub_uncert = Quantity(Q_(0.0, "µm"), group=sub_grp,
+                            help="Standard uncertainty of the substrate thickness, for the conductivity uncertainty. "
+                                 "0 with a q-space result: its Monte Carlo thickness uncertainty, if it has one. The "
+                                 "substrate n changes with it at constant optical thickness (n - 1) d, except for a "
+                                 "constant substrate n").tag(name="Substrate thickness uncertainty", priority=6)
 
     method_grp = "Conductivity evaluation"
     method = TEnum(ConductivityMethod, default_value=ConductivityMethod.tinkham, group=method_grp,
@@ -155,6 +166,7 @@ class ConductivityEval(EvalComponentBase):
             "use_result_thickness": source == SubstrateIndexSource.qspace_result,
             "d_sub": not (source == SubstrateIndexSource.qspace_result and self.use_result_thickness),
             "n_sub_const": source == SubstrateIndexSource.constant,
+            "d_sub_uncert": True,
         }
         self.toggle_traits([k for k, v in visible.items() if v], group_filter=self.sub_grp)
         self.toggle_traits(["method"] + ["two_layer_model"] * (not is_tinkham), group_filter=self.method_grp)
@@ -194,8 +206,11 @@ class ConductivityEval(EvalComponentBase):
             logging.warning(f"Substrate result covers {f_res[0]:.2f}-{f_res[-1]:.2f} THz only, the refractive index "
                             f"is extended with its end values outside of this range")
         n_sub = np.interp(freq_axis, f_res, n_data.real) + 1j * np.interp(freq_axis, f_res, n_data.imag)
-        logging.info(f"Substrate refractive index from {path.name} ({result.measurement}, d = {result.d}, "
-                     f"model {result_data.model_name})")
+        d_uncert = result.optimization_info.get("d_uncertainty")
+        d_uncert = float(d_uncert.to("µm").magnitude) if isinstance(d_uncert, Q_) else np.nan
+        logging.info(f"Substrate refractive index from {path.name} ({result.measurement}, d = {result.d}"
+                     + (f" ± {d_uncert:.2f} µm" if np.isfinite(d_uncert) else "")
+                     + f", model {result_data.model_name})")
 
         # the substrate index is only consistent with a two-layer model that treats the substrate echoes the same way
         with_echoes = {"tmm_1layer", "model_1layer_inf"}
@@ -208,15 +223,17 @@ class ConductivityEval(EvalComponentBase):
                                 f"{self.two_layer_model.name} is {'with' if model_has_echoes else 'without'} them, "
                                 f"this usually shows up as oscillations in the conductivity")
 
-        return n_sub, result.d.to("µm").magnitude
+        return n_sub, result.d.to("µm").magnitude, d_uncert
 
     def substrate_properties(self, freq_idx):
-        # n_sub, d_sub and (if needed) the measured substrate transmission (physics convention) on the given indices
+        # n_sub, d_sub, its uncertainty (µm) and (if needed) the measured substrate transmission (physics convention)
+        # on the given indices, with the substrate measurements and their references
         freq_axis = self.dataset.freq_axis[freq_idx]
         d_sub = self.d_sub.to("µm").magnitude
+        d_sub_uncert = self.d_sub_uncert.to("µm").magnitude
         source = self.sub_index_source
 
-        t_sub, sub_meas = None, None
+        t_sub, sub_meas, sub_refs = None, None, None
         if self.method == ConductivityMethod.tinkham or source == SubstrateIndexSource.thick_sample:
             sub_meas = self.substrate_measurements()
             sub_refs = self.measurement_selector.get_matching_refs(sub_meas)
@@ -227,19 +244,30 @@ class ConductivityEval(EvalComponentBase):
                 window_res = self.dataset.windowing_eval(sub_meas, d=d_sub)
                 n_sub = np.mean(window_res.refr_idx, axis=0)[freq_idx]
             case SubstrateIndexSource.qspace_result:
-                n_sub, d_result = self.load_substrate_result(freq_axis)
+                n_sub, d_result, d_result_uncert = self.load_substrate_result(freq_axis)
                 if self.use_result_thickness:
                     d_sub = d_result
+                    if d_sub_uncert <= 0 and np.isfinite(d_result_uncert):
+                        d_sub_uncert = d_result_uncert
             case _:
                 n, k = self.n_sub_const
                 n_sub = (n + 1j * k) * np.ones_like(freq_axis, dtype=complex)
 
-        return n_sub, d_sub, t_sub
+        return n_sub, d_sub, d_sub_uncert, t_sub, sub_meas, sub_refs
 
-    def calculate(self, meas_list, freq_idx):
-        # conductivity of the film for each measurement, arrays (N_meas, F) on the given frequency indices
+    def _sigma(self, t_film, t_sub, n_sub, d_sub, d_film, freq_axis):
+        # sigma, model transmission (None for the thin film approximation) and convergence, t_film: (..., F)
+        if self.method == ConductivityMethod.tinkham:
+            return tinkham_conductivity(t_film, t_sub, n_sub, d_film), None, np.ones(t_film.shape, dtype=bool)
+        model_kwargs = {"n1": 1, "n4": 1, "nfp": self.settings.eval_opt.fp_count}
+        return solve_two_layer_conductivity(t_film, freq_axis, n_sub, d_sub, d_film, self.eps_inf_film,
+                                            self.two_layer_model.value, model_kwargs)
+
+    def calculate(self, meas_list, freq_idx, with_uncertainty=False):
+        # conductivity of the film for each measurement, arrays (N_meas, F) on the given frequency indices.
+        # with_uncertainty: also the Monte Carlo uncertainty ("sigma_std", "n_film_std", of the mean "*_mean_std")
         freq_axis = self.dataset.freq_axis[freq_idx]
-        n_sub, d_sub, t_sub = self.substrate_properties(freq_idx)
+        n_sub, d_sub, d_sub_uncert, t_sub, sub_meas, sub_refs = self.substrate_properties(freq_idx)
         d_film = self.d_film.to("µm").magnitude
         if d_film <= 0:
             raise ValueError("Film thickness must be larger than 0")
@@ -250,16 +278,89 @@ class ConductivityEval(EvalComponentBase):
         t_film = np.conj(t_meas * np.exp(1j * 2 * np.pi * freq_axis * dt))
 
         res = {"n_sub": n_sub, "d_sub": d_sub, "t_film": t_film, "t_sub": t_sub}
-        if self.method == ConductivityMethod.tinkham:
-            res["sigma"] = tinkham_conductivity(t_film, t_sub, n_sub, d_film)
-            res["t_mod"], res["converged"] = None, np.ones(t_film.shape, dtype=bool)
-        else:
-            model_kwargs = {"n1": 1, "n4": 1, "nfp": self.settings.eval_opt.fp_count}
-            res["sigma"], res["t_mod"], res["converged"] = solve_two_layer_conductivity(
-                t_film, freq_axis, n_sub, d_sub, d_film, self.eps_inf_film, self.two_layer_model.value,
-                model_kwargs)
-
+        res["sigma"], res["t_mod"], res["converged"] = self._sigma(t_film, t_sub, n_sub, d_sub, d_film, freq_axis)
         res["n_film"] = sigma_to_n(freq_axis, res["sigma"], self.eps_inf_film)
+
+        if with_uncertainty and self.settings.eval_opt.uncertainty.cond_enabled:
+            res.update(self._uncertainty(meas_list, refs, freq_idx, t_film, t_sub, n_sub, d_sub, d_sub_uncert,
+                                         sub_meas, sub_refs, res["sigma"]))
+
+        return res
+
+    def _uncertainty(self, meas_list, refs, freq_idx, t_film, t_sub, n_sub, d_sub, d_sub_uncert, sub_meas, sub_refs,
+                     sigma):
+        # Monte Carlo over the noise and reference drift of the film (and substrate) measurements and the film /
+        # substrate thickness. The transmissions are in the physics convention here, the perturbation is symmetric
+        opt = self.settings.eval_opt.uncertainty
+        estimator = estimator_for(self.dataset)
+        freq_axis = self.dataset.freq_axis[freq_idx]
+        count = opt.cond_samples
+        film_unc = [estimator.transmission_uncertainty([meas], [ref], freq_idx, opt) for meas, ref in
+                    zip(meas_list, refs)]
+        sub_unc = (estimator.transmission_uncertainty(sub_meas, sub_refs, freq_idx, opt)
+                   if t_sub is not None else None)
+        d_film = self.d_film.to("µm").magnitude
+        d_film_uncert = self.d_film_uncert.to("µm").magnitude
+        couple_n_sub = self.sub_index_source != SubstrateIndexSource.constant
+
+        def replicates(sources):
+            # sigma of count perturbations (count, N_meas, F) with the given uncertainty sources
+            rng = random_generator(opt)
+
+            def perturbed(t, unc):
+                # noise only, the drift is applied below
+                unc = replace(unc, variance=unc.variance if "noise" in sources else 0 * unc.variance, timing=0.0,
+                              amplitude=0.0)
+                return perturbed_transmissions(freq_axis, t, unc, count, rng)
+
+            def drift_factor(unc_list):
+                # one draw for all measurements of the list: the residual drift of measurements close in time is the
+                # same, it doesn't average out. (count, N, 1)
+                if "drift" not in sources:
+                    return np.ones((count, len(unc_list), 1))
+                z_t, z_a = rng.standard_normal((count, 1, 1)), rng.standard_normal((count, 1, 1))
+                timing = np.array([unc.timing for unc in unc_list])[None, :, None]
+                amplitude = np.array([unc.amplitude for unc in unc_list])[None, :, None]
+                return (1 + z_a * amplitude) * np.exp(-2j * np.pi * freq_axis * z_t * timing)
+
+            tf = np.stack([perturbed(t, unc) for t, unc in zip(t_film, film_unc)], axis=1) * drift_factor(film_unc)
+            ts = perturbed(t_sub, sub_unc)[:, None, :] * drift_factor([sub_unc]) if t_sub is not None else None
+            df = d_film + rng.normal(0.0, d_film_uncert, (count, 1, 1)) * ("film thickness" in sources)
+            dd = rng.normal(0.0, d_sub_uncert, count) * ("substrate" in sources)
+            n_rep = n_sub - (n_sub - 1) * (dd / d_sub)[:, None, None] if couple_n_sub else np.broadcast_to(
+                n_sub, (count, 1, len(freq_axis)))
+            if self.method == ConductivityMethod.tinkham:
+                return tinkham_conductivity(tf, ts, n_rep, np.maximum(df, 1e-9))
+            out = np.empty(tf.shape, dtype=complex)
+            for i in range(count):
+                out[i] = self._sigma(tf[i], None, n_rep[i, 0], d_sub + dd[i], max(float(df[i, 0, 0]), 1e-9),
+                                     freq_axis)[0]
+            return out
+
+        def spread(values, axis=0):
+            return np.std(values.real, axis=axis, ddof=1) + 1j * np.std(values.imag, axis=axis, ddof=1)
+
+        all_sources = ("noise", "drift", "film thickness", "substrate")
+        sigma_rep = replicates(all_sources)
+        n_rep = sigma_to_n(freq_axis, sigma_rep, self.eps_inf_film)
+        res = {"sigma_std": spread(sigma_rep), "n_film_std": spread(n_rep),
+               "sigma_mean_std": spread(np.mean(sigma_rep, axis=1)),
+               "n_film_mean_std": spread(np.mean(n_rep, axis=1))}
+
+        # contribution of each source to the uncertainty of the mean, relative to |sigma| (median over frequency)
+        scale = np.abs(np.mean(sigma, axis=0))
+
+        def rel(std):
+            with np.errstate(divide="ignore", invalid="ignore"):
+                return 100 * float(np.nanmedian(np.abs(std) / scale))
+
+        parts = {source: rel(spread(np.mean(replicates((source,)), axis=1))) for source in all_sources}
+        logging.info(f"Conductivity uncertainty of the mean of {len(meas_list)} measurement(s) ({count} Monte Carlo "
+                     f"samples, median over the fit range, relative to |sigma|): total "
+                     f"{rel(res['sigma_mean_std']):.2f} %, "
+                     + ", ".join(f"{source} {val:.2f} %" for source, val in parts.items()))
+        logging.info(f"Film: {film_unc[0].describe()}" + (f". Substrate: {sub_unc.describe()}" if sub_unc else ""))
+        res["uncertainty_parts"] = parts
 
         return res
 
@@ -291,7 +392,7 @@ class ConductivityEval(EvalComponentBase):
 
         def bg_worker():
             try:
-                res = self.calculate(meas_list, self.freq_range_idx)
+                res = self.calculate(meas_list, self.freq_range_idx, with_uncertainty=True)
                 self._result_ready(self.prepare_result(meas_list, res))
             except ValueError as e:
                 logging.error(f"Conductivity: {e}")
@@ -319,6 +420,17 @@ class ConductivityEval(EvalComponentBase):
         if res["t_mod"] is not None:
             per_meas["t_mod"] = res["t_mod"]
         formatted = {key: self.format_meas_dict(meas_list, data) for key, data in per_meas.items()}
+        if "sigma_std" in res:
+            # Monte Carlo uncertainty instead of the scatter; of the average the larger of its Monte Carlo
+            # uncertainty and the standard error of the mean of the measurements
+            for key in ("sigma", "n_film"):
+                for meas, data in formatted[key].items():
+                    if isinstance(meas, Measurement):
+                        data[:, 2] = res[f"{key}_std"][meas_list.index(meas)]
+                    else:
+                        sem = data[:, 2] / np.sqrt(len(meas_list))
+                        mc = res[f"{key}_mean_std"]
+                        data[:, 2] = np.maximum(mc.real, sem.real) + 1j * np.maximum(mc.imag, sem.imag)
 
         not_converged = int(np.sum(~res["converged"]))
         if not_converged:
@@ -338,6 +450,8 @@ class ConductivityEval(EvalComponentBase):
                 "not_converged_points": not_converged,
                 "timestamp": str(datetime.now().isoformat()),
             }
+            for source, val in res.get("uncertainty_parts", {}).items():
+                single.optimization_info[f"uncertainty_{source.replace(' ', '_')}_percent"] = val
 
             units = {"sigma": "S/cm", "n_film": "", "t_film": "", "t_mod": ""}
             labels = {"sigma": "Conductivity", "n_film": "Film refractive index",

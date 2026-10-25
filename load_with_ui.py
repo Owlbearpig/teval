@@ -66,6 +66,16 @@ class HTMLFormatter(logging.Formatter):
 
         return f"{asctime} {level_html} {obj_prefix}: {record.getMessage()}"
 
+# libraries that flood the message panel with their debug messages
+_quiet_loggers = ("matplotlib", "numba", "PIL", "h5py", "asyncio")
+
+
+def apply_log_level(level):
+    logging.getLogger().setLevel(level.value)
+    for name in _quiet_loggers:
+        logging.getLogger(name).setLevel(max(level.value, logging.INFO))
+
+
 def run(globals, filename : str):
     rootClass = globals["AppRoot"]
     ComponentBase.script_name = filename
@@ -82,9 +92,12 @@ def run(globals, filename : str):
         handler = QHTMLTextBrowserLoggingHandler(msgBrowser, max_lines=lambda: root.settings.max_log_lines)
         handler.setFormatter(HTMLFormatter())
         logging.getLogger().addHandler(handler)
-        logging.getLogger().setLevel(logging.INFO)
+        apply_log_level(root.settings.log_level)
+        root.settings.observe(lambda change: apply_log_level(change["new"]), "log_level")
 
         w.show()
+        if root.settings.remote.connect_on_start:
+            root.settings.remote.connect()
 
         app = QtWidgets.QApplication.instance()
         exit_code = app.exec()

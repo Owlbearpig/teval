@@ -23,6 +23,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6 import QtWidgets
 from traitlets import Instance, List
 from common.components import ComponentBase
+from common.settings import Settings
+from common.remote import client as remote_client
 from common.eval_component.q_space_eval import OptimizationCancelled
 from common.traits import ValueRange
 from common.units import Q_
@@ -317,7 +319,10 @@ def build_parser():
     parser = argparse.ArgumentParser(description="teval command line interface",
                                      formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     parser.add_argument("--script", default="eval_scripts/test_script.py",
-                        help="Entry script with the AppRoot class; settings come from config/<script name>.json")
+                        help="Entry script with the AppRoot class; settings come from config/<script name>.json "
+                             "unless --config or another file chosen in the GUI")
+    parser.add_argument("--config", help="Settings file (default: the one used last in the GUI, see Settings > "
+                                             "Settings file)")
     parser.add_argument("--data", help="Dataset directory (default: the path saved in the config)")
     parser.add_argument("--set", action="append", default=[], metavar="PATH=VALUE",
                         help="Change a setting for this run, e.g. settings.eval_opt.fp_count=10. "
@@ -326,6 +331,8 @@ def build_parser():
     parser.add_argument("--save-settings", action="store_true",
                         help="Write the settings (including --set changes) back to the config file")
     parser.add_argument("--timeout", type=float, default=600, help="Dataset loading timeout in s")
+    parser.add_argument("--remote", action="store_true",
+                        help="Use the remote workers (Settings > Remote workers), also without \"Connect on start\"")
     parser.add_argument("-v", "--verbose", action="store_true", help="Show debug messages")
 
     sub = parser.add_subparsers(dest="command", required=True)
@@ -365,6 +372,7 @@ def main():
 
     # the components print status messages, keep stdout for the command output
     with contextlib.redirect_stdout(sys.stderr):
+        Settings.settings_file_override = args.config
         root = load_app_root(args.script)
         root.__enter__()
 
@@ -377,11 +385,16 @@ def main():
             set_value(root, assignment)
         app.processEvents()
 
+        if args.remote or root.settings.remote.connect_on_start:
+            if root.settings.remote.connect_now() is None and args.remote:
+                raise CliError("Could not connect to the remote workers")
+
         args.func(app, root, args)
     except CliError as e:
         log.error(str(e))
         return 1
     finally:
+        remote_client.disconnect()
         if args.save_settings:
             with contextlib.redirect_stdout(sys.stderr):
                 root.__exit__(None, None, None)

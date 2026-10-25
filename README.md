@@ -5,13 +5,52 @@ evaluation components.
 
 ## Starting the GUI
 
-Run from the repository root:
+Install the dependencies (`pip install -r requirements.txt`; numba and threadpoolctl are optional but make the q-space
+evaluation much faster) and run from the repository root:
 
 ```
 python load_with_ui.py eval_scripts/test_script.py
 ```
 
 Settings are loaded from and saved to `config/<script name>.json`, e.g. `config/test_script.json`, when the window is closed.
+
+Group "Settings file" of the Settings tab:
+- "Load settings file" / "Save settings as" switch to another file (e.g. one per sample type). That file is then used for
+  saving and on the next start (the GUI and the command line interface), until another file or "Use default settings
+  file" is chosen. Settings a loaded file doesn't contain are reset to their defaults.
+- "Save settings now" saves to the current file, also when "Save settings on exit" is off.
+- "Reset all settings to defaults" resets every component; data and file paths are kept. A single group: right click on
+  it and choose "Reset ... to defaults".
+
+"Log level" (Settings tab) sets which messages appear in the message panel; "debug" also shows the diagnostic messages.
+
+## Measurement files
+
+Group "File name format" of the dataset: which files are measurements and what is read from their names. Each file is a
+text file with the time axis (ps) in the first and the signal in the second column.
+
+- "Files": glob pattern below the dataset path, default `**/*.txt` (also in sub folders).
+- "File name format": how the measurement time, position and other attributes are read from the file name (without
+  extension).
+  - **Empty (default):** the timestamp at the start of the name and the `<value> mm` parts as the positions, e.g.
+    `2025-05-27T23-29-21.791821-20avg_s2_sub-sam-X_25.000 mm-Y_-1.000 mm.txt`.
+  - **Template:** the whole name has to match; `{field}` is a field, `*` anything (as little as possible). Fields:
+    `{time}` (in the "Time format"; without it the file modification time is used), `{x}` and `{y}` (position in mm, 0 if
+    missing), `{name}` (measurement name for the sample groupings by name, instead of the name pattern below) and any
+    other name as an extra attribute (a number if it is one; `{field:num}` / `{field:int}` only match numbers).
+    The attributes are listed in "Show selection details".
+  - **`re:` + regular expression:** the same fields as named groups, searched in the name.
+- "Time format": `strptime` format of `{time}`, default `%Y-%m-%dT%H-%M-%S.%f`.
+- "Test file name format" logs how the first files are parsed, how many match and examples of the ones that don't.
+
+| File name | File name format | Time format |
+|---|---|---|
+| `2025-05-27T23-29-21.791821-20avg_s2_sub-sam-X_25.000 mm-Y_-1.000 mm` | empty, or `{time}-{avg:int}avg_s{sample:int}_{layer}-{kind}-X_{x} mm-Y_{y} mm` | default |
+| `sam_pow1_25.000_-1.000_20250527_232921_791821` | `{kind}_{power}_{x}_{y}_{time}` | `%Y%m%d_%H%M%S_%f` |
+| `scan3_x1.5_y-2.dat` (files `*.dat`) | `{name}_x{x}_y{y}` | (modification time) |
+
+Changing these settings parses the dataset again. Measurements with the same time are ordered by their file name. The
+cache is rebuilt when the files or their order change.
 
 ## Grouping measurements for the queue
 
@@ -138,6 +177,53 @@ Example, sapphire plates in a holder with air openings at the row starts (rows o
 sample went from 5.6 fs / 0.9 % (nearest reference) to 3.5 fs / 0.24 % with interpolation and block median (22 fs /
 0.6 % with references hours away). Destriping the raw pulse delay image with a 15 line trend reduced its stripes in the
 region from 22 to 4.5 fs; parts of a row measured minutes later than the region keep more of the drift.
+
+## Uncertainty
+
+Settings → Evaluation → Uncertainty. The uncertainties are Monte Carlo estimates: the measured transmission is
+perturbed randomly with its estimated uncertainty and evaluated again, and the spread of the results is the standard
+uncertainty (1 σ) of the shown value.
+
+Uncertainty of the transmission:
+- **Measurement noise:** fitted to the differences of consecutive references (median, so references next to the
+  holder edge don't count) as additive noise plus amplitude and timing jitter of each measurement. The fit is logged,
+  e.g. "amplitude jitter 0.42 %, timing jitter 1.09 fs, additive noise 0.06". For averaged measurements the noise
+  averages down. With 3 or more measurements their scatter is used instead, if it is larger. With the drift
+  correction the reference noise is reduced by the averaging of the block median and the interpolation.
+- **Reference drift** ("Include the reference drift"):
+  - Without the drift correction: the change of the reference pulse (arrival time, amplitude) between the reference
+    and the sample measurement, interpolated in the time series of all references.
+  - With it: the residual error of the correction. Each reference block near the measurement is predicted from its
+    neighbours, like a sample. Blocks of references that are clipped by the holder are left out for the amplitude:
+    that clipping is the same in every line and isn't drift (a higher reference threshold avoids such references).
+  - "Additional timing / amplitude uncertainty" are added for sources that aren't in the data, e.g. a sample holder
+    that changes the beam path.
+
+Where it is used:
+- **Q-space thickness** ("Thickness uncertainty (Monte Carlo)", off by default): after the thickness scan of each
+  measurement, every perturbed transmission ("Monte Carlo samples", 20) gets a scan of a thickness window around the
+  optimum (± "Thickness window", "Thicknesses per window"). The window moves on if a sample's minimum is at its end.
+  The spread of their q-value minima is the thickness uncertainty ("Thickness uncertainty" in the result view, also
+  in the log); the spread of their n(f) is the uncertainty band of n and alpha at the optimum. It costs samples ×
+  thicknesses fits per measurement (140 with the defaults, a few seconds). If the samples' mean differs from the
+  optimum by more than the noise explains, the log says that the thickness step limits the optimum (use refinement
+  iterations).
+- **Image pixels:** "Thickness uncertainty of inspected pixel" and "Thickness uncertainty of area" (Image evaluation,
+  group "Uncertainty") run the same for pixels with a result, shown as the quantity "Q-space thickness
+  uncertainty". They are saved with the image results.
+- **Conductivity** ("Conductivity uncertainty (Monte Carlo)", on, 200 samples): noise and drift of the film and the
+  substrate measurements, "Film thickness uncertainty" and "Substrate thickness uncertainty" (Conductivity
+  evaluation; with a q-space result of the substrate its Monte Carlo thickness uncertainty, if it has one; the
+  substrate n changes with the thickness at constant optical thickness). The drift is drawn once for all film
+  measurements, since measurements close in time share it. The log lists the contribution of each source to the
+  uncertainty of the mean. The uncertainty of the average is the larger of its Monte Carlo uncertainty and the
+  standard error of the mean of the measurements.
+
+Example, sapphire image with the drift correction: the predicted thickness uncertainty of 35 pixels (median 0.97 µm)
+matches their actual scatter (1.04 µm, including the residual stripes); without the correction a pixel 22 fs from its
+reference got ± 4 µm. The conductivity of a ~9 S/cm film on it: ± 4 S/cm for the mean of 81 measurements, mostly from
+the ~2-3 fs residual timing drift between the film and the single substrate measurement, which averaging more film
+measurements doesn't reduce.
 
 ## Image evaluation
 
@@ -323,10 +409,68 @@ python cli.py --set q_space_eval.transmission_model=tmm_multilayer \
               qspace --out results.csv
 ```
 
+## Remote workers
+
+The fits of the q-space evaluation (selections, image evaluation, Monte Carlo uncertainty) can run on another
+computer, e.g. a Linux PC with more cores, while the data, the GUI and the results stay on this computer. Each task
+only carries the transmission of one pixel or measurement and the settings (a few kB); the measurement files are never
+copied. Settings: Settings tab, "Remote workers".
+
+How it works: "Connect" starts one ssh session that forwards a local port to the remote and starts the worker server
+there. The Python files of this repository are sent along (cached in `~/.teval_remote/code/` on the remote), so the
+remote always runs exactly the local code, uncommitted changes included, and needs no copy of the repository. The
+server listens on a Unix socket in `/tmp` that only your account can open and only accepts this session's random key.
+It stops when you disconnect, close the program or the ssh connection drops (e.g. the VPN). If the connection is lost
+during an evaluation, the local workers finish it.
+
+One-time setup:
+1. Login without a password: on Windows (PowerShell), with the remote's name or IP address for `HOST`:
+   ```
+   ssh-keygen -t ed25519
+   type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh alex@HOST "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+   ssh alex@HOST echo ok
+   ```
+   The last command must print `ok` without asking for a password. If the key has a passphrase, load it into the
+   ssh agent (Windows service "OpenSSH Authentication Agent", then `ssh-add`).
+2. Settings, "Remote workers": "Host" `alex@HOST`. Inside the institute network and over the VPN this is usually the
+   same name or address. A host alias of `~/.ssh/config` works as well (e.g. for a jump host).
+3. "Set up the Python environment on the remote": creates `~/.teval_remote/venv` on the remote with the packages of
+   `requirements.txt`, in the versions installed on this computer (a few minutes, the output appears in the message
+   panel; run it again after updating packages here). It needs Python 3.11 or newer
+   ("Python for the setup") with the `venv` module (on Debian / Ubuntu the package `python3-venv`). Alternatively
+   set "Python on the remote" to an existing Python environment with the requirements.
+
+Use: "Connect" (or "Connect on start"). The message panel shows the remote's name, worker count, Python version and
+load. Evaluations then use the remote workers plus the local ones ("Use the local workers too", "Number of cpu cores to
+assign" of the evaluation). "Remote workers" 0 uses all cores of the remote; leave some free if others work on it.
+
+What to expect (sapphire image, 1681 pixels, local AMD Ryzen 7 9800X3D, remote Intel Xeon W-2255 with 10 cores / 20
+threads): 6 local workers 144 s, 6 local + 20 remote 96 s, 20 remote only 212 s. A remote core is about half as fast
+as a core of a recent desktop CPU, so the gain depends on the two computers; "Remote workers" only is still useful to
+keep this computer free.
+
+The single fits agree to ~1e-15 between the computers, but different CPUs round differently. In about 1-2 % of the
+pixels (those with two nearly equal q-value minima, or a value at a decision threshold) that changes the chosen
+thickness by up to a few µm, and through the neighbour windows also nearby pixels. Which tasks run where varies from
+run to run, so with remote workers these pixels can differ between runs; with the local workers only a run is exactly
+reproducible. The setup installs the local package versions on the remote (if pip has them for its Python), so that
+the fits behave the same otherwise.
+
+Command line: `python cli.py --remote qspace ...` connects before the evaluation (with the host etc. of the settings).
+
+Troubleshooting:
+- "Connection failed": the message panel has the ssh / server error. Check `ssh alex@HOST echo ok` first.
+- "Python package ... missing on the remote": run the setup step 3, or install the requirements in the configured
+  Python.
+- If the ssh client can't forward to a Unix socket, set "Remote port" to a free port number (e.g. 47000): the server
+  then listens on that TCP port of the remote's localhost instead.
+- Each result costs this computer roughly 2 ms of processing; with very fast fits (~30 ms) and many workers in total
+  that can become the limit (the main process at 100 % of one core).
+
 ## Command line interface
 
-`cli.py` runs the evaluations without the GUI. It uses the same settings file as the GUI; changes made with `--set` only apply
-to that run unless `--save-settings` is given.
+`cli.py` runs the evaluations without the GUI. It uses the same settings file as the GUI (or `--config <file>`); changes made
+with `--set` only apply to that run unless `--save-settings` is given.
 
 ```
 python cli.py selections                                  # list the auto queued selections

@@ -23,6 +23,7 @@ from common.dataset import DataSetFormatter
 from common.default_appsettings import QuantityEnum
 from common.eval_component.n_guess import NGuessMethod
 from common.eval_component.q_space_scan import ScanTarget, OptimizationCancelled
+from common.eval_component.uncertainty import estimator_for
 from common.settings import component_settings
 from common.traits import Q_, ValueRange, Path as PathTrait
 from mpl_settings import mpl_style_params
@@ -33,7 +34,8 @@ q_space_quantities = (QuantityEnum.QSpaceThickness, QuantityEnum.QSpaceShift, Qu
                       QuantityEnum.QSpaceRefractiveIdx, QuantityEnum.QSpaceAbsorptionCoe,
                       QuantityEnum.QSpaceReliable, QuantityEnum.QSpaceMinWidth, QuantityEnum.QSpaceQRatio,
                       QuantityEnum.QSpaceDDeviation, QuantityEnum.QSpaceFullScan,
-                      QuantityEnum.QSpaceBandRefractiveIdx, QuantityEnum.QSpaceBandAbsorptionCoe)
+                      QuantityEnum.QSpaceBandRefractiveIdx, QuantityEnum.QSpaceBandAbsorptionCoe,
+                      QuantityEnum.QSpaceThicknessUncertainty)
 
 
 @dataclass
@@ -47,6 +49,7 @@ class PixelResult:
     profile_d: np.ndarray = field(default_factory=lambda: np.empty(0))
     profile_q: np.ndarray = field(default_factory=lambda: np.empty(0))
     min_width: float = np.nan  # µm, minimum_width of the profile
+    d_uncert: float = np.nan  # µm, Monte Carlo thickness uncertainty (on demand)
 
 
 @dataclass
@@ -204,6 +207,12 @@ class QSpaceImageEval(DataSetFormatter):
     thickness_stats = Unicode("", read_only=True, group=results_grp).tag(name="Thickness statistics", priority=32,
                                                                         en_save=False)
 
+    uncertainty_grp = "Uncertainty"
+    uncertainty_stats = Unicode("", read_only=True, group=uncertainty_grp,
+                                help="Monte Carlo thickness uncertainty of the pixels (settings: Settings -> "
+                                     "Evaluation -> Uncertainty), shown as the quantity \"Q-space thickness "
+                                     "uncertainty\"").tag(name="Thickness uncertainty", priority=40, en_save=False)
+
     @property
     def opt(self):
         # tuning settings, Settings -> Evaluation -> Image evaluation
@@ -248,6 +257,7 @@ class QSpaceImageEval(DataSetFormatter):
         register(QuantityEnum.QSpaceQRatio, partial(self.confidence_quantity, "q_ratio"))
         register(QuantityEnum.QSpaceDDeviation, partial(self.confidence_quantity, "d_deviation"))
         register(QuantityEnum.QSpaceFullScan, partial(self.scalar_quantity, "full_scan"))
+        register(QuantityEnum.QSpaceThicknessUncertainty, partial(self.scalar_quantity, "d_uncert"))
         register(QuantityEnum.QSpaceBandRefractiveIdx, partial(self.band_quantity, lambda res: res.n.real))
         register(QuantityEnum.QSpaceBandAbsorptionCoe,
                  partial(self.band_quantity, lambda res: alpha_of(self._freq_axis, res.n)))
@@ -656,7 +666,7 @@ class QSpaceImageEval(DataSetFormatter):
 
         # bounds the number of results kept in memory (only n is kept, a few kB each); each chunk ends with a barrier
         # where workers idle until the slowest task finishes, so it shouldn't be too small either
-        chunk_size = max(32 * qs.number_of_workers, 64)
+        chunk_size = max(32 * qs.worker_count, 64)
         untrusted = []
         for i in range(0, len(targets), chunk_size):
             chunk = targets[i:i + chunk_size]
@@ -941,6 +951,48 @@ class QSpaceImageEval(DataSetFormatter):
         res = self.pixel_results[key]
         logging.info(f"Pixel {self._pixel_label(key)} re-evaluated: d {res.d:.2f} µm, q {res.q_val:.3g}")
 
+    def _uncertainty_impl(self, keys, label):
+        # Monte Carlo thickness uncertainty of the pixels around their stored optimum, with the echo and knot count of
+        # the image evaluation. In chunks of pixels, so the results of the replicates don't pile up
+        qs = self.qs
+        self._check_reevaluation()
+        opt = self.settings.eval_opt.uncertainty
+        estimator = estimator_for(self.dataset)
+        qs.reset_state()
+        self._reset_counters()
+        qs.progress_start(len(keys) * opt.qspace_samples * opt.qspace_points)
+        chunk = max(1, 200 // opt.qspace_samples)
+        with qs.process_pool() as executor:
+            for i in range(0, len(keys), chunk):
+                chunk_keys = keys[i:i + chunk]
+                ctx = self._build_context({key: self._pixel_meas[key] for key in chunk_keys}, self._run_info)
+                specs, uncs = [], {}
+                for key in chunk_keys:
+                    meas_list = self._pixel_meas[key]
+                    refs = self.measurement_selector.get_matching_refs(meas_list)
+                    uncs[key] = estimator.transmission_uncertainty(meas_list, refs, qs.freq_range_idx, opt)
+                    res = self.pixel_results[key]
+                    specs.append((key, self._target(ctx, key).opt_config, ctx.t_exp[key], uncs[key], res.d,
+                                  res.shift))
+                for key, unc_res in qs.mc_thickness_uncertainty(executor, specs, label, add_progress=False).items():
+                    self.pixel_results[key].d_uncert = unc_res.d_std
+                    if len(keys) == 1 or unc_res.at_edge:
+                        qs.log_thickness_uncertainty(f"Pixel {self._pixel_label(key)}", self.pixel_results[key].d,
+                                                     unc_res, uncs[key])
+                self._autosave()
+        self._update_uncertainty_stats()
+
+    def _update_uncertainty_stats(self):
+        d_uncert = np.array([res.d_uncert for res in self.pixel_results.values()])
+        d_uncert = d_uncert[np.isfinite(d_uncert)]
+        if not d_uncert.size:
+            self.set_trait("uncertainty_stats", "")
+            return
+        p5, p95 = np.percentile(d_uncert, [5, 95])
+        text = (f"{d_uncert.size} pixels: median {np.median(d_uncert):.2f} µm, 5-95 % {p5:.2f} - {p95:.2f} µm")
+        self.set_trait("uncertainty_stats", text)
+        logging.info(f"Q-space thickness uncertainty of {text}")
+
     def _reset_counters(self):
         self._q_ref, self._task_cnt = {}, 0
         self._progress_done = 0  # tasks the progress has been advanced by
@@ -1023,7 +1075,8 @@ class QSpaceImageEval(DataSetFormatter):
         conf = self.pixel_confidence(key)
         nbrs = self._neighbors(key, 1)
         self._inspected_key = key
-        self.set_trait("inspected_pixel", f"{self._pixel_label(key)}, d {res.d:.2f} µm, "
+        d_text = f"{res.d:.2f} ± {res.d_uncert:.2f} µm" if np.isfinite(res.d_uncert) else f"{res.d:.2f} µm"
+        self.set_trait("inspected_pixel", f"{self._pixel_label(key)}, d {d_text}, "
                                           + ("reliable" if conf.reliable else "not reliable"))
 
         fig = plt.figure("Q-space pixel", figsize=(14, 4.5))
@@ -1043,6 +1096,9 @@ class QSpaceImageEval(DataSetFormatter):
             x, center, coeffs = fit
             xx = np.linspace(x[0], x[-1], 50)
             ax_q.semilogy(xx, np.polyval(coeffs, xx - center), color="C1", lw=1, label="Parabola")
+        if np.isfinite(res.d_uncert):
+            ax_q.axvspan(res.d - res.d_uncert, res.d + res.d_uncert, color="C3", alpha=0.15, lw=0,
+                         label=f"Uncertainty ± {res.d_uncert:.2f} µm")
         ax_q.axvline(res.d, color="C3", label=f"Optimum {res.d:.2f} µm")
         ax_q.set_xlabel("Thickness (µm)")
         ax_q.set_ylabel("q-value")
@@ -1094,6 +1150,7 @@ class QSpaceImageEval(DataSetFormatter):
                     width_ratio=np.array([conf.width_ratio for conf in conf_list]),
                     q_ratio=np.array([conf.q_ratio for conf in conf_list]),
                     d_deviation=np.array([conf.d_deviation for conf in conf_list]),
+                    d_uncert=np.array([res.d_uncert for res in res_list]),
                     freq=self._freq_axis,
                     n=np.array([res.n for res in res_list]),
                     profile_d=profile_d, profile_q=profile_q,
@@ -1153,7 +1210,8 @@ class QSpaceImageEval(DataSetFormatter):
                                        q_val=float(data["q_val"][i]), n=data["n"][i],
                                        full_scan=bool(data["full_scan"][i]),
                                        profile_d=data["profile_d"][i][valid], profile_q=data["profile_q"][i][valid],
-                                       min_width=float(data["min_width"][i]))
+                                       min_width=float(data["min_width"][i]),
+                                       d_uncert=float(data["d_uncert"][i]) if "d_uncert" in data else np.nan)
         if missing:
             logging.warning(f"{missing} pixel(s) of {path.name} are not part of the image grid of the data set")
 
@@ -1170,6 +1228,7 @@ class QSpaceImageEval(DataSetFormatter):
                           "d_axis": data["run_d_axis"], "d_step": float(data["run_d_step"]), "binning": binning}
         self._inspected_key = None
         self.set_trait("inspected_pixel", "")
+        self._update_uncertainty_stats()
         logging.info(f"Loaded {len(results)} pixel results from {path} (created {data['created']}, code version "
                      f"{data['code_version'] or 'unknown'})")
 
@@ -1245,6 +1304,29 @@ class QSpaceImageEval(DataSetFormatter):
         fig.tight_layout()
         plt.show()
 
+    @action("Thickness uncertainty of inspected pixel", group=uncertainty_grp, priority=45)
+    def uncertainty_inspected_pixel(self):
+        if self._inspected_key not in self.pixel_results:
+            logging.warning("Click a pixel in the image plot of a Q-space quantity first")
+            return
+        key = self._inspected_key
+        self._replot_key = key
+        self._start(partial(self._uncertainty_impl, [key], f"Pixel {self._pixel_label(key)}"))
+
+    @action("Thickness uncertainty of area", group=uncertainty_grp, priority=46,
+            help="All evaluated pixels inside the area of the \"Evaluated area\" group (also if the evaluation "
+                 "isn't confined to it). Costs Monte Carlo samples x thicknesses per window fits per pixel")
+    def uncertainty_area(self):
+        if not self.pixel_results:
+            logging.warning("Evaluate the image first")
+            return
+        area = self.pixel_measurements(confine=True, binning=self._run_binning())
+        keys = sorted(key for key in area if key in self.pixel_results)
+        if not keys:
+            logging.warning("No evaluated pixels in the area")
+            return
+        self._start(partial(self._uncertainty_impl, keys, "Area"))
+
     @action("Save image results", group=results_grp, priority=36)
     def save_results(self):
         if not self.pixel_results:
@@ -1284,3 +1366,4 @@ class QSpaceImageEval(DataSetFormatter):
         self.set_trait("evaluated_pixels", "")
         self.set_trait("inspected_pixel", "")
         self.set_trait("thickness_stats", "")
+        self.set_trait("uncertainty_stats", "")

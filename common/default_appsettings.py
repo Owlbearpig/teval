@@ -6,6 +6,7 @@ from traitlets import (Bool, Int, Float, Unicode, Dict as TDict, Enum as TEnum, 
                        )
 from common.eval_component.shgo_settings import SHGOOptions
 from common.components import ComponentBase
+from common.remote.options import RemoteOpt
 from common.traits import ValueRange, Path as TPath, Q_, Quantity as TQuantity
 
 class QSpaceQuantity(Enum):
@@ -350,6 +351,7 @@ class QuantityEnum(Enum):
     QSpaceBandRefractiveIdx = DerivedQuantity("Q-space refractive index (band mean)", domain=Domain.Time)
     QSpaceBandAbsorptionCoe = DerivedQuantity("Q-space absorption coe. (band mean)", domain=Domain.Time,
                                               unit="1/cm")
+    QSpaceThicknessUncertainty = DerivedQuantity("Q-space thickness uncertainty", domain=Domain.Time, unit="µm")
 
 
 class QValueOpt(ComponentBase):
@@ -498,6 +500,52 @@ class ImageEvalOpt(ComponentBase):
         name="Autosave interval", priority=41)
 
 
+class UncertaintyOpt(ComponentBase):
+    # Monte Carlo uncertainty of the evaluations (common.eval_component.uncertainty)
+    sources_grp = "Uncertainty sources"
+    reference_drift = Bool(True, group=sources_grp,
+                           help="Change of the reference pulse (arrival time, amplitude) between the reference and "
+                                "the sample measurement, interpolated in the time series of all references. With the "
+                                "reference drift correction (Settings -> Preprocessing -> Reference drift) the "
+                                "residual error of the correction, from predicting each reference block from its "
+                                "neighbours. The measurement noise (additive, amplitude and timing jitter) is always included, "
+                                "fitted to consecutive references").tag(name="Include the reference drift",
+                                                                        priority=0)
+    extra_timing = TQuantity(Q_(0.0, "fs"), group=sources_grp,
+                             help="Added (in quadrature) to the timing uncertainty of the sample against the "
+                                  "reference, e.g. for a sample holder that changes the beam path").tag(
+        name="Additional timing uncertainty", priority=1)
+    extra_amplitude = Float(0.0, min=0.0, group=sources_grp,
+                            help="Added (in quadrature) to the relative amplitude uncertainty of the reference").tag(
+        name="Additional amplitude uncertainty (%)", priority=2)
+    random_seed = Int(1, min=0, group=sources_grp,
+                      help="Seed of the random perturbations, 0: different each run").tag(name="Random seed",
+                                                                                         priority=3)
+
+    qspace_grp = "Q-space thickness"
+    qspace_enabled = Bool(False, group=qspace_grp,
+                          help="After the thickness scan of each measurement (\"Fit transmission model\", queue), "
+                               "the transmission is perturbed randomly with the estimated uncertainty and the "
+                               "thickness window around the optimum is scanned again for each perturbation. The "
+                               "spread of their q-value minima is the thickness uncertainty, the spread of their "
+                               "n(f) the uncertainty of n and alpha. Costs samples x points fits per "
+                               "measurement").tag(name="Thickness uncertainty (Monte Carlo)", priority=10)
+    qspace_samples = Int(20, min=3, group=qspace_grp).tag(name="Monte Carlo samples", priority=11)
+    qspace_window = TQuantity(Q_(3.0, "µm"), group=qspace_grp,
+                              help="Half width of the thickness window scanned per sample, around the optimum. "
+                                   "A sample with its minimum at the end of the window continues the window on that "
+                                   "side (up to 4 times)").tag(
+        name="Thickness window (half width)", priority=12)
+    qspace_points = Int(7, min=3, group=qspace_grp).tag(name="Thicknesses per window", priority=13)
+
+    cond_grp = "Conductivity"
+    cond_enabled = Bool(True, group=cond_grp,
+                        help="Uncertainty of the conductivity from the measurement noise, the reference drift and "
+                             "the film / substrate thickness uncertainty (Conductivity evaluation)").tag(
+        name="Conductivity uncertainty (Monte Carlo)", priority=20)
+    cond_samples = Int(200, min=10, group=cond_grp).tag(name="Monte Carlo samples", priority=21)
+
+
 class EvalOpt(ComponentBase):
     # sub-tabs of Settings -> Evaluation; settings saved before they existed are moved there on load
     # (common.settings.migrate_config)
@@ -505,12 +553,16 @@ class EvalOpt(ComponentBase):
     spline_fit = Instance(SplineFitOpt, kw={"object_name": "Spline fit"})
     transmission_sim = Instance(TransmissionSimOpt, kw={"object_name": "Transmission simulation"})
     image_eval = Instance(ImageEvalOpt, kw={"object_name": "Image evaluation"})
+    uncertainty = Instance(UncertaintyOpt, kw={"object_name": "Uncertainty"})
 
     phi_fit_range = ValueRange([Q_(0.47, "THz"), Q_(1.05, "THz")]).tag(name="Phase correction fit range")
     avg_grp_delay_fit_range = ValueRange([Q_(0.25, "THz"), Q_(0.85, "THz")]).tag(name="Group delay fit range")
     spectral_similarity_range = ValueRange([Q_(0.15, "THz"), Q_(2.00, "THz")]).tag(name="Spectral similarity range")
 
-    delta_d = TQuantity(Q_(2.0, "µm")).tag(name="Thickness uncertainty")
+    delta_d = TQuantity(Q_(2.0, "µm"), help="Used for the uncertainty of n and alpha of averaged measurements "
+                                            "(scatter of the measurements), unless the Monte Carlo thickness "
+                                            "uncertainty (Uncertainty tab) replaces it at the optimum").tag(
+        name="Thickness uncertainty")
     auto_fp_count = Bool(True, help="Number of Fabry-Perot echoes inside the recorded time window, estimated from "
                                     "the trace length after the main pulse and the round trip time. Only used by "
                                     "the truncated echo models (model_1layer_fp, t_model_2layer)").tag(
@@ -705,7 +757,9 @@ class AppSettings(ComponentBase):
                                             "(also not by the command line interface), changes are lost. Only this "
                                             "option itself is stored, so saving stays off until it is switched on "
                                             "again").tag(name="Save settings on exit")
-    log_level = TEnum(LogLevel, default_value=LogLevel.info).tag(name="Log level")
+    log_level = TEnum(LogLevel, default_value=LogLevel.info,
+                      help="Lowest level of the messages shown in the message panel (debug: also the diagnostic "
+                           "messages)").tag(name="Log level")
     max_log_lines = Int(250, min=10, help="Number of the newest messages kept in the message panel, older ones "
                                           "are removed").tag(name="Maximum message lines")
 
@@ -715,6 +769,7 @@ class AppSettings(ComponentBase):
     plot_opt = Instance(PlotOpt, args=())
     shgo_options = Instance(SHGOOptions, args=())
     component_toggle = Instance(ComponentToggle, args=())
+    remote = Instance(RemoteOpt, kw={"object_name": "Remote workers"})
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

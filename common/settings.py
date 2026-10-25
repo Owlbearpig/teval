@@ -10,6 +10,8 @@ from traitlets import Instance, Bool, Integer, Float, Enum as TEnum, Unicode, Li
 from common.components import ComponentBase, is_component_trait
 from common.default_appsettings import AppSettings, EvalOpt, PpOpt, ImageEvalOpt
 from traitlets.traitlets import TraitError
+from PySide6 import QtWidgets
+from common.components import action
 
 _simple_types = (float, str, list, bool, int)
 
@@ -55,6 +57,42 @@ def component_settings(instance):
     return dump_dict
 
 
+resettable_traits = (Bool, Integer, Float, Unicode, Quantity, TEnum, TPath, ValueRange, List, MultiPathSelection,
+                      FitParameterTable)
+
+
+def reset_to_defaults(instance, group=None, keep_paths=False, keep=None):
+    # saved (en_save) settings back to their defaults. group: only that UI group of the instance itself, otherwise
+    # also the sub-components. keep: the (config) dict of entries that are set afterwards anyway, those aren't reset
+    # so that their observers don't run twice
+    if instance is None:
+        return
+    keep = keep if isinstance(keep, dict) else {}
+    for name, trait in instance.traits().items():
+        if not trait.metadata.get("en_save", True) or trait.read_only:
+            continue
+        if is_component_trait(trait):
+            if group is None and not issubclass(trait.klass, EvalResult):
+                reset_to_defaults(trait.get(instance), keep_paths=keep_paths, keep=keep.get(name))
+            continue
+        if not isinstance(trait, resettable_traits) or name in keep:
+            continue
+        if group is not None and trait.metadata.get("group", "General") != group:
+            continue
+        if keep_paths and isinstance(trait, (TPath, MultiPathSelection)):
+            continue
+        try:
+            if isinstance(trait, MultiPathSelection):
+                getattr(instance, name).selected_paths = []
+            else:
+                default = instance.trait_defaults(name)
+                if getattr(instance, name) != default:
+                    setattr(instance, name, default)
+        except Exception as e:
+            # also errors of observers (e.g. no measurements loaded yet), the other settings are still reset
+            print(f"Could not reset {name} of {instance.object_name}: {e!r}")
+
+
 # option groups of the settings whose traits moved into sub-components (sub-tabs)
 _split_option_groups = {"eval_opt": EvalOpt, "pp_opt": PpOpt}
 
@@ -90,13 +128,25 @@ def migrate_config(settings_dict, json_dict=None):
 
 
 class Settings(AppSettings):
+    # set before the construction (command line interface --config) to use another settings file
+    settings_file_override = None
+
+    settings_file_group = "Settings file"
+    settings_file = Unicode("", read_only=True).tag(name="Settings file", group=settings_file_group, priority=2000,
+                                                    en_save=False)
 
     def __init__(self, settings_file: Path | str = "", **kwargs):
         super().__init__(**kwargs)
         self.script_name = self.script_name if self.script_name is not None else ""
         self._settings_file = Path(settings_file).stem if Path(settings_file).is_file() else Path(self.script_name).stem
 
-        self.config_path = Path(f"config/{self._settings_file}.json")
+        self.default_config_path = Path(f"config/{self._settings_file}.json")
+        # remembers the file chosen with "Load settings file" / "Save settings as" for the next start
+        self._last_file_path = Path(f"config/{self._settings_file}.last_settings_file")
+        self.config_path = self._startup_config_path()
+        self.set_trait("settings_file", str(self.config_path))
+        # components that loaded their settings, in that order; loading another file or resetting goes through them
+        self._components = []
 
         self.load_configuration(self)
 
@@ -106,6 +156,99 @@ class Settings(AppSettings):
         self.save_configuration(self)
 
         return False
+
+    def _startup_config_path(self):
+        if self.settings_file_override:
+            return Path(self.settings_file_override)
+        if self._last_file_path.is_file():
+            path = Path(self._last_file_path.read_text(encoding="utf-8").strip())
+            if path.is_file():
+                return path
+            print(f"Last used settings file {path} not found, using {self.default_config_path}")
+        return self.default_config_path
+
+    def _switch_settings_file(self, path):
+        self.config_path = Path(path)
+        self.set_trait("settings_file", str(self.config_path))
+        if self.settings_file_override:
+            return
+        if self.config_path.resolve() == self.default_config_path.resolve():
+            self._last_file_path.unlink(missing_ok=True)
+        else:
+            self._last_file_path.parent.mkdir(parents=True, exist_ok=True)
+            self._last_file_path.write_text(str(self.config_path.resolve()), encoding="utf-8")
+
+    def _save_all(self, force=False):
+        for component in self._components:
+            self.save_configuration(component, force=force)
+
+    def _load_all(self):
+        for component in self._components:
+            self.load_configuration(component, reset_missing=True)
+        self.logger.info(f"Loaded settings from {self.config_path}")
+
+    def _dialog_parent_dir(self):
+        return str(self.config_path.parent if self.config_path.parent.exists() else Path.cwd())
+
+    @action("Load settings file", group=settings_file_group, priority=2010,
+            help="Load all settings from another file; it is then used for saving and on the next start. Settings "
+                 "the file doesn't contain are reset to the defaults (except data and file paths). The current "
+                 "settings are saved to the current file first, unless saving on exit is off")
+    def load_settings_file(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(getattr(self, "_ui_control_widget", None),
+                                                        "Load settings file", self._dialog_parent_dir(),
+                                                        "Settings (*.json)")
+        if not path:
+            return
+        if self.save_settings_on_exit:
+            self._save_all()
+        self._switch_settings_file(path)
+        self._load_all()
+
+    @action("Save settings as", group=settings_file_group, priority=2011,
+            help="Save all settings to a new file and use that file from now on (also on the next start)")
+    def save_settings_as(self):
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(getattr(self, "_ui_control_widget", None),
+                                                        "Save settings as", self._dialog_parent_dir(),
+                                                        "Settings (*.json)")
+        if not path:
+            return
+        path = Path(path).with_suffix(".json")
+        # keeps the entries of components that aren't loaded (switched off)
+        if self.config_path.is_file() and path.resolve() != self.config_path.resolve():
+            path.write_text(self.config_path.read_text(encoding="utf-8"), encoding="utf-8")
+        self._switch_settings_file(path)
+        self._save_all(force=True)
+        self.logger.info(f"Saved settings to {self.config_path}")
+
+    @action("Save settings now", group=settings_file_group, priority=2012,
+            help="Save all settings to the current file (also when saving on exit is off)")
+    def save_settings_now(self):
+        self._save_all(force=True)
+        self.logger.info(f"Saved settings to {self.config_path}")
+
+    @action("Use default settings file", group=settings_file_group, priority=2013,
+            help="Switch back to the default settings file of the script (config/<script name>.json) and load it")
+    def use_default_settings_file(self):
+        if self.config_path.resolve() == self.default_config_path.resolve():
+            self.logger.info(f"Already using the default settings file {self.config_path}")
+            return
+        if self.save_settings_on_exit:
+            self._save_all()
+        self._switch_settings_file(self.default_config_path)
+        self._load_all()
+
+    @action("Reset all settings to defaults", group=settings_file_group, priority=2014,
+            help="Reset the settings of all components to their defaults; data and file paths are kept. The file "
+                 "only changes when the settings are saved. A single group: right click on it")
+    def reset_all_settings(self):
+        answer = QtWidgets.QMessageBox.question(getattr(self, "_ui_control_widget", None), "Reset settings",
+                                                "Reset the settings of all components to their defaults?")
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        for component in self._components:
+            reset_to_defaults(component, keep_paths=True)
+        self.logger.info("Reset all settings to their defaults")
 
     def _set_component_names(self):
         custom_names = {
@@ -123,9 +266,9 @@ class Settings(AppSettings):
                     instance.object_name = custom_names.get(k, k.replace('_', ' ').title())
 
 
-    def save_configuration(self, component_instance):
+    def save_configuration(self, component_instance, force=False):
         if not self.config_path.parent.exists():
-            self.config_path.parent.mkdir()
+            self.config_path.parent.mkdir(parents=True)
 
         comp_class_name = component_instance.__class__.__name__
 
@@ -135,7 +278,7 @@ class Settings(AppSettings):
         else:
             settings_dict = {}
 
-        if not self.save_settings_on_exit:
+        if not self.save_settings_on_exit and not force:
             # only the option itself, otherwise the next start would load the stored "on" and save again
             if component_instance is not self:
                 return
@@ -147,13 +290,18 @@ class Settings(AppSettings):
         with open(self.config_path, 'w') as fp:
             json.dump(settings_dict, fp, indent=4)
 
-    def load_configuration(self, component_instance):
+    def load_configuration(self, component_instance, reset_missing=False):
+        # reset_missing: settings the file doesn't contain go back to their defaults (when loading another file)
+        if component_instance not in self._components:
+            self._components.append(component_instance)
         component_class_name = component_instance.__class__.__name__
         config_path = self.config_path
         print(f"Loading settings from {config_path} for component {component_class_name}")
 
         if not config_path.exists():
             print(f"No custom config found at {config_path}. Using default values.")
+            if reset_missing:
+                reset_to_defaults(component_instance, keep_paths=True)
             return
 
         def set_trait_values(instance, dict_):
@@ -220,9 +368,13 @@ class Settings(AppSettings):
 
         with open(config_path, "r") as f:
             json_dict = json.load(f)
-            if component_class_name in json_dict:
-                if isinstance(component_instance, AppSettings):
-                    migrate_config(json_dict[component_class_name], json_dict)
-                set_trait_values(component_instance, json_dict[component_class_name])
-            else:
-                print(f"No custom config found for component {component_class_name}. Using default values.")
+        if component_class_name in json_dict:
+            if isinstance(component_instance, AppSettings):
+                migrate_config(json_dict[component_class_name], json_dict)
+            if reset_missing:
+                reset_to_defaults(component_instance, keep_paths=True, keep=json_dict[component_class_name])
+            set_trait_values(component_instance, json_dict[component_class_name])
+        else:
+            print(f"No custom config found for component {component_class_name}. Using default values.")
+            if reset_missing:
+                reset_to_defaults(component_instance, keep_paths=True)

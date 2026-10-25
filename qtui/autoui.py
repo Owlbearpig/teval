@@ -1,7 +1,7 @@
 from PySide6 import QtWidgets, QtCore, QtGui
 from traitlets import Integer, Float, Unicode, Bool, Enum
 from common.measurement_selection import MeasurementSelection
-from common.settings import Settings
+from common.settings import Settings, reset_to_defaults, resettable_traits
 from common.eval_component.eval_result import EvalResult
 from qtui.changeindicatorspinbox import ChangeIndicatorSpinBox
 from qtui.changeindicatorlineedit import ChangeIndicatorLineEdit
@@ -780,6 +780,24 @@ def _traitSortingKey(args):
     return userPrio, prio, name
 
 
+def add_reset_menu(component, group, box):
+    resettable = [trait for trait in component.traits().values()
+                  if _group(trait) == group and not is_component_trait(trait) and not trait.read_only
+                  and trait.metadata.get("en_save", True) and isinstance(trait, resettable_traits)]
+    if not resettable:
+        return
+
+    def show_menu(pos):
+        menu = QtWidgets.QMenu(box)
+        reset_action = menu.addAction(f'Reset "{group}" to defaults')
+        if menu.exec(box.mapToGlobal(pos)) is reset_action:
+            reset_to_defaults(component, group=group)
+            component.logger.info(f'Reset the settings of "{group}" to their defaults')
+
+    box.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+    box.customContextMenuRequested.connect(show_menu)
+
+
 def generate_component_ui(name, component):
     controlWidget = QtWidgets.QWidget()
 
@@ -802,6 +820,9 @@ def generate_component_ui(name, component):
             box = QtWidgets.QGroupBox(group, controlWidget)
             QtWidgets.QFormLayout(box)
             groups[group] = box
+
+    for group, box in groups.items():
+        add_reset_menu(component, group, box)
 
     controlWidget.param_widgets = {}
     for name, trait in traits:

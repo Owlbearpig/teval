@@ -26,7 +26,9 @@ from common.eval_component.layer_stack import LayerStack
 from common.eval_component.q_space_scan import ScanTarget, OptimizationCancelled
 from common.eval_component.q_value import fp_round_trip_time, compute_q_value, optimize_and_rate
 from common.eval_component import fast_kernels
-from common.eval_component.q_space_image import QSpaceImageEval
+from common.eval_component.q_space_image import QSpaceImageEval, alpha_of
+from common.eval_component.uncertainty import (estimator_for, random_generator, perturbed_transmissions,
+                                               replicate_optimum, ThicknessUncertainty, TransmissionUncertainty)
 from dataclasses import dataclass
 from contextlib import contextmanager
 from mpl_settings import mpl_style_params
@@ -37,6 +39,7 @@ from PySide6.QtCore import QObject, Signal
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from common.dataset_plotter import DataSetPlotter
+from common.remote.client import active_connection, HybridExecutor
 
 action = partial(action, check_init=True, rc_params=mpl_style_params)
 
@@ -87,6 +90,16 @@ class TaskStatusSignal(QObject):
 
 
 def kill_process_pool(executor):
+    if isinstance(executor, HybridExecutor):
+        procs = executor.local_processes
+        executor.shutdown(wait=False, cancel_futures=True)
+        for proc in procs:
+            try:
+                if proc.is_alive():
+                    proc.kill()
+            except Exception:
+                pass
+        return
     procs = list((getattr(executor, "_processes", None) or {}).values())
     executor.shutdown(wait=False, cancel_futures=True)
     for proc in procs:
@@ -797,11 +810,29 @@ class QSpaceEval(EvalComponentBase):
             self.check_cancel()
             raise
 
+    @property
+    def worker_count(self):
+        # local + remote workers of the current process pool
+        remote = active_connection()
+        if remote is None:
+            return self.number_of_workers
+        return remote.workers + self.number_of_workers * self.settings.remote.use_local_workers
+
+    def _executor(self):
+        remote = active_connection()
+        if remote is None:
+            return ProcessPoolExecutor(max_workers=self.number_of_workers, initializer=limit_worker_threads)
+        use_local = self.settings.remote.use_local_workers and self.number_of_workers > 0
+        local = (ProcessPoolExecutor(max_workers=self.number_of_workers, initializer=limit_worker_threads)
+                 if use_local else None)
+        logging.info(f"Using {remote.workers} remote workers ({remote.info.get('host', remote.host)})"
+                     + (f" and {self.number_of_workers} local workers" if use_local else ""))
+        return HybridExecutor(remote, local, self.number_of_workers if use_local else 0)
+
     @contextmanager
     def process_pool(self):
         self.check_cancel()
-        with ProcessPoolExecutor(max_workers=self.number_of_workers,
-                                 initializer=limit_worker_threads) as executor:
+        with self._executor() as executor:
             self.current_process_executor = executor
             try:
                 yield executor
@@ -877,7 +908,7 @@ class QSpaceEval(EvalComponentBase):
                 # submitted in order, so the running tasks follow the last finished one
                 running = []
                 for (_, task), fut in zip(tasks[start_idx:], futures[start_idx:]):
-                    if len(running) == self.number_of_workers:
+                    if len(running) == self.worker_count:
                         break
                     if not fut.done():
                         running.append(task)
@@ -959,11 +990,101 @@ class QSpaceEval(EvalComponentBase):
                 best_key = next(k for k, res in meas_results.items() if res is best)
                 logging.info(f"Optimum thickness {np.round(best.d, 3)}"
                              + f" (shift {best.shift})" * self.settings.eval_opt.enable_shift_opt)
+                if self.settings.eval_opt.uncertainty.qspace_enabled:
+                    self._selection_thickness_uncertainty(executor, ctx, meas, target, best, meas_label)
                 eval_result_data.optimum_results[ready_results[0].measurement] = best_key
                 self._set_status("current_stage", f"{meas_label}, finished")
                 self._set_status("current_optimum", self._optimum_text(best))
 
         return eval_result_data
+
+    mc_window_moves = 4
+
+    def mc_thickness_uncertainty(self, executor, specs, label, add_progress=True):
+        # specs: (key, opt_config, t (F), TransmissionUncertainty, d_center (µm), shift (fs)) per target. Each perturbed
+        # transmission gets a scan of the thickness window around d_center at the fixed shift (moved up to
+        # mc_window_moves times if its minimum is at the end), returns {key: ThicknessUncertainty} from the spread of
+        # their q-value minima
+        opt = self.settings.eval_opt.uncertainty
+        rng = random_generator(opt)
+        freq = self.freq_axis
+        half = opt.qspace_window.to("µm").magnitude
+        step = 2 * half / (opt.qspace_points - 1)
+        by_shift = {}
+        for key, opt_config, t, unc, d_center, shift in specs:
+            d_axis, d_step = self.thickness_axis(max(d_center - half, step), d_center + half, step)
+            for rep_idx, t_rep in enumerate(perturbed_transmissions(freq, t, unc, opt.qspace_samples, rng)):
+                config = {**opt_config, "t_exp": np.column_stack((freq, t_rep))}
+                by_shift.setdefault(float(shift), []).append(
+                    ScanTarget(key=(key, rep_idx), opt_config=config, d_axis=d_axis, d_step=d_step))
+        targets = [target for group in by_shift.values() for target in group]
+        if add_progress:
+            self.progress_add_total(sum(len(target.d_axis) for target in targets))
+        for shift, group in by_shift.items():
+            self.run_scan(executor, group, 1, np.array([shift]), label=f"{label}, uncertainty",
+                          kept_datasets=("n",))
+
+        # a minimum at the end of the window: the window continues on that side, the same number of thicknesses
+        for _ in range(self.mc_window_moves):
+            moved = {}
+            for shift, group in by_shift.items():
+                for target in group:
+                    d_done = np.array(sorted(res.d.to("µm").magnitude for res in target.results))
+                    d_opt, _, at_edge = replicate_optimum(target.results)
+                    if not at_edge:
+                        continue
+                    offsets = step * np.arange(1, opt.qspace_points)
+                    new_d = d_done[0] - offsets if d_opt <= d_done[0] + 1e-9 else d_done[-1] + offsets
+                    target.d_axis = new_d[new_d > 0]
+                    if len(target.d_axis):
+                        moved.setdefault(shift, []).append(target)
+            if not moved:
+                break
+            self.progress_add_total(sum(len(target.d_axis) for group in moved.values() for target in group))
+            for shift, group in moved.items():
+                self.run_scan(executor, group, 1, np.array([shift]), label=f"{label}, uncertainty (moved windows)",
+                              kept_datasets=("n",), show_stage=False)
+
+        optima = {}
+        for target in targets:
+            optima.setdefault(target.key[0], []).append(replicate_optimum(target.results))
+
+        return {key: ThicknessUncertainty.from_replicates(key_optima) for key, key_optima in optima.items()}
+
+    def log_thickness_uncertainty(self, label, d, res: ThicknessUncertainty, unc: TransmissionUncertainty):
+        logging.info(f"{label}: thickness {d:.2f} ± {res.d_std:.2f} µm (Monte Carlo, {res.samples} samples, their "
+                     f"mean {res.d_mean:.2f} µm; {unc.describe()})")
+        sem = res.d_std / np.sqrt(res.samples)
+        if abs(res.d_mean - d) > 3 * sem + 0.05 * res.d_std + 1e-3:
+            logging.warning(f"{label}: the mean of the Monte Carlo samples differs from the optimum by "
+                            f"{res.d_mean - d:+.2f} µm, more than the noise explains. The thickness step (refinement "
+                            f"iterations) limits the optimum, the samples interpolate between the scanned thicknesses")
+        if res.at_edge:
+            logging.warning(f"{label}: {res.at_edge} of {res.samples} Monte Carlo samples have their minimum at the "
+                            f"end of the thickness window after moving it {self.mc_window_moves} times, the uncertainty is "
+                            f"underestimated. Increase the window (Settings -> Evaluation -> Uncertainty)")
+
+    def _selection_thickness_uncertainty(self, executor, ctx: SelectionContext, meas, target, best, label):
+        selection = ctx.selection
+        meas_list = list(selection.sams) if not isinstance(meas, Measurement) else [meas]
+        ref_list = [selection.ref_map(m) for m in meas_list]
+        unc = estimator_for(self.dataset).transmission_uncertainty(meas_list, ref_list, self.freq_range_idx,
+                                                                   self.settings.eval_opt.uncertainty)
+        t = np.asarray(ctx.t_exp_dict[meas])[:, 1]
+        d, shift = best.d.to("µm").magnitude, best.shift.to("fs").magnitude
+        res = self.mc_thickness_uncertainty(executor, [(meas, target.opt_config, t, unc, d, shift)], label)[meas]
+        self.log_thickness_uncertainty(label, d, res, unc)
+
+        best.optimization_info["d_uncertainty"] = Q_(res.d_std, "µm")
+        best.optimization_info["d_mc_mean"] = Q_(res.d_mean, "µm")
+        best.optimization_info["uncertainty_samples"] = res.samples
+        freq = best.freq_axis.to("THz").magnitude
+        datasets = best.datasets
+        if "n_real" in datasets and "n_imag" in datasets:
+            datasets["n_real"].uncert = Q_(res.n_std.real, "")
+            datasets["n_imag"].uncert = Q_(res.n_std.imag, "")
+        if "alpha" in datasets:
+            datasets["alpha"].uncert = Q_(alpha_of(freq, 1j * res.n_std.imag), "1/cm")
 
     def calc_sim(self, model_kwargs, ref_fd):
         model = self.transmission_model.value

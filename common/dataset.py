@@ -1,4 +1,5 @@
 from __future__ import annotations
+import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -13,12 +14,12 @@ from PySide6.QtCore import QObject, Signal
 from common.components import ComponentBase
 from common.components import action
 from common.consts import c_thz
-from common.dataset_cache import DatasetCache, remove_cache_dir
+from common.dataset_cache import DatasetCache, remove_cache_dir, cache_dir
 from common.default_appsettings import Dist, ReferenceClassification, Domain, QuantityEnum, WindowTypes, ComponentToggle
 from common.functions import (butter_filt, do_fft, f_axis_idx_map,
                               remove_offset, avg_data_array, calculate_bandwidth, to_db)
 from common.measurement_selection import MeasurementSelection, get_coordinate_line
-from common.measurements import Measurement
+from common.measurements import Measurement, FileNameFormat, default_time_format
 from common.settings import Settings
 from common.traits import Q_, Path as TPath, Quantity, ValueRange
 from scipy.signal import get_window
@@ -201,6 +202,17 @@ class DataSet(ComponentBase):
 
     sub_linked = Bool(False, read_only=True).tag(name="Substrate dataset linked")
 
+    file_format_group = "File name format"
+    file_glob = Unicode("**/*.txt", help="Glob pattern of the measurement files below the dataset path "
+                                         "(\"**/\": also in sub folders)").tag(
+        group=file_format_group, name="Files", priority=-1.5)
+    file_name_format = Unicode("", help=FileNameFormat.__doc__.strip()).tag(
+        group=file_format_group, name="File name format", priority=-1.4, fullwidth=True)
+    time_format = Unicode(default_time_format,
+                          help="strptime format of the {time} field, e.g. %Y-%m-%dT%H-%M-%S.%f "
+                               "(2025-05-27T23-29-21.791821) or %Y%m%d_%H%M%S (20250527_232921)").tag(
+        group=file_format_group, name="Time format", priority=-1.3)
+
     reference_filter_group = "Reference classification"
     ref_classifier = TEnum(ReferenceClassification,
                            default_value=ReferenceClassification.from_file_name,
@@ -226,6 +238,7 @@ class DataSet(ComponentBase):
         super().__init__(**kwargs)
         self._parse_lock = Lock()
         self._is_parsing = False
+        self._reparse_pending = False
         self.set_trait("is_initialized", False)
 
         self.measurements = {"refs": [], "sams": [], "all": (), "max_amp_meas": None}
@@ -345,6 +358,50 @@ class DataSet(ComponentBase):
     def _set_observers(self):
         reference_filter_trait_names = self.trait_names(group=self.reference_filter_group)
         self.observe(self.update_meas_sorting, names=reference_filter_trait_names)
+        self.observe(self._file_format_changed, names=["file_glob", "file_name_format", "time_format"])
+
+    def file_name_parser(self):
+        return FileNameFormat(self.file_name_format, self.time_format)
+
+    def _file_format_changed(self, change=None):
+        try:
+            self.file_name_parser()
+        except (ValueError, re.error) as e:
+            self.logger.error(f"Invalid file name format: {e}")
+            return
+        self._parse_measurements()
+
+    @action("Test file name format", group=file_format_group, priority=-1.2)
+    def test_file_name_format(self, max_shown=5):
+        try:
+            parser = self.file_name_parser()
+        except (ValueError, re.error) as e:
+            self.logger.error(f"Invalid file name format: {e}")
+            return
+        files = self._data_files()
+        if not files:
+            self.logger.warning(f"No files matching {self.file_glob} in {self.data_path}")
+            return
+        if not parser.is_default:
+            self.logger.info(f"File name format regex: {parser.regex.pattern}")
+        parsed, failed = [], []
+        for file_path in files:
+            try:
+                parsed.append(Measurement(filepath=file_path, file_name_format=parser))
+            except Exception as err:
+                failed.append((file_path, err))
+        lines = [f"{len(parsed)} of {len(files)} files match the file name format"]
+        for meas in parsed[:max_shown]:
+            fields = [f"time {meas.meas_time}" + (" (file modification time)" * meas.time_from_file),
+                      f"position {meas.position} mm"]
+            if meas.name is not None:
+                fields.append(f"name {meas.name!r}")
+            fields += [f"{key} {val!r}" for key, val in meas.attributes.items()]
+            lines.append(f"  {meas.filepath.name}: {', '.join(fields)}")
+        if failed:
+            lines.append("Not matching, e.g.:")
+            lines += [f"  {file_path.name}: {err}" for file_path, err in failed[:max_shown]]
+        self.logger.info("\n".join(lines))
 
     def update_cache_progress(self, progress):
         self.set_trait("caching_progress", progress)
@@ -519,8 +576,11 @@ class DataSet(ComponentBase):
 
         def bg_worker(target_path):
             if not self._parse_lock.acquire(blocking=False):
-                self.logger.debug("Parse already in progress")
+                # parsed again afterwards, the running parse may have read the settings before the change
+                self.logger.debug("Parse already in progress, parsing again afterwards")
+                self._reparse_pending = True
                 return
+            self._reparse_pending = False
             try:
                 if not target_path or not target_path.exists():
                     raise ValueError(f"Path {target_path} does not exist")
@@ -543,6 +603,8 @@ class DataSet(ComponentBase):
                 self.logger.error(f"Error parsing path {target_path}: {e}", exc_info=True)
             finally:
                 self._parse_lock.release()
+                if self._reparse_pending:
+                    bg_worker(self.data_path)
 
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(bg_worker, data_path)
@@ -613,21 +675,48 @@ class DataSet(ComponentBase):
         y_extrema_str = f"{np.min(shape['y_coords'])}, {np.max(shape['y_coords'])}"
         self.info_pane.set_trait("y_coord_extrema", y_extrema_str)
 
-    def _read_data_dir(self):
-        glob = self.data_path.glob("**/*.txt")
+    def _data_files(self):
+        if not self.data_path or not Path(self.data_path).is_dir():
+            return []
+        cache_path = cache_dir(self.data_path)
+        return sorted(path for path in Path(self.data_path).glob(self.file_glob or "**/*.txt")
+                      if path.is_file() and cache_path not in path.parents)
 
-        measurements = []
-        for i, file_path in enumerate(glob):
-            if file_path.is_file() and ".txt" in file_path.name:
-                try:
-                    measurements.append(Measurement(filepath=file_path))
-                except Exception as err:
+    def _read_data_dir(self):
+        parser = self.file_name_parser()
+
+        measurements, skipped = [], 0
+        for file_path in self._data_files():
+            try:
+                measurements.append(Measurement(filepath=file_path, file_name_format=parser))
+            except Exception as err:
+                skipped += 1
+                if skipped <= 5:
                     self.logger.info(f"Skipping {file_path}. {err}")
+        if skipped > 5:
+            self.logger.info(f"Skipped {skipped} files in total")
 
         if not measurements:
-            self.logger.warning("No measurements found. Check path or filenames")
+            self.logger.warning("No measurements found. Check path, file pattern or file name format")
 
-        measurements = tuple(sorted(measurements, key=lambda meas: meas.meas_time))
+        file_time_cnt = sum(meas.time_from_file for meas in measurements)
+        if file_time_cnt:
+            self.logger.warning(f"No time in the file name of {file_time_cnt} measurements, using the file "
+                                f"modification time (add {{time}} to the file name format)")
+
+        measurements = sorted(measurements, key=lambda meas: (meas.meas_time, str(meas.filepath)))
+        # the cache is indexed by the identifier (measurement time), so equal times get a 1 µs offset
+        used, same_time_cnt = set(), 0
+        for meas in measurements:
+            same_time_cnt += meas.identifier in used
+            while meas.identifier in used:
+                meas.identifier += 1
+            used.add(meas.identifier)
+        if same_time_cnt:
+            self.logger.warning(f"{same_time_cnt} measurements have the same time as another one, those are ordered "
+                                f"by their file name")
+
+        measurements = tuple(measurements)
 
         return measurements
 
