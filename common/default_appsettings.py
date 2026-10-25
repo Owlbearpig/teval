@@ -699,6 +699,10 @@ class PlotOpt(ComponentBase):
         name="Automatic color bar limits")
     auto_cbar_percentiles = ValueRange([1.0, 99.0], group=image_group).tag(
         name="Automatic limits: percentiles (%)")
+    auto_cbar_center_median = Bool(True, group=image_group,
+                                   help="The automatic limits are symmetric around the median of the shown pixels "
+                                        "(e.g. the median thickness), wide enough to include both percentiles").tag(
+        name="Automatic limits: centered on the median")
 
     destripe_group = "Image destriping"
     destripe = Bool(False, group=destripe_group,

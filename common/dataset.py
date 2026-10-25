@@ -576,11 +576,13 @@ class DataSet(ComponentBase):
 
         def bg_worker(target_path):
             if not self._parse_lock.acquire(blocking=False):
-                # parsed again afterwards, the running parse may have read the settings before the change
-                self.logger.debug("Parse already in progress, parsing again afterwards")
+                # parsed again afterwards if the running parse used other settings; not for the same ones: a second
+                # parse makes new Measurement objects, results keyed by the first ones (image evaluation) get lost
+                self.logger.debug("Parse already in progress")
                 self._reparse_pending = True
                 return
             self._reparse_pending = False
+            used_key = self._parse_key()
             try:
                 if not target_path or not target_path.exists():
                     raise ValueError(f"Path {target_path} does not exist")
@@ -603,11 +605,16 @@ class DataSet(ComponentBase):
                 self.logger.error(f"Error parsing path {target_path}: {e}", exc_info=True)
             finally:
                 self._parse_lock.release()
-                if self._reparse_pending:
+                if self._reparse_pending and self._parse_key() != used_key:
+                    self.logger.debug("Settings changed during the parse, parsing again")
                     bg_worker(self.data_path)
+                self._reparse_pending = False
 
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(bg_worker, data_path)
+
+    def _parse_key(self):
+        return str(self.data_path), self.file_glob, self.file_name_format, self.time_format
 
     def update_meas_sorting(self, change=None):
         self._update_measurement_dict(self.measurements)

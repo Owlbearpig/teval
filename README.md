@@ -237,6 +237,12 @@ The image evaluation tab holds what is set per image: the evaluated area and the
 re-evaluation, reliability, minimum time of flight, autosave interval) are in Settings → Evaluation → Image evaluation;
 they rarely need changing.
 
+Color scale of the images: pixels without a value (not evaluated, air, holder, no sample measurement) are transparent
+and don't count for the color bar limits. By default the limits are the smallest and largest value. With
+"Automatic color bar limits" (Settings tab, plot settings, group "Image") they are the percentiles "Automatic limits:
+percentiles" (1 - 99 %) of the shown pixels, so single outliers don't stretch the scale, and with "Automatic limits:
+centered on the median" (on) symmetric around the median (e.g. the median thickness). The limits used are logged.
+
 To save time it uses the fact that the thickness changes little from pixel to pixel:
 
 1. **Pixels without sample are skipped**

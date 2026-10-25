@@ -49,7 +49,8 @@ class GridWorker(QThread):
             meas_set = self.image_plot.measurements["sams"]
         else:
             meas_set = self.image_plot.measurements["all"]
-        grid = self.image_plot._get_empty_grid()
+        # nan: grid points without a (sample) measurement count as missing, not as 0 (color limits, display)
+        grid = np.full_like(self.image_plot._get_empty_grid(), np.nan)
         sel_quant = self.image_plot.selected_quantity_enum
         sel_quant_func = self.image_plot.get_selected_quantity_func(self.image_plot.grid_calc_freq_range)
 
@@ -883,11 +884,17 @@ class ImagePlot(DataSetPlotter):
         p_lo, p_hi = sorted(float(np.clip(getattr(p, "magnitude", p), 0, 100))
                             for p in self.plot_settings.auto_cbar_percentiles)
         lo, hi = (float(v) for v in np.percentile(vals, [p_lo, p_hi]))
+        centered = ""
+        if self.plot_settings.auto_cbar_center_median:
+            median = float(np.median(vals))
+            half = max(median - lo, hi - median)
+            lo, hi = median - half, median + half
+            centered = f", centered on the median {median:.4g}"
         if hi <= lo:
             pad = abs(lo) * 1e-3 or 1e-12
             lo, hi = lo - pad, hi + pad
         shown = f"10^{lo:.4g} - 10^{hi:.4g}" if self.plot_settings.log_scale else f"{lo:.4g} - {hi:.4g}"
-        logging.info(f"Automatic color bar limits ({p_lo:g} - {p_hi:g} % of {vals.size} pixels): {shown}")
+        logging.info(f"Automatic color bar limits ({p_lo:g} - {p_hi:g} % of {vals.size} pixels{centered}): {shown}")
         return lo, hi
 
     def _exclude_pixels(self, grid_vals):
@@ -1015,6 +1022,8 @@ class ImagePlot(DataSetPlotter):
                        float(img_extent[1] + shape_properties["dx"] / 2),
                        float(img_extent[2] - shape_properties["dy"] / 2),
                        float(img_extent[3] + shape_properties["dy"] / 2))
+        # pixels without a value are transparent instead of the color of 0
+        shown_grid_vals = np.ma.masked_array(shown_grid_vals, mask=missing | ~np.isfinite(shown_grid_vals))
         img_ = ax.imshow(shown_grid_vals.transpose((1, 0)),
                          vmin=cbar_min, vmax=cbar_max,
                          origin="lower",
