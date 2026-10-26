@@ -46,5 +46,5 @@ class AppRoot(ComponentBase):
 
     @action("Hello")
     def hello(self):
-        self.logger.warning("hello")
+        self.logger.info("Hello")
 
