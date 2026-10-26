@@ -116,6 +116,9 @@ def migrate_config(settings_dict, json_dict=None):
     if isinstance(remote_dict, dict) and remote_dict.get("remote_python") == shared_venv_python:
         # the environment that was shared by all users, each user has an own one now
         remote_dict["remote_python"] = ""
+    minimizer_dict = settings_dict.get("shgo_options", {}).get("minimizer_kwargs")
+    if isinstance(minimizer_dict, dict) and "maxev" in minimizer_dict:
+        del settings_dict["shgo_options"]["minimizer_kwargs"]
     for group_name, group_cls in _split_option_groups.items():
         group_dict = settings_dict.get(group_name)
         if not isinstance(group_dict, dict):

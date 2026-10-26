@@ -206,8 +206,7 @@ class Regression(EvalComponentBase):
         fit_parameters = self.fit_parameters
         quantity = self.sel_meas_quantity_enum
         shgo_options = self.settings.shgo_options
-        minimizer_kwargs = {**shgo_options.get_minimizer_kwargs(),
-                            "method": str(shgo_options.minimizer_kwargs.method.value)}
+        minimizer_kwargs = shgo_options.get_minimizer_kwargs()
 
         eval_result_data = EvalResultData()
         eval_result_data.result_type = "Regression"

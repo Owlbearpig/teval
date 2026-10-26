@@ -570,6 +570,7 @@ class SHGO:
         if minimizer_kwargs is not None:
             # Overwrite with supplied values
             self.minimizer_kwargs.update(minimizer_kwargs)
+            self.minimizer_kwargs['options'] = dict(self.minimizer_kwargs['options'] or {})
         else:
             self.minimizer_kwargs['options'] = {'ftol': 1e-12}
 
@@ -614,7 +615,7 @@ class SHGO:
         # Remove unknown arguments in self.minimizer_kwargs
         # Start with arguments all the solvers have in common
         self.min_solver_args = ['fun', 'x0', 'args',
-                                'callback', 'options', 'method']
+                                'callback', 'options', 'method', 'tol']
         # then add the ones unique to specific solvers
         solver_args = {
             '_custom': ['jac', 'hess', 'hessp', 'bounds', 'constraints'],
@@ -645,7 +646,6 @@ class SHGO:
                 dictionary.pop(key, None)
 
         _restrict_to_keys(self.minimizer_kwargs, self.min_solver_args)
-        _restrict_to_keys(self.minimizer_kwargs['options'], self.min_solver_args + ['ftol'])
 
         # Algorithm controls
         # Global controls
@@ -757,16 +757,9 @@ class SHGO:
         None
 
         """
-        # Update 'options' dict passed to optimize.minimize
-        # Do this first so we don't mutate `options` below.
-        self.minimizer_kwargs['options'].update(options)
-
-        # Ensure that 'jac', 'hess', and 'hessp' are passed directly to
-        # `minimize` as keywords, not as part of its 'options' dictionary.
         for opt in ['jac', 'hess', 'hessp']:
-            if opt in self.minimizer_kwargs['options']:
-                self.minimizer_kwargs[opt] = (
-                    self.minimizer_kwargs['options'].pop(opt))
+            if opt in options:
+                self.minimizer_kwargs[opt] = options[opt]
 
         # Default settings:
         self.minimize_every_iter = options.get('minimize_every_iter', True)
