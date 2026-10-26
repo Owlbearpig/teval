@@ -3,10 +3,50 @@
 Evaluation tool for THz time-domain spectroscopy (THz-TDS) measurements, with a GUI that is generated automatically from the
 evaluation components.
 
+## Installation
+
+Requires Python 3.11 or newer (tested with 3.11 and 3.13). There is no build step: clone the repository, create a virtual
+environment in it and install the packages of `requirements.txt`.
+
+Linux / macOS:
+
+```
+git clone https://github.com/Owlbearpig/teval.git
+cd teval
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+Windows (PowerShell):
+
+```
+git clone https://github.com/Owlbearpig/teval.git
+cd teval
+py -m venv venv
+venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+Activate the environment again (`source venv/bin/activate` / `venv\Scripts\Activate.ps1`) in every new terminal before
+starting the program. If PowerShell refuses to run the activation script, allow local scripts once with
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+Notes:
+
+- numba and threadpoolctl are optional but make the q-space evaluation much faster. Without numba it uses the numpy code
+  and logs "Compiled kernels not used (numba is not installed)".
+- On Python 3.11, PySide6 is limited to versions below 6.12: 6.12.0 crashes Python 3.11 after a while ("Fatal Python
+  error: bool_dealloc"). If an existing environment already has 6.12, run `pip install -r requirements.txt` again to
+  downgrade it.
+- On Linux, Qt needs some system libraries that pip doesn't install. If the GUI doesn't start with an error about the
+  "xcb" platform plugin, install them, e.g. on Ubuntu / Debian: `sudo apt install libxcb-cursor0`.
+- Updating: `git pull`, then `pip install -r requirements.txt` in the activated environment.
+- To run the fits on another computer as well, see [Remote workers](#remote-workers).
+
 ## Starting the GUI
 
-Install the dependencies (`pip install -r requirements.txt`; numba and threadpoolctl are optional but make the q-space
-evaluation much faster) and run from the repository root:
+Run from the repository root (with the environment activated):
 
 ```
 python load_with_ui.py eval_scripts/test_script.py
