@@ -773,40 +773,40 @@ class PlotOpt(ComponentBase):
 class ComponentToggle(ComponentBase):
     image_plot_grp = "Image plot"
     en_image_plot = Bool(True).tag(name="Main component", group=image_plot_grp, priority=1000)
-    en_avg_val_rect = Bool(True).tag(name="Average value rectangle", group=image_plot_grp, priority=1001)
-    en_slice_plots = Bool(True).tag(name="Slice plots", group=image_plot_grp, priority=1002)
-    en_time_scans = Bool(True).tag(name="B-scan / C-scan", group=image_plot_grp, priority=1003)
-    en_spectral_explorer = Bool(True).tag(name="Spectral explorer", group=image_plot_grp, priority=1004)
+    en_avg_val_rect = Bool(False).tag(name="Average value rectangle", group=image_plot_grp, priority=1001)
+    en_slice_plots = Bool(False).tag(name="Slice plots", group=image_plot_grp, priority=1002)
+    en_time_scans = Bool(False).tag(name="B-scan / C-scan", group=image_plot_grp, priority=1003)
+    en_spectral_explorer = Bool(False).tag(name="Spectral explorer", group=image_plot_grp, priority=1004)
 
     dataset_plotter_grp = "Dataset plots"
     en_extended_dataset_plots = Bool(True).tag(name="Main component", group=dataset_plotter_grp, priority=1000)
-    en_stability_plots = Bool(True).tag(name="Climate plots", group=dataset_plotter_grp, priority=1001)
-    en_spectrogram = Bool(True).tag(name="Spectrogram", group=dataset_plotter_grp, priority=1002)
-    en_diagnostic_plots = Bool(True).tag(name="Diagnostic plots", group=dataset_plotter_grp, priority=1003)
+    en_stability_plots = Bool(False).tag(name="Climate plots", group=dataset_plotter_grp, priority=1001)
+    en_spectrogram = Bool(False).tag(name="Spectrogram", group=dataset_plotter_grp, priority=1002)
+    en_diagnostic_plots = Bool(False).tag(name="Diagnostic plots", group=dataset_plotter_grp, priority=1003)
 
     measurement_selection = "Measurement selection"
     en_queue = Bool(True).tag(name="Queue", group=measurement_selection)
 
     info_pane = "DataSet info pane"
-    en_info_pane = Bool(True).tag(name="Info pane", group=info_pane)
+    en_info_pane = Bool(False).tag(name="Info pane", group=info_pane)
 
     q_space_eval = "Q-Space evaluation"
     en_q_space_eval = Bool(True).tag(name="Main component", group=q_space_eval, priority=1000)
     en_preprocessing = Bool(True).tag(name="Preprocessing view", group=q_space_eval, priority=1001)
-    en_multilayer = Bool(True).tag(name="Multi-layer sample", group=q_space_eval, priority=1002)
+    en_multilayer = Bool(False).tag(name="Multi-layer sample", group=q_space_eval, priority=1002)
     en_q_space_image = Bool(True).tag(name="Image evaluation", group=q_space_eval, priority=1003)
 
     regression = "Regression"
-    en_regression = Bool(True).tag(name="Main component", group=regression, priority=1000)
+    en_regression = Bool(False).tag(name="Main component", group=regression, priority=1000)
 
     conductivity_eval = "Conductivity evaluation"
-    en_conductivity_eval = Bool(True).tag(name="Main component", group=conductivity_eval, priority=1000)
+    en_conductivity_eval = Bool(False).tag(name="Main component", group=conductivity_eval, priority=1000)
 
     sparse_deconvolution = "Sparse deconvolution"
-    en_sparse_deconvolution = Bool(True).tag(name="Main component", group=sparse_deconvolution, priority=1000)
+    en_sparse_deconvolution = Bool(False).tag(name="Main component", group=sparse_deconvolution, priority=1000)
 
     effective_medium = "Effective medium"
-    en_effective_medium = Bool(True).tag(name="Main component", group=effective_medium, priority=1000)
+    en_effective_medium = Bool(False).tag(name="Main component", group=effective_medium, priority=1000)
 
 class AppSettings(ComponentBase):
     save_settings_on_exit = Bool(True, help="Off: the settings are not written to the config file when the app closes "

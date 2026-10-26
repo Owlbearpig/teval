@@ -19,7 +19,7 @@ from common.visualization.time_scans import TimeScans
 import logging
 from pathlib import Path
 from datetime import datetime
-from scipy.special import erfc
+from scipy.special import erf, erfc
 from scipy.optimize import curve_fit
 from common.eval_component.shgo import shgo
 from traitlets import Float, Bool, Unicode, Enum as TEnum, Instance, Int, Dict as TDict
@@ -577,38 +577,155 @@ class SlicePlots(ComponentBase):
         name="Line start point (x, y)", group=line_plot_grp, priority=1001)
     line_end = ValueRange(default_value=[Q_(0.0, "mm"), Q_(0.0, "mm")]).tag(
         name="Line end point (x, y)", group=line_plot_grp, priority=1002)
+    draw_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.P2P, group=line_plot_grp,
+                          help="Quantity of the image that \"Draw line in image\" opens, calculated like the image "
+                               "plot (selected frequency, complex value representation). The line scan itself shows "
+                               "the selected quantity of the image plot").tag(name="Quantity to draw on", priority=1003)
+    plot_after_drawing = Bool(True, group=line_plot_grp).tag(name="Line plot after drawing", priority=1004)
+    knife_edge_derivative = Bool(False, group=line_plot_grp,
+                                 help="Fits a Gaussian (1/e^2 radius w) to the derivative of the integrated power "
+                                      "along the line instead of the error function to the power itself. Less "
+                                      "sensitive to a slow drift or slope of the power level, more sensitive to "
+                                      "noise (differences of neighbouring points)").tag(
+        name="Knife edge: fit the derivative", priority=1005)
 
     def __init__(self, image_plot_inst, **kwargs):
         super().__init__(**kwargs)
         self.image_plot_inst: ImagePlot = image_plot_inst
+        self._widgets = []
+
+    def _draw_grid(self, batch=2000):
+        ip = self.image_plot_inst
+        shape = ip.img_shape
+        sams = ip.measurements["sams"]
+        freq_range = ip.grid_calc_freq_range.magnitude
+        func = ip.dataset.quantity_func(self.draw_quantity, freq_range=freq_range, d_sam=ip.d_sample)
+        sums = np.zeros((len(shape["x_coords"]), len(shape["y_coords"])))
+        counts = np.zeros_like(sums)
+        for i in range(0, len(sams), batch):
+            meas_batch = sams[i:i + batch]
+            vals = np.asarray(func(meas_batch))
+            if vals.ndim == 2:
+                vals = vals[:, ip.sel_freq_idx]
+            vals = np.asarray(ip.to_real(vals), dtype=float)
+            for meas, val in zip(meas_batch, vals):
+                if np.isfinite(val):
+                    idx = ip._coords_to_idx(*meas.position)
+                    sums[idx] += val
+                    counts[idx] += 1
+        return np.ma.masked_array(sums / np.maximum(counts, 1), mask=counts == 0)
+
+    @action("Draw line in image", group=line_plot_grp)
+    def draw_line(self):
+        ip = self.image_plot_inst
+        if not ip.measurements["sams"]:
+            logging.warning("No sample measurements")
+            return
+        shape = ip.img_shape
+        x_coords, y_coords = shape["x_coords"], shape["y_coords"]
+        grid = self._draw_grid()
+        x0, x1, y0, y1 = shape["extent"]
+        dx, dy = shape["dx"], shape["dy"]
+
+        fig = plt.figure("Draw line")
+        fig.clf()
+        ax = fig.add_subplot(111)
+        plot_opt = self.image_plot_inst.settings.plot_opt
+        img = ax.imshow(grid.T, origin="lower", cmap=plt.get_cmap(plot_opt.color_map.value),
+                        extent=(x0 - dx / 2, x1 + dx / 2, y0 - dy / 2, y1 + dy / 2))
+        quant = self.draw_quantity.value
+        fig.colorbar(img, ax=ax, label=f"{quant.label} {quant.unit}".strip())
+        if plot_opt.invert_x:
+            ax.invert_xaxis()
+        if plot_opt.invert_y:
+            ax.invert_yaxis()
+        ax.set_xlabel("x (mm)")
+        ax.set_ylabel("y (mm)")
+        ax.set_title("Drag to draw the line")
+
+        line, = ax.plot([], [], color="black", lw=2, marker="o", markersize=6)
+        start, end = self.line_start.magnitude, self.line_end.magnitude
+        if tuple(start) != tuple(end):
+            line.set_data([start[0], end[0]], [start[1], end[1]])
+        state = {"start": None}
+
+        def snap(x, y):
+            return (float(x_coords[np.argmin(np.abs(x_coords - x))]),
+                    float(y_coords[np.argmin(np.abs(y_coords - y))]))
+
+        def idle(event):
+            toolbar = event.canvas.toolbar
+            return toolbar is not None and toolbar.mode != ""
+
+        def on_press(event):
+            if event.inaxes is not ax or event.button is not MouseButton.LEFT or idle(event):
+                return
+            state["start"] = snap(event.xdata, event.ydata)
+            line.set_data([state["start"][0]] * 2, [state["start"][1]] * 2)
+            fig.canvas.draw_idle()
+
+        def on_move(event):
+            if state["start"] is None or event.inaxes is not ax:
+                return
+            end_pnt = snap(event.xdata, event.ydata)
+            line.set_data([state["start"][0], end_pnt[0]], [state["start"][1], end_pnt[1]])
+            fig.canvas.draw_idle()
+
+        def on_release(event):
+            if state["start"] is None:
+                return
+            p0 = state["start"]
+            state["start"] = None
+            xs, ys = line.get_data()
+            p1 = snap(event.xdata, event.ydata) if event.inaxes is ax else (xs[-1], ys[-1])
+            line.set_data([p0[0], p1[0]], [p0[1], p1[1]])
+            fig.canvas.draw_idle()
+            if p0 == p1:
+                return
+            self.line_start = [Q_(p0[0], "mm"), Q_(p0[1], "mm")]
+            self.line_end = [Q_(p1[0], "mm"), Q_(p1[1], "mm")]
+            logging.info(f"Line from ({p0[0]:g}, {p0[1]:g}) to ({p1[0]:g}, {p1[1]:g}) mm")
+            if self.plot_after_drawing:
+                self.plot_line()
+
+        self._widgets = [fig.canvas.mpl_connect("button_press_event", on_press),
+                         fig.canvas.mpl_connect("motion_notify_event", on_move),
+                         fig.canvas.mpl_connect("button_release_event", on_release)]
+        if ip.settings.plot_opt.auto_show:
+            plt.show()
+
+    def _line_values(self, quantity=None):
+        # measurements on the line, their position along its primary direction, the values of the quantity (default:
+        # the selected quantity of the image plot) and the direction
+        ip = self.image_plot_inst
+        meas_on_line, meas_points = ip.measurement_selector.get_arb_line(self.line_start.magnitude,
+                                                                          self.line_end.magnitude)
+        if quantity is None:
+            func = ip.get_selected_quantity_func()
+        else:
+            func = ip.dataset.quantity_func(quantity, freq_range=ip.grid_calc_freq_range.magnitude, d_sam=ip.d_sample)
+        vals = ip.to_real(func(meas_on_line))
+        if vals.ndim == 2:
+            vals = vals[:, ip.sel_freq_idx]
+
+        x_coords, y_coords = [p[0] for p in meas_points], [p[1] for p in meas_points]
+        if len(set(x_coords)) == len(meas_points):
+            return meas_on_line, x_coords, vals, Direction.Horizontal
+        return meas_on_line, y_coords, vals, Direction.Vertical
 
     @action("Line plot", group=line_plot_grp)
     def plot_line(self):
         start = self.line_start.magnitude
         end = self.line_end.magnitude
-        meas_on_line, meas_points = self.image_plot_inst.measurement_selector.get_arb_line(start, end)
-
         sel_quant = self.image_plot_inst.selected_quantity
-        sel_quant_func = self.image_plot_inst.get_selected_quantity_func()
-
-        vals = self.image_plot_inst.to_real(sel_quant_func(meas_on_line))
-        if vals.ndim == 2:
-            vals = vals[:, self.image_plot_inst.sel_freq_idx]
-
-        x_coords, y_coords = [p[0] for p in meas_points], [p[1] for p in meas_points]
-        if len(set(x_coords)) == len(meas_points):
-            primary_direction = Direction.Horizontal
-        else:
-            primary_direction = Direction.Vertical
+        meas_on_line, x_axis_vals, vals, primary_direction = self._line_values()
 
         if primary_direction == Direction.Horizontal:
             fig_num = "x-slice"
             x_label = "x (mm)"
-            x_axis_vals = x_coords
         else:
             fig_num = "y-slice"
             x_label = "y (mm)"
-            x_axis_vals = y_coords
 
         fig_num += "_" + self.image_plot_inst.quantity_label.replace(" ", "_")
         plt.figure(fig_num)
@@ -632,13 +749,28 @@ class SlicePlots(ComponentBase):
 
         return x_axis_vals, vals, fig_num
 
-    @action("Knife edge", group=line_plot_grp)
+    @action("Knife edge", group=line_plot_grp,
+            help="Fits the beam radius to the integrated power along the line (frequency range of the image grid "
+                 "calculation), whatever quantity the image plot shows")
     def knife_edge(self):
-        if self.image_plot_inst.selected_quantity_enum != QuantityEnum.PowerInt:
-            logging.info("Integrated power must be selected")
+        ip = self.image_plot_inst
+        meas_on_line, coords, vals, direction = self._line_values(QuantityEnum.PowerInt)
+        if len(meas_on_line) < 5:
+            logging.warning("Knife edge: draw or set a line across the edge with at least 5 measurements")
             return None
+        ip._plot_meas_on_image(meas_on_line)
+        f0, f1 = (q.to("THz").magnitude for q in ip.grid_calc_freq_range)
+        logging.info(f"Knife edge: integrated power {f0:g} - {f1:g} THz of {len(meas_on_line)} measurements along "
+                     f"the line")
+        x_label = "x (mm)" if direction == Direction.Horizontal else "y (mm)"
+        if self.knife_edge_derivative:
+            return self._knife_edge_derivative(np.array(coords, dtype=float), np.array(vals, dtype=float), x_label)
 
-        coords, vals, fig_num = self.plot_line()
+        fig_num = "Knife edge"
+        fig = plt.figure(fig_num)
+        fig.clf()
+        plt.xlabel(x_label)
+        plt.ylabel(f"Integrated power ({f0:g} - {f1:g} THz)")
 
         pos_axis = np.array(coords)
         sort_order = np.argsort(pos_axis)
@@ -646,16 +778,15 @@ class SlicePlots(ComponentBase):
         pos_axis = pos_axis[sort_order]
         vals = np.array(vals)[sort_order]
         max_min_step = np.argmin(vals) > np.argmax(vals)
-
-        pos_axis_ordered = pos_axis if max_min_step else np.flip(pos_axis)
+        edge_sign = 1.0 if max_min_step else -1.0
 
         def _model(x, p_max, p_offset, w, h0):
-            return p_offset + 0.5 * p_max * erfc(np.sqrt(2) * (x - h0) / w)
+            return p_offset + 0.5 * p_max * erfc(edge_sign * np.sqrt(2) * (x - h0) / w)
 
         def _cost(p):
-            return np.sum((vals - _model(pos_axis_ordered, *p)) ** 2)
+            return np.sum((vals - _model(pos_axis, *p)) ** 2)
 
-        slope_pos = pos_axis_ordered[np.argmax(np.abs(np.diff(vals))) + 1]
+        slope_pos = pos_axis[np.argmax(np.abs(np.diff(vals))) + 1]
 
         p0 = np.array([np.max(vals), np.min(vals), 0.5, slope_pos])
         bounds = ([p0[0] - 1, p0[0] + 1],
@@ -666,7 +797,7 @@ class SlicePlots(ComponentBase):
 
         popt, pcov = curve_fit(
             _model,
-            pos_axis_ordered,
+            pos_axis,
             vals,
             p0=opt_res.x,
             bounds=([bounds[i][0] for i in range(4)], [bounds[i][1] for i in range(4)])
@@ -677,8 +808,8 @@ class SlicePlots(ComponentBase):
 
         plt.figure(fig_num)
         plt.scatter(pos_axis, vals, label="Measurement", s=30, c="red", zorder=3)
-        plt.plot(pos_axis, _model(pos_axis_ordered, *popt), label="Optimization result")
-        plt.plot(pos_axis, _model(pos_axis_ordered, *p0), label="Initial guess", linestyle="--")
+        plt.plot(pos_axis, _model(pos_axis, *popt), label="Optimization result")
+        plt.plot(pos_axis, _model(pos_axis, *p0), label="Initial guess", linestyle="--")
 
         labels = ["$P_{max}$: ", "$P_{offset}$: ", "Beam radius: ", "$h_0$: "]
         units = ["", "", " mm", " mm"]
@@ -710,6 +841,62 @@ class SlicePlots(ComponentBase):
         plt.draw()
 
         logging.info("Plotted knife edge evaluation")
+        if self.image_plot_inst.settings.plot_opt.auto_show:
+            self.image_plot_inst.plt_show()
+
+        return popt, pcov
+
+    def _knife_edge_derivative(self, pos, vals, x_label):
+        # differences of neighbouring points against the same differences of the edge model
+        # 0.5 P (1 + erf(sqrt(2) (x - h0) / w)), so the step size doesn't widen the profile; its derivative is a
+        # Gaussian exp(-2 (x - h0)^2 / w^2), w the 1/e^2 radius
+        order = np.argsort(pos)
+        pos, vals = pos[order], vals[order]
+        if len(pos) < 5 or np.ptp(pos) == 0:
+            logging.warning("Knife edge: too few points on the line for the derivative")
+            return None
+        step = np.diff(pos)
+        keep = step > 0
+        lo, hi, step = pos[:-1][keep], pos[1:][keep], step[keep]
+        diff = np.diff(vals)[keep] / step
+        if abs(np.min(diff)) > abs(np.max(diff)):
+            diff = -diff
+        mid = (lo + hi) / 2
+
+        def _model(i, amp, offset, w, h0):
+            i = i.astype(int)
+            return offset + 0.5 * amp * (erf(np.sqrt(2) * (hi[i] - h0) / w) - erf(np.sqrt(2) * (lo[i] - h0) / w)) / step[i]
+
+        def _gaussian(x, amp, offset, w, h0):
+            return offset + amp * np.sqrt(2 / np.pi) / w * np.exp(-2 * (x - h0) ** 2 / w ** 2)
+
+        i_max = int(np.argmax(diff))
+        dx = float(np.median(step))
+        fwhm = max((diff >= diff[i_max] / 2).sum() * dx, 2 * dx)
+        p0 = [max(float(np.sum(diff * step)), 1e-12), 0.0, fwhm / np.sqrt(2 * np.log(2)), mid[i_max]]
+        bounds = ([0, -np.inf, dx / 10, pos[0]], [np.inf, np.inf, np.ptp(pos), pos[-1]])
+        try:
+            popt, pcov = curve_fit(_model, np.arange(len(diff), dtype=float), diff, p0=p0, bounds=bounds)
+        except (RuntimeError, ValueError) as e:
+            logging.warning(f"Knife edge: the fit of the derivative failed ({e})")
+            return None
+        perr = np.sqrt(np.diag(pcov))
+        self.image_plot_inst.knife_edge_radius = float(abs(popt[2]))
+
+        fig = plt.figure("Knife edge (derivative)")
+        fig.clf()
+        ax = fig.add_subplot(111)
+        xx = np.linspace(pos[0], pos[-1], 400)
+        ax.scatter(mid, diff, s=30, c="red", zorder=3, label="Differences of the measurement")
+        ax.plot(xx, _gaussian(xx, *popt), label="Fit (derivative of the edge)")
+        ax.legend(fontsize=10)
+        ax.set_xlabel(x_label)
+        ax.set_ylabel("Derivative (1/mm)")
+        ax.set_title(f"Beam radius (1/e²) {abs(popt[2]):.3f} ± {perr[2]:.3f} mm, centre {popt[3]:.3f} ± "
+                     f"{perr[3]:.3f} mm", fontsize=12)
+        fig.tight_layout()
+        logging.info(f"Knife edge (derivative): beam radius (1/e^2) {abs(popt[2]):.3f} ± {perr[2]:.3f} mm, centre "
+                     f"{popt[3]:.3f} ± {perr[3]:.3f} mm")
         if self.image_plot_inst.settings.plot_opt.auto_show:
             self.image_plot_inst.plt_show()
 

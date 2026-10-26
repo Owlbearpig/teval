@@ -46,6 +46,12 @@ Notes:
 
 ## Starting the GUI
 
+By default only the main components are shown: Image plot, Queue, Dataset plots and the Q-space evaluation with its
+preprocessing view and image evaluation. The other components (average value rectangle, slice plots, B-/C-scan,
+spectral explorer, climate plots, spectrogram, diagnostic plots, info pane, multi-layer sample, regression,
+conductivity evaluation, sparse deconvolution, effective medium) are switched on in Settings → Component toggle. The
+choice is saved with the settings.
+
 Run from the repository root (with the environment activated):
 
 ```
@@ -475,8 +481,9 @@ python cli.py --set q_space_eval.transmission_model=tmm_multilayer \
 
 ## Additional views and tools
 
-Each of these can be switched off on its own: the views and the effective medium tab in Settings → Component toggle
-("B-scan / C-scan", "Spectral explorer" under Image plot, "Spectrogram" under Dataset plots, "Effective medium"), the
+Each of these can be switched on and off on its own: the views and the effective medium tab in Settings → Component
+toggle ("B-scan / C-scan", "Spectral explorer" under Image plot, "Spectrogram" under Dataset plots, "Effective medium";
+off by default), the
 absorption limit in Settings → Evaluation → Dynamic range, the image sharpening in the plot settings (group "Image
 sharpening", off by default).
 
@@ -559,6 +566,21 @@ uncertainty a (drift and "extra amplitude uncertainty", Settings → Evaluation 
 told apart from 0. The q-space results get the quantity "alpha_min", the log says at which frequencies alpha is below
 it, and the pixel view of the image evaluation shades the range below it. Systematic errors (Fresnel losses of a
 wrong n, scattering, a model that doesn't fit the sample) aren't included.
+
+### Image slice plot (Image plot → Slice plots)
+
+"Line plot" shows the selected quantity of the image plot along the line from "Line start point" to "Line end point".
+"Draw line in image" opens an image of "Quantity to draw on" (default: peak to peak) where the line is drawn by
+dragging with the left mouse button; its end points snap to the measurement grid and are set as start and end point
+(with "Line plot after drawing" the line plot follows directly).
+
+"Knife edge" fits the edge profile 0.5 P erfc(sqrt(2) (x - h0) / w) of the integrated power along the line (frequency
+range of the image grid calculation, whatever quantity the image plot shows), w the 1/e^2 beam radius, h0 the edge
+position. With "Knife edge: fit the derivative" it fits the differences of neighbouring points instead (the
+derivative of the edge is a Gaussian with the same w): a constant power offset drops out and a slow slope only adds a
+constant, at the cost of more noise. The model is differenced the same way, so the step size doesn't widen the profile.
+Draw the line across a single edge: other structure on the line (holder frame) pulls the fits apart. On the birch
+image (0.5 mm steps) both give 0.85 - 0.87 mm on three lines across the sample edge.
 
 ### Image sharpening (plot settings, group "Image sharpening")
 
