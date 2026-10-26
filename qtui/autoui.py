@@ -886,8 +886,6 @@ def generate_component_ui(name, component):
 
     controlLayout = FlowLayout(controlWidget)
 
-    # QSplitter ignores heightForWidth, so a control pane inside a splitter only got the height of one
-    # flow row and wrapped group boxes were hidden behind the neighbouring pane
     class FlowHeightFilter(QtCore.QObject):
         def eventFilter(self, obj, event):
             if event.type() in (QtCore.QEvent.Resize, QtCore.QEvent.LayoutRequest):

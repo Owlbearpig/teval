@@ -1,12 +1,14 @@
 # CLAUDE.md
 
-- Do not add code comments unless explaining a non-obvious "why" or a critical workaround.
+- Do not add explanatory comments to code or config files (no "why" comments or workaround notes either). Explain the reason for a change once in the console reply instead.
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Running
 
 THz time-domain spectroscopy (THz-TDS) evaluation tool with an auto-generated PySide6 GUI. There is no build step, test suite or linter config; dependencies are in `requirements.txt`.
+
+PySide6 is pinned below 6.12 for Python < 3.12: 6.12.0 releases one reference too many on every `Signal.emit()`, so the refcount of `True` / `False` / `None` runs down and Python 3.11 aborts after a while ("Fatal Python error: bool_dealloc"; immortal objects from Python 3.12 on). The project `venv` uses Python 3.11.
 
 ```
 python load_with_ui.py eval_scripts/test_script.py
@@ -24,6 +26,7 @@ Most other files in `eval_scripts/` (`from dataset import ...`, `dataset_eval`) 
 - Everything user-facing is a `ComponentBase` (`common/components.py`, a traitlets `HasTraits`). `qtui/autoui.py` walks the component tree and generates widgets from trait metadata, so adding a setting or button means adding a trait or `@action` method — no UI code.
 - Trait `.tag(...)` / constructor metadata read by the UI: `name`, `group`, `priority` (ordering), `help`, `toggle` (a `ComponentToggle` trait name that shows/hides a sub-component), `en_save=False` (don't persist), `significant_figures`, `preferred_units`, `width`, `fullwidth`, `combine`, `disable_label`.
 - Groups appear in the order of their lowest `priority` entry (then trait type and name), so give each group of a component its own priority range.
+- Trait observers update widgets, so traits must only be set in the GUI thread. Code running in the evaluation threads goes through a Qt signal (queued to the GUI thread) connected to `set_trait`, e.g. `QSpaceEval.task_status_carrier`, `RemoteOpt._status_signal`, `MeasurementSelection._set_trait_in_gui_thread` (`direct_match` from `get_matching_refs`, which the image / selection evaluations call).
 - `@action(name, group=..., priority=...)` turns a method into a button. Pressing its button logs a header record (`extra={"action_header": True}`, in `autoui.create_action`, so actions called from code don't) that `load_with_ui.HTMLFormatter` renders as a highlighted separator line in the message panel. Modules typically rebind it with `partial(action, check_init=True, rc_params=mpl_style_params)` so actions are blocked until the dataset cache is initialized and run inside the matplotlib style context.
 - Custom traits in `common/traits.py`: `Quantity` (pint quantity), `ValueRange` (2-element range), `Path`, `PlotFigure`, multi-path selection. `Q_` is the pint quantity from `common/units.py`.
 - Persistence: `Settings` (`common/settings.py`, subclass of `AppSettings` in `common/default_appsettings.py`) saves/loads every component's traits on `__exit__`/`__enter__` of the component context. Quantities are stored as magnitudes only, so the unit of the trait default is the implied unit — changing a default's unit silently reinterprets saved configs. Enums are stored by member name. With `AppSettings.save_settings_on_exit` off, `save_configuration` writes nothing except that flag (so it stays off on the next start). The settings file is `Settings.config_path`: `config/<script stem>.json`, or the file chosen with "Load settings file" / "Save settings as" (remembered in `config/<script stem>.last_settings_file`; `Settings.settings_file_override` / `cli.py --config` take precedence). `Settings._components` lists every component that called `load_configuration`; loading another file (`load_configuration(..., reset_missing=True)`) and "Reset all settings" go through it. `reset_to_defaults(instance, group=...)` (also the right-click menu of each group box, `autoui.add_reset_menu`) only resets saved, writable traits of the `resettable_traits` types.

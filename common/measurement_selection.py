@@ -13,6 +13,7 @@ from common.default_appsettings import Dist
 from traitlets import Enum as TEnum, Unicode, Bool, Int, Instance
 from enum import Enum
 from common.measurements import timestamp2id, Measurement
+from PySide6.QtCore import QObject, Signal
 
 action_en_checker = lambda inst: inst.selection_queue is not None
 
@@ -249,6 +250,10 @@ class SelectionQueue(ComponentBase):
         self._update_listing()
         self._refresh_info()
 
+class _TraitSignal(QObject):
+    changed = Signal(str, object)
+
+
 class MeasurementSelection(ComponentBase):
     measurement_selection_grp = "Measurement selection"
     selection_criterion = TEnum(SelectionCriterionEnum,
@@ -318,6 +323,15 @@ class MeasurementSelection(ComponentBase):
         self.sample_paths = MultiPathClass(root_path=self.dataset.data_path, shown_filenames=sam_filenames)
 
         self.selection_queue = SelectionQueue(object_name="Selection queue")
+
+        self._trait_signal = _TraitSignal()
+        self._trait_signal.changed.connect(self.set_trait)
+
+    def _set_trait_in_gui_thread(self, name, value):
+        if threading.current_thread() is threading.main_thread():
+            self.set_trait(name, value)
+        else:
+            self._trait_signal.changed.emit(name, value)
 
     def set_observers(self):
         self.dataset.observe(self.update_fileselection, "measurements")
@@ -767,10 +781,7 @@ class MeasurementSelection(ComponentBase):
     def _ref_file_selection(self, meas_list):
         ref_list = self.ref_file_selection_to_ref_meas()
         rl_len, ml_len = len(ref_list), len(meas_list)
-        if rl_len != ml_len:
-            self.set_trait("direct_match", False)
-        else:
-            self.set_trait("direct_match", True)
+        self._set_trait_in_gui_thread("direct_match", rl_len == ml_len)
         if ml_len == 0:
             return ref_list
         if rl_len == 0:

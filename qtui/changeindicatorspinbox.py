@@ -20,7 +20,6 @@ class ScientificDoubleSpinBox(QDoubleSpinBox):
 
 def ChangeIndicatorSpinBox(*args, actual_value_getter,
                            is_double_spinbox=False, **kwargs):
-    # QDoubleSpinBox rounds values to `decimals` places; 323 (DBL_MAX_10_EXP + DBL_DIG) keeps every double exact
     sb_decimals = 323
     if is_double_spinbox:
         spinbox = ScientificDoubleSpinBox(*args, **kwargs)

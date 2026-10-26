@@ -161,8 +161,6 @@ def wait_until(app, condition, timeout, poll=0.02):
 
 
 def wait_for_parse(app, dataset, prev_cache, errors, timeout):
-    # parsing runs in a worker thread and reports back through queued Qt signals,
-    # so the event loop has to run until the new cache arrives or the worker gives up
     error_cnt = errors.count
     t0 = time.monotonic()
 
@@ -187,8 +185,6 @@ def load_dataset(app, dataset, data_path, errors, timeout):
     if not target.is_dir():
         raise CliError(f"Dataset path {target} is not a directory")
 
-    # loading the config already started parsing its dataset path; a second parse is
-    # skipped while one is running, so finish that one before switching paths
     if str(config_path) not in ("", ".") and config_path.is_dir():
         try:
             wait_for_parse(app, dataset, None, errors, timeout)
@@ -370,7 +366,6 @@ def main():
 
     app = QtWidgets.QApplication(sys.argv[:1])
 
-    # the components print status messages, keep stdout for the command output
     with contextlib.redirect_stdout(sys.stderr):
         Settings.settings_file_override = args.config
         root = load_app_root(args.script)
@@ -405,8 +400,6 @@ def main():
 
 if __name__ == "__main__":
     exit_code = main()
-    # PySide6 can abort with a refcount error while the interpreter tears down the Qt objects
-    # ("bool_dealloc: deallocating True or False"), so skip the teardown; nothing needs it
     logging.shutdown()
     sys.stdout.flush()
     sys.stderr.flush()
