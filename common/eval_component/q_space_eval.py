@@ -27,7 +27,8 @@ from common.eval_component.q_space_scan import ScanTarget, OptimizationCancelled
 from common.eval_component.q_value import fp_round_trip_time, compute_q_value, optimize_and_rate
 from common.eval_component import fast_kernels
 from common.eval_component.q_space_image import QSpaceImageEval, alpha_of
-from common.eval_component.dynamic_range import noise_floor, alpha_max_dataset, limit_frequency, alpha_max
+from common.eval_component.dynamic_range import (noise_floor, alpha_max_dataset, limit_frequency, alpha_max,
+                                                 alpha_min_dataset, below_limit, transmission_noise)
 from common.eval_component.uncertainty import (estimator_for, random_generator, perturbed_transmissions,
                                                replicate_optimum, ThicknessUncertainty, TransmissionUncertainty)
 from dataclasses import dataclass
@@ -807,6 +808,15 @@ class QSpaceEval(EvalComponentBase):
         if f_lim is not None:
             logging.info(f"The absorption reaches 90 % of the maximum measurable absorption (dynamic range) at "
                          f"{f_lim:.2f} THz, above that it is set by the noise")
+        if "alpha_min" not in res.datasets:
+            return
+        a_min = res.datasets["alpha_min"].data.magnitude
+        below = below_limit(freq, res.datasets["alpha"].data.magnitude.real, a_min)
+        if below is not None:
+            cnt, f0, f1 = below
+            logging.info(f"The absorption is below the minimum measurable absorption (median {np.nanmedian(a_min):.3g} "
+                         f"1/cm) at {cnt} of {len(freq)} frequencies ({f0:.2f} - {f1:.2f} THz), not distinguishable "
+                         f"from 0 there")
 
     def check_cancel(self):
         if self._cancel_event is not None and self._cancel_event.is_set():
@@ -1193,6 +1203,15 @@ class QSpaceEval(EvalComponentBase):
                 alpha_noise = noise_floor(self.dataset, len(ctx.selection.sams) if is_avg_meas else 1)
             except Exception as e:
                 logging.warning(f"No noise floor for the maximum measurable absorption: {e}")
+        t_noise = None
+        dr_opt = self.settings.eval_opt.dynamic_range
+        if dr_opt.alpha_min_enabled:
+            meas_list = list(ctx.selection.sams) if is_avg_meas else [meas]
+            try:
+                t_noise = transmission_noise(self.dataset, meas_list, [ctx.selection.ref_map(m) for m in meas_list],
+                                             self.freq_range_idx)
+            except Exception as e:
+                logging.warning(f"No transmission uncertainty for the minimum measurable absorption: {e}")
         for opt_res in opt_results:
             opt_res.measurement = str(meas) if is_avg_meas else meas.filepath.name
 
@@ -1226,6 +1245,10 @@ class QSpaceEval(EvalComponentBase):
                 opt_res.datasets["alpha_max"] = alpha_max_dataset(
                     opt_res.freq_axis, ref_fd[:, 1], alpha_noise, opt_res.datasets["n"].data.magnitude.real,
                     opt_res.d.to("µm").magnitude)
+            if t_noise is not None:
+                opt_res.datasets["alpha_min"] = alpha_min_dataset(
+                    opt_res.freq_axis, opt_res.datasets["t_exp"].data.magnitude, t_noise,
+                    opt_res.d.to("µm").magnitude, dr_opt.alpha_min_coverage)
 
             if self.settings.eval_opt.transmission_sim.add_sim_to_res:
                 opt_res.datasets.update(self.calc_sim(t_model_kwargs, ref_fd))

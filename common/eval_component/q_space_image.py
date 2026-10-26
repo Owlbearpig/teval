@@ -13,6 +13,8 @@ from pathlib import Path
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib.backend_bases import MouseButton
+from matplotlib.widgets import RectangleSelector
 import numpy as np
 from PySide6.QtCore import QObject, Signal
 from traitlets import Bool, Enum as TEnum, Integer, Unicode
@@ -24,7 +26,7 @@ from common.default_appsettings import QuantityEnum, Domain
 from common.eval_component.n_guess import NGuessMethod
 from common.eval_component.q_space_scan import ScanTarget, OptimizationCancelled
 from common.eval_component.uncertainty import estimator_for
-from common.eval_component.dynamic_range import noise_floor, alpha_max
+from common.eval_component.dynamic_range import noise_floor, alpha_max, alpha_min, transmission_noise
 from common.settings import component_settings
 from common.traits import Q_, ValueRange, Path as PathTrait
 from mpl_settings import mpl_style_params
@@ -166,6 +168,10 @@ class QSpaceImageEval(DataSetFormatter):
     confine_to_area = Bool(False, group=area_grp).tag(name="Confine to area", priority=0)
     area_x_range = ValueRange([Q_(0.0, "mm"), Q_(0.0, "mm")], group=area_grp).tag(name="x-range", priority=1)
     area_y_range = ValueRange([Q_(0.0, "mm"), Q_(0.0, "mm")], group=area_grp).tag(name="y-range", priority=2)
+    area_select_quantity = TEnum(QuantityEnum, default_value=QuantityEnum.P2P, group=area_grp,
+                                 help="Quantity shown by \"Select area in image\", calculated like the image plot "
+                                      "(selected frequency, complex value representation)").tag(
+        name="Area selection quantity", priority=3)
     use_value_mask = Bool(False, group=area_grp,
                           help="Pixels whose mean value of the mask quantity lies outside the value range are not "
                                "evaluated, e.g. the opaque holder with the peak to peak value. The values are "
@@ -241,6 +247,7 @@ class QSpaceImageEval(DataSetFormatter):
         self._run_info = {}  # echo count, knot count and probe thickness axis of the image evaluation
         self._inspected_key = None
         self._replot_key = None
+        self._widgets = []
         self._reset_counters()
 
         self._signals = ImageEvalSignal()
@@ -341,12 +348,13 @@ class QSpaceImageEval(DataSetFormatter):
                 out[i] = float(np.mean(func(res)[band]))
         return out
 
-    def mask_values(self, meas_list):
+    def mask_values(self, meas_list, quantity=None):
         # mask quantity per measurement, reduced to a real number like the image plot does
         ip = self.image_plot
+        quantity = self.mask_quantity if quantity is None else quantity
         freq_range = ip.grid_calc_freq_range if ip is not None else self.freq_range
         freq_range = freq_range.magnitude if hasattr(freq_range, "magnitude") else freq_range
-        func = self.dataset.quantity_func(self.mask_quantity, freq_range=freq_range,
+        func = self.dataset.quantity_func(quantity, freq_range=freq_range,
                                           d_sam=ip.d_sample if ip is not None else None)
         vals = np.asarray(func(meas_list))
         if vals.ndim == 2:
@@ -1123,6 +1131,10 @@ class QSpaceImageEval(DataSetFormatter):
             ax_a.plot(freq, a_max, color="C3", ls="--", label=f"Maximum measurable (min. {np.nanmin(a_max):.0f} 1/cm)")
             if np.isfinite(top) and top > ax_a.get_ylim()[0]:
                 ax_a.set_ylim(top=top)
+        a_min = self._pixel_alpha_min(key, res)
+        if a_min is not None:
+            ax_a.fill_between(freq, 0, a_min, color="C2", alpha=0.2, lw=0,
+                              label=f"Below minimum measurable (median {np.nanmedian(a_min):.3g} 1/cm)")
         ax_n.set_ylabel("Refractive index")
         ax_a.set_ylabel("Absorption coefficient (1/cm)")
         for ax in (ax_n, ax_a):
@@ -1146,6 +1158,23 @@ class QSpaceImageEval(DataSetFormatter):
             logging.debug(f"No maximum measurable absorption for the pixel: {e}")
             return None
         return alpha_max(self._freq_axis, np.mean(np.abs(ref_fd), axis=0), noise, res.n.real, res.d)
+
+    def _pixel_alpha_min(self, key, res):
+        # alpha_min of the pixel (noise of its mean transmission, reference amplitude drift), None if off
+        dr_opt = self.settings.eval_opt.dynamic_range
+        if not dr_opt.alpha_min_enabled or self._freq_idx is None:
+            return None
+        meas_list = self._pixel_meas.get(key)
+        if not meas_list:
+            return None
+        try:
+            refs = self.dataset.measurement_selector.get_matching_refs(meas_list)
+            unc = transmission_noise(self.dataset, meas_list, refs, self._freq_idx)
+            t = np.mean(self.dataset.transmission(meas_list, refs)[:, self._freq_idx], axis=0)
+        except Exception as e:
+            logging.debug(f"No minimum measurable absorption for the pixel: {e}")
+            return None
+        return alpha_min(t, unc, res.d, dr_opt.alpha_min_coverage)
 
     def _results_arrays(self):
         # everything of the image results as arrays for np.savez, including what loading them needs to continue or
@@ -1256,6 +1285,61 @@ class QSpaceImageEval(DataSetFormatter):
         self._update_uncertainty_stats()
         logging.info(f"Loaded {len(results)} pixel results from {path} (created {data['created']}, code version "
                      f"{data['code_version'] or 'unknown'})")
+
+    @action("Select area in image", group=area_grp, priority=3)
+    def select_area(self):
+        sams = self.measurements["sams"]
+        if not sams:
+            logging.warning("No sample measurements")
+            return
+        shape = self.dataset.shape_properties
+        vals = np.asarray(self.mask_values(sams, quantity=self.area_select_quantity), dtype=float)
+        grid_shape = (len(shape["x_coords"]), len(shape["y_coords"]))
+        sums, counts = np.zeros(grid_shape), np.zeros(grid_shape)
+        for meas, val in zip(sams, vals):
+            if np.isfinite(val):
+                key = self._pixel_key(meas.position, shape, 1)
+                sums[key] += val
+                counts[key] += 1
+        grid = np.ma.masked_array(sums / np.maximum(counts, 1), mask=counts == 0)
+
+        x0, x1, y0, y1 = shape["extent"]
+        dx, dy = shape["dx"], shape["dy"]
+        fig = plt.figure("Q-space area selection")
+        fig.clf()
+        ax = fig.add_subplot(111)
+        plot_opt = self.settings.plot_opt
+        img = ax.imshow(grid.T, origin="lower", cmap=plt.get_cmap(plot_opt.color_map.value),
+                        extent=(x0 - dx / 2, x1 + dx / 2, y0 - dy / 2, y1 + dy / 2))
+        quant = self.area_select_quantity.value
+        fig.colorbar(img, ax=ax, label=f"{quant.label} {quant.unit}")
+        if plot_opt.invert_x:
+            ax.invert_xaxis()
+        if plot_opt.invert_y:
+            ax.invert_yaxis()
+        ax.set_xlabel("x (mm)")
+        ax.set_ylabel("y (mm)")
+        ax.set_title("Evaluated area")
+
+        def on_select(press, release):
+            ext = selector.extents
+            xs = [round(float(v), 3) for v in sorted(ext[:2])]
+            ys = [round(float(v), 3) for v in sorted(ext[2:])]
+            if xs[1] <= xs[0] or ys[1] <= ys[0]:
+                return
+            self.area_x_range = [Q_(xs[0], "mm"), Q_(xs[1], "mm")]
+            self.area_y_range = [Q_(ys[0], "mm"), Q_(ys[1], "mm")]
+            self.confine_to_area = True
+            logging.info(f"Evaluated area: x {xs[0]:g} - {xs[1]:g} mm, y {ys[0]:g} - {ys[1]:g} mm")
+
+        selector = RectangleSelector(ax, on_select, useblit=False, interactive=True, button=[MouseButton.LEFT],
+                                     props=dict(facecolor="tab:red", edgecolor="tab:red", alpha=0.2, fill=True))
+        x_rng = sorted(q.to("mm").magnitude for q in self.area_x_range)
+        y_rng = sorted(q.to("mm").magnitude for q in self.area_y_range)
+        if x_rng[1] > x_rng[0] and y_rng[1] > y_rng[0]:
+            selector.extents = (*x_rng, *y_rng)
+        self._widgets = [selector]
+        plt.show()
 
     @action("Evaluate image", group=run_grp, priority=15)
     def evaluate_image(self):

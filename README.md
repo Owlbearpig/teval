@@ -462,6 +462,15 @@ the square root of the number of averaged measurements). The q-space results get
 together with alpha in the result view), the log says from which frequency on alpha reaches 90 % of it, and the pixel
 view of the image evaluation shows it (with its smallest value in the legend, as it is often far above alpha).
 
+The smallest measurable absorption ("Minimum measurable absorption", "Coverage factor (alpha_min)"): alpha =
+-2/d ln(|T| / t_Fresnel), so the uncertainty of ln|T| gives alpha an uncertainty of 2/d sigma(ln|T|), whatever alpha
+is. alpha_min is the coverage factor (default 2) times that, with sigma(ln|T|)^2 = E|dT|^2 / (2|T|^2) + a^2 from the
+transmission noise (noise model or the scatter of the averaged measurements) and the relative reference amplitude
+uncertainty a (drift and "extra amplitude uncertainty", Settings → Evaluation → Uncertainty). Below it alpha can't be
+told apart from 0. The q-space results get the quantity "alpha_min", the log says at which frequencies alpha is below
+it, and the pixel view of the image evaluation shades the range below it. Systematic errors (Fresnel losses of a
+wrong n, scattering, a model that doesn't fit the sample) aren't included.
+
 ### Image sharpening (plot settings, group "Image sharpening")
 
 Deconvolves the shown image with the beam profile, a Gaussian intensity profile with the 1/e^2 radius "Beam radius" or,
