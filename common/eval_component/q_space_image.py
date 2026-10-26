@@ -265,16 +265,21 @@ class QSpaceImageEval(DataSetFormatter):
         register(QuantityEnum.QSpaceQRatio, partial(self.confidence_quantity, "q_ratio"))
         register(QuantityEnum.QSpaceDDeviation, partial(self.confidence_quantity, "d_deviation"))
         register(QuantityEnum.QSpaceFullScan, partial(self.scalar_quantity, "full_scan"))
-        register(QuantityEnum.QSpaceThicknessUncertainty, partial(self.scalar_quantity, "d_uncert"))
+        register(QuantityEnum.QSpaceThicknessUncertainty,
+                 lambda meas_list: self._coverage() * self.scalar_quantity("d_uncert", meas_list))
         register(QuantityEnum.QSpaceBandRefractiveIdx, partial(self.band_quantity, lambda res: res.n.real))
         register(QuantityEnum.QSpaceBandAbsorptionCoe,
                  partial(self.band_quantity, lambda res: alpha_of(self._freq_axis, res.n)))
 
         if image_plot is not None:
             image_plot.click_handlers.append(self._on_image_click)
+        self.settings.eval_opt.uncertainty.observe(lambda change: self._update_uncertainty_stats(), "coverage_factor")
 
     def _lookup(self, meas_list):
         return [self.pixel_results.get(self._meas_pixel.get(meas)) for meas in meas_list]
+
+    def _coverage(self):
+        return self.settings.eval_opt.uncertainty.coverage_factor
 
     def scalar_quantity(self, attr, meas_list):
         return np.array([np.nan if res is None else float(getattr(res, attr)) for res in self._lookup(meas_list)])
@@ -473,7 +478,8 @@ class QSpaceImageEval(DataSetFormatter):
         if run_info:
             nfp = run_info.get("nfp")
         elif nfp is not None:
-            logging.info(f"Estimated number of Fabry-Perot echoes {nfp} (minimum of all pixels)")
+            logging.info(f"{nfp} Fabry-Perot echoes within the time window (minimum of all pixels, used by the "
+                         f"truncated echo models)")
         if nfp is not None:
             t_model_kwargs["nfp"] = nfp
         t_mean = np.mean(np.array(list(t_exp.values())), axis=0)
@@ -992,13 +998,14 @@ class QSpaceImageEval(DataSetFormatter):
         self._update_uncertainty_stats()
 
     def _update_uncertainty_stats(self):
-        d_uncert = np.array([res.d_uncert for res in self.pixel_results.values()])
+        d_uncert = self._coverage() * np.array([res.d_uncert for res in self.pixel_results.values()])
         d_uncert = d_uncert[np.isfinite(d_uncert)]
         if not d_uncert.size:
             self.set_trait("uncertainty_stats", "")
             return
         p5, p95 = np.percentile(d_uncert, [5, 95])
-        text = (f"{d_uncert.size} pixels: median {np.median(d_uncert):.2f} µm, 5-95 % {p5:.2f} - {p95:.2f} µm")
+        text = (f"{d_uncert.size} pixels ({self._coverage():g} sigma): median {np.median(d_uncert):.2f} µm, "
+                f"5-95 % {p5:.2f} - {p95:.2f} µm")
         self.set_trait("uncertainty_stats", text)
         logging.info(f"Q-space thickness uncertainty of {text}")
 
@@ -1084,7 +1091,9 @@ class QSpaceImageEval(DataSetFormatter):
         conf = self.pixel_confidence(key)
         nbrs = self._neighbors(key, 1)
         self._inspected_key = key
-        d_text = f"{res.d:.2f} ± {res.d_uncert:.2f} µm" if np.isfinite(res.d_uncert) else f"{res.d:.2f} µm"
+        cov = self._coverage()
+        d_unc = cov * res.d_uncert
+        d_text = f"{res.d:.2f} ± {d_unc:.2f} µm ({cov:g} sigma)" if np.isfinite(d_unc) else f"{res.d:.2f} µm"
         self.set_trait("inspected_pixel", f"{self._pixel_label(key)}, d {d_text}, "
                                           + ("reliable" if conf.reliable else "not reliable"))
 
@@ -1105,9 +1114,9 @@ class QSpaceImageEval(DataSetFormatter):
             x, center, coeffs = fit
             xx = np.linspace(x[0], x[-1], 50)
             ax_q.semilogy(xx, np.polyval(coeffs, xx - center), color="C1", lw=1, label="Parabola")
-        if np.isfinite(res.d_uncert):
-            ax_q.axvspan(res.d - res.d_uncert, res.d + res.d_uncert, color="C3", alpha=0.15, lw=0,
-                         label=f"Uncertainty ± {res.d_uncert:.2f} µm")
+        if np.isfinite(d_unc):
+            ax_q.axvspan(res.d - d_unc, res.d + d_unc, color="C3", alpha=0.15, lw=0,
+                         label=f"Uncertainty ± {d_unc:.2f} µm ({cov:g} sigma)")
         ax_q.axvline(res.d, color="C3", label=f"Optimum {res.d:.2f} µm")
         ax_q.set_xlabel("Thickness (µm)")
         ax_q.set_ylabel("q-value")

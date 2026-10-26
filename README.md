@@ -165,8 +165,17 @@ For each evaluated measurement (or the average of a selection):
 1. **Preparation**
    - The FP round trip time is estimated from the group delay of the transmission ("Estimate Fabry-Perot round trip
      time").
-   - The number of echoes visible in the time trace follows from it ("Use estimated number of Fabry-Perot echoes"). The
-     transmission model only includes these echoes.
+   - The number of echoes within the recorded time window follows from it ("Use estimated number of Fabry-Perot
+     echoes"), regardless of their amplitude. The truncated echo models only include these echoes.
+   - The log also shows how strong the echoes should be: for a flat homogeneous slab (group index from the round trip
+     time, alpha from |T| at the middle of the thickness bounds) the first echo has the amplitude
+     |r1 r2| exp(-alpha d) relative to the main pulse, the k-th echo its k-th power. It gives the frequency up to which
+     the first echo is above the "Echo amplitude threshold", how many echoes are above it, and the ripple the first
+     echo leaves in ln|T| at the round trip time: measured, expected and the noise level (between the first and the
+     second echo). A warning means the q-value has little to work with: no echo is expected above the threshold
+     (strong absorption, small index contrast), the ripple isn't clearly above the noise, or it is much weaker than
+     expected (rough or uneven surfaces, thickness variation within the beam, scattering). Then q(d) often has no
+     clear minimum, and the thickness has to come from somewhere else (e.g. a mechanical measurement).
    - The number of splines also follows from it ("Automatic spline count", "Splines per Fabry-Perot period"). n has to
      be able to follow the FP oscillations, otherwise q can't tell the thicknesses apart.
 2. **Thickness scan:** one fit per thickness on the "Thickness axis bounds" with the "Custom thickness axis step" (and
@@ -183,7 +192,7 @@ For each evaluated measurement (or the average of a selection):
    - The extracted n (or k / alpha, "Quantity used for q-value calculation") is Fourier transformed over frequency.
      FP oscillations show up as a peak at the FP round trip time, and q is the height of the spectrum there.
    - "Limit q-value range to visible echo" restricts this to the frequencies where the echoes are stronger than the
-     "Echo amplitude threshold".
+     "Echo amplitude threshold" (the estimated first echo |r1 r2| exp(-alpha d) from the extracted n and k).
    - "Remove single-frequency spikes" (off by default) replaces isolated one-point spikes in that quantity (e.g. a
      per-frequency solution on another branch) by the mean of their neighbours before the transform. On the test sample
      there are no spikes inside the q-value band and the results are identical with and without it.
@@ -223,6 +232,15 @@ region from 22 to 4.5 fs; parts of a row measured minutes later than the region 
 Settings → Evaluation → Uncertainty. The uncertainties are Monte Carlo estimates: the measured transmission is
 perturbed randomly with its estimated uncertainty and evaluated again, and the spread of the results is the standard
 uncertainty (1 σ) of the shown value.
+
+"Coverage factor (k sigma)" (group "Reported uncertainty", default 1) reports k times the standard uncertainty instead,
+e.g. 2 for about 95 % coverage of a normal distribution: in the log, the thickness uncertainty and the n / alpha /
+conductivity bands of the result view, the saved results (with the factor as "coverage_factor"), the image quantity
+"Q-space thickness uncertainty", the area statistics and the pixel view. Results get the factor when they are
+calculated (change it before the evaluation); the image evaluation stores standard uncertainties and applies the
+current factor when it shows them. The Monte Carlo itself always works with standard uncertainties, and a
+conductivity evaluation that reads the thickness uncertainty of a q-space substrate result divides it by that
+result's factor. The "Coverage factor (alpha_min)" of the minimum measurable absorption is a separate setting.
 
 Uncertainty of the transmission:
 - **Measurement noise:** fitted to the differences of consecutive references (median, so references next to the
@@ -492,6 +510,37 @@ their references. Short-time Fourier transform with a Gaussian window ("Window w
 resolution and a coarser time resolution) or Morlet wavelets ("Wavelet cycles", the same trade-off; at low frequencies
 coarser in time). Fabry-Perot echoes repeat the pulse later, water vapour lines ring long after it at their
 frequencies, dispersion tilts the arrival time with frequency.
+
+### Diagnostic plots (DataSet plotter, group "Diagnostic plots")
+
+Shown when "Diagnostic plots" is enabled in Settings → Component toggle → Dataset plots. They use the selected
+measurements (averaged), the frequency range and the "Nominal sample thickness" of the DataSet plotter.
+
+- **Dynamic range:** reference and sample spectrum over the noise floor of the noise model (see Uncertainty), with the
+  band where the sample is at least 10 dB above it. With a thickness set, also the windowed absorption coefficient
+  with the maximum and minimum measurable absorption: alpha is only meaningful between the two.
+- **Transmission with uncertainty:** |T| and its phase with the uncertainty band of the noise model and the reference
+  drift ("Coverage factor" sigma).
+- **Echo diagnostic:** the Fabry-Perot echo check of the q-space evaluation as a plot, on the band where the sample is
+  10 dB above the noise: the ripple spectrum of ln|T| with the round trip time, the expected ripple and the noise; the
+  expected first echo amplitude over frequency with the echo amplitude threshold; the envelope of the time traces (dB)
+  with the expected echo positions ("Marked echoes").
+- **Kramers-Kronig check:** n calculated from the measured k (windowed evaluation) by a subtractive Kramers-Kronig
+  relation anchored at the centre of that band, compared with the measured n. Absorption outside the band is missing,
+  so deviations growing towards the band edges are expected. Systematic deviations inside point to a wrong thickness,
+  phase unwrapping errors, or losses that aren't absorption (scattering, reflection at rough surfaces): those reduce
+  |T| without the matching dispersion.
+- **Scatter plot of two quantities** (group "Scatter plot"): any two quantities over all sample measurements (or the
+  selected ones), frequency dependent ones at the selected frequency, with the Pearson correlation.
+
+New quantities (Plot selected quantity, image plot, scatter plot), from the windowed evaluation at the nominal
+thickness: "Permittivity" (complex, (n + ik)^2), "Loss tangent" (eps'' / eps') and "Group index" (n + f dn/df, the
+index that the time of flight and the echo spacing measure).
+
+"Mark water vapour lines" (plot settings) marks the strongest water vapour absorption lines between 0.5 and 2.8 THz in
+all plots over frequency when they are shown. "Histogram of the image" (Image plot, group "Histogram") shows the
+distribution of the shown image values (pixels with a value, optionally only inside the average value rectangle)
+with mean, median, standard deviation and the 5 - 95 % range in the log.
 
 ### Maximum measurable absorption (Settings → Evaluation → Dynamic range)
 

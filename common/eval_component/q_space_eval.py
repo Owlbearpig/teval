@@ -24,7 +24,7 @@ from common.eval_component.t_fit_global import spline_transmission_optimization
 from common.eval_component.n_guess import NGuessMethod
 from common.eval_component.layer_stack import LayerStack
 from common.eval_component.q_space_scan import ScanTarget, OptimizationCancelled
-from common.eval_component.q_value import fp_round_trip_time, compute_q_value, optimize_and_rate
+from common.eval_component.q_value import fp_round_trip_time, compute_q_value, optimize_and_rate, echo_visibility
 from common.eval_component import fast_kernels
 from common.eval_component.q_space_image import QSpaceImageEval, alpha_of
 from common.eval_component.dynamic_range import (noise_floor, alpha_max_dataset, limit_frequency, alpha_max,
@@ -469,6 +469,41 @@ class QSpaceEval(EvalComponentBase):
 
         return t_rt, count
 
+    def log_echo_visibility(self, t_exp, t_rt):
+        threshold = self.settings.eval_opt.q_value.fp_amp_threshold.to("").magnitude
+        d = float(np.mean(self.d_opt_axis_bounds.magnitude))
+        n_prev, n_next = self.layer_stack.unknown_neighbor_n(self.freq_axis) if self.is_multilayer() else (1, 1)
+        vis = echo_visibility(self.freq_axis, t_exp, d, t_rt, threshold, n_prev, n_next)
+        i = int(np.argmax(vis.first_echo))
+        text = (f"Expected echoes (flat homogeneous slab, group index {vis.n_group:.3f} and alpha from |T| at d = "
+                f"{d:.0f} µm): first echo at most {100 * vis.first_echo[i]:.2f} % ({self.freq_axis[i]:.2f} THz), ")
+        if vis.f_max is None:
+            text += f"below the echo amplitude threshold {100 * threshold:g} % everywhere"
+        else:
+            text += (f"above the threshold {100 * threshold:g} % up to {vis.f_max:.2f} THz, "
+                     f"{vis.count} echo{'es' * (vis.count != 1)} above it")
+        if vis.measured_ripple is not None:
+            text += (f". Ripple of ln|T| at the round trip time: measured {100 * vis.measured_ripple:.2f} %, expected "
+                     f"{100 * vis.expected_ripple:.2f} %")
+            if vis.noise_ripple is not None:
+                text += f", noise {100 * vis.noise_ripple:.2f} %"
+        logging.info(text)
+
+        if vis.f_max is None:
+            logging.warning("No Fabry-Perot echo above the echo amplitude threshold is expected (absorption, small "
+                            "index contrast): the q-value can't determine the thickness, check that q(d) has a clear "
+                            "minimum")
+        elif vis.measured_ripple is not None and vis.noise_ripple is not None \
+                and vis.measured_ripple < 2 * vis.noise_ripple:
+            logging.warning("The Fabry-Perot ripple of the transmission isn't clearly above the noise: the q-value has "
+                            "little to work with, check that q(d) has a clear minimum (averaging measurements of the "
+                            "same thickness lowers the noise)")
+        elif vis.measured_ripple is not None and vis.measured_ripple < 0.3 * vis.expected_ripple:
+            logging.warning("The Fabry-Perot echo is much weaker than expected for a flat homogeneous slab (rough or "
+                            "uneven surfaces, thickness variation within the beam, scattering): the q-value has little "
+                            "to work with, check that q(d) has a clear minimum")
+        return vis
+
     def is_multilayer(self):
         return self.transmission_model == TransmissionModels.tmm_multilayer
 
@@ -655,8 +690,10 @@ class QSpaceEval(EvalComponentBase):
         delta_n = np.sqrt((a * delta_phi) ** 2 + (dn_dd * delta_d) ** 2)
         delta_k = np.sqrt((dk_dn * a * delta_phi) ** 2 + (a * delta_amp / amp) ** 2 + (dk_dd * delta_d) ** 2)
 
-        opt_res.datasets["alpha"].uncert = Q_(np.abs(4 * np.pi * f_axis * delta_k / (1e-4 * c_thz)), "1/cm")
-        opt_res.datasets["n"].uncert = Q_(delta_n + 1j * delta_k, "")
+        cov = self.settings.eval_opt.uncertainty.coverage_factor
+        opt_res.datasets["alpha"].uncert = Q_(cov * np.abs(4 * np.pi * f_axis * delta_k / (1e-4 * c_thz)), "1/cm")
+        opt_res.datasets["n"].uncert = Q_(cov * (delta_n + 1j * delta_k), "")
+        opt_res.optimization_info["coverage_factor"] = cov
 
     def q_value_params(self):
         # everything compute_q_value needs from the settings, as a plain dict for the worker processes
@@ -698,11 +735,17 @@ class QSpaceEval(EvalComponentBase):
     def build_context(self, selection) -> SelectionContext:
         t_exp_dict = self.t_exp_dict(selection)
         t_model_kwargs = self.base_t_model_kwargs()
+        t_exp_0 = np.asarray(next(iter(t_exp_dict.values())))[:, 1]
+        t_rt, nfp = self.fp_echo_estimate(list(selection.sams), list(selection.refs), t_exp_0)
+        text = f"Fabry-Perot round trip time {t_rt:.2f} ps (oscillation period {1e3 / t_rt:.1f} GHz)"
         if self.settings.eval_opt.auto_fp_count:
-            t_exp_0 = np.asarray(next(iter(t_exp_dict.values())))[:, 1]
-            t_rt, t_model_kwargs["nfp"] = self.fp_echo_estimate(list(selection.sams), list(selection.refs), t_exp_0)
-            logging.info(f"Fabry-Perot oscillation period {1e3 / t_rt:.1f} GHz, "
-                         f"estimated number of echoes {t_model_kwargs['nfp']}")
+            t_model_kwargs["nfp"] = nfp
+            text += f", {nfp} echoes within the time window (used by the truncated echo models)"
+        logging.info(text)
+        try:
+            self.log_echo_visibility(t_exp_0, t_rt)
+        except Exception as e:
+            logging.debug(f"No echo visibility estimate: {e}")
 
         return SelectionContext(
             selection=selection,
@@ -1075,8 +1118,9 @@ class QSpaceEval(EvalComponentBase):
         return {key: ThicknessUncertainty.from_replicates(key_optima) for key, key_optima in optima.items()}
 
     def log_thickness_uncertainty(self, label, d, res: ThicknessUncertainty, unc: TransmissionUncertainty):
-        logging.info(f"{label}: thickness {d:.2f} ± {res.d_std:.2f} µm (Monte Carlo, {res.samples} samples, their "
-                     f"mean {res.d_mean:.2f} µm; {unc.describe()})")
+        cov = self.settings.eval_opt.uncertainty.coverage_factor
+        logging.info(f"{label}: thickness {d:.2f} ± {cov * res.d_std:.2f} µm ({cov:g} sigma; Monte Carlo, "
+                     f"{res.samples} samples, their mean {res.d_mean:.2f} µm; {unc.describe()})")
         sem = res.d_std / np.sqrt(res.samples)
         if abs(res.d_mean - d) > 3 * sem + 0.05 * res.d_std + 1e-3:
             logging.warning(f"{label}: the mean of the Monte Carlo samples differs from the optimum by "
@@ -1098,16 +1142,18 @@ class QSpaceEval(EvalComponentBase):
         res = self.mc_thickness_uncertainty(executor, [(meas, target.opt_config, t, unc, d, shift)], label)[meas]
         self.log_thickness_uncertainty(label, d, res, unc)
 
-        best.optimization_info["d_uncertainty"] = Q_(res.d_std, "µm")
+        cov = self.settings.eval_opt.uncertainty.coverage_factor
+        best.optimization_info["d_uncertainty"] = Q_(cov * res.d_std, "µm")
+        best.optimization_info["coverage_factor"] = cov
         best.optimization_info["d_mc_mean"] = Q_(res.d_mean, "µm")
         best.optimization_info["uncertainty_samples"] = res.samples
         freq = best.freq_axis.to("THz").magnitude
         datasets = best.datasets
         if "n_real" in datasets and "n_imag" in datasets:
-            datasets["n_real"].uncert = Q_(res.n_std.real, "")
-            datasets["n_imag"].uncert = Q_(res.n_std.imag, "")
+            datasets["n_real"].uncert = Q_(cov * res.n_std.real, "")
+            datasets["n_imag"].uncert = Q_(cov * res.n_std.imag, "")
         if "alpha" in datasets:
-            datasets["alpha"].uncert = Q_(alpha_of(freq, 1j * res.n_std.imag), "1/cm")
+            datasets["alpha"].uncert = Q_(cov * alpha_of(freq, 1j * res.n_std.imag), "1/cm")
 
     def calc_sim(self, model_kwargs, ref_fd):
         model = self.transmission_model.value

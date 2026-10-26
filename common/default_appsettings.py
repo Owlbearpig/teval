@@ -338,6 +338,9 @@ class QuantityEnum(Enum):
     RefractiveIdx = DerivedQuantity("Refractive idx", domain=Domain.Frequency)
     ExtCoe = DerivedQuantity("Extinction coefficient", domain=Domain.Frequency)
     AbsorptionCoe = DerivedQuantity("Absorption coe.", domain=Domain.Frequency, unit="1/cm")
+    Permittivity = DerivedQuantity("Permittivity", domain=Domain.Frequency)
+    LossTangent = DerivedQuantity("Loss tangent", domain=Domain.Frequency)
+    GroupIndex = DerivedQuantity("Group index", domain=Domain.Frequency)
     Conductivity = DerivedQuantity("Conductivity", domain=Domain.Frequency, unit="S/cm")
     QSpaceThickness = DerivedQuantity("Q-space thickness", domain=Domain.Time, unit="µm")
     QSpaceShift = DerivedQuantity("Q-space time shift", domain=Domain.Time, unit="fs")
@@ -373,7 +376,7 @@ class QValueOpt(ComponentBase):
                                 "q-space spectrum").tag(name="Fabry-Perot round trip time")
     auto_q_space_f_max = Bool(True, group=q_space_eval_grp,
                               help="Limit the q-value range to frequencies where the estimated Fabry-Perot echo "
-                                   "amplitude |r|^2 exp(-2 alpha d) is above the threshold, above that n and k "
+                                   "amplitude |r|^2 exp(-alpha d) is above the threshold, above that n and k "
                                    "contain no Fabry-Perot information").tag(name="Limit q-value range to visible echo")
     fp_amp_threshold = TQuantity(Q_(0.3, "%"), group=q_space_eval_grp).tag(name="Echo amplitude threshold")
     remove_q_spikes = Bool(False, group=q_space_eval_grp,
@@ -548,6 +551,17 @@ class UncertaintyOpt(ComponentBase):
         name="Conductivity uncertainty (Monte Carlo)", priority=20)
     cond_samples = Int(200, min=10, group=cond_grp).tag(name="Monte Carlo samples", priority=21)
 
+    report_grp = "Reported uncertainty"
+    coverage_factor = Float(1.0, min=0.1, group=report_grp,
+                            help="Reported uncertainties are this many standard deviations (expanded uncertainty "
+                                 "k x the standard uncertainty): the log, the thickness uncertainty and the n / alpha "
+                                 "/ conductivity bands of the result view and the saved results (with the factor as "
+                                 "coverage_factor), the image quantity \"Q-space thickness uncertainty\" and the "
+                                 "pixel view. The thickness uncertainty a conductivity evaluation reads from a "
+                                 "q-space result is converted back to the standard uncertainty. Results get the "
+                                 "factor when they are calculated, the image evaluation when its values are "
+                                 "shown").tag(name="Coverage factor (k sigma)", priority=30)
+
 
 class EvalOpt(ComponentBase):
     # sub-tabs of Settings -> Evaluation; settings saved before they existed are moved there on load
@@ -682,6 +696,9 @@ class PlotOpt(ComponentBase):
     plot_standard_deviation = Bool(True).tag(name="Plot standard deviation")
     plot_ref_waveform = TEnum(PlotReferenceWaveform, PlotReferenceWaveform.only_first).tag(
         name="Plot reference with sample")
+    mark_water_lines = Bool(False, help="Marks the strongest water vapour absorption lines (0.5 - 2.8 THz) in plots "
+                                        "over frequency, narrow dips and spikes there are often residual water "
+                                        "vapour, not the sample").tag(name="Mark water vapour lines")
 
     image_group = "Image"
     cbar_lim = ValueRange(default_value=[0.0, 0.0], group=image_group).tag(name="Custom color bar limits")
@@ -765,6 +782,7 @@ class ComponentToggle(ComponentBase):
     en_extended_dataset_plots = Bool(True).tag(name="Main component", group=dataset_plotter_grp, priority=1000)
     en_stability_plots = Bool(True).tag(name="Climate plots", group=dataset_plotter_grp, priority=1001)
     en_spectrogram = Bool(True).tag(name="Spectrogram", group=dataset_plotter_grp, priority=1002)
+    en_diagnostic_plots = Bool(True).tag(name="Diagnostic plots", group=dataset_plotter_grp, priority=1003)
 
     measurement_selection = "Measurement selection"
     en_queue = Bool(True).tag(name="Queue", group=measurement_selection)

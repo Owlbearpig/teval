@@ -208,8 +208,9 @@ class ConductivityEval(EvalComponentBase):
         n_sub = np.interp(freq_axis, f_res, n_data.real) + 1j * np.interp(freq_axis, f_res, n_data.imag)
         d_uncert = result.optimization_info.get("d_uncertainty")
         d_uncert = float(d_uncert.to("µm").magnitude) if isinstance(d_uncert, Q_) else np.nan
+        cov = float(result.optimization_info.get("coverage_factor", 1.0))
         logging.info(f"Substrate refractive index from {path.name} ({result.measurement}, d = {result.d}"
-                     + (f" ± {d_uncert:.2f} µm" if np.isfinite(d_uncert) else "")
+                     + (f" ± {d_uncert:.2f} µm ({cov:g} sigma)" if np.isfinite(d_uncert) else "")
                      + f", model {result_data.model_name})")
 
         # the substrate index is only consistent with a two-layer model that treats the substrate echoes the same way
@@ -223,7 +224,7 @@ class ConductivityEval(EvalComponentBase):
                                 f"{self.two_layer_model.name} is {'with' if model_has_echoes else 'without'} them, "
                                 f"this usually shows up as oscillations in the conductivity")
 
-        return n_sub, result.d.to("µm").magnitude, d_uncert
+        return n_sub, result.d.to("µm").magnitude, d_uncert / cov
 
     def substrate_properties(self, freq_idx):
         # n_sub, d_sub, its uncertainty (µm) and (if needed) the measured substrate transmission (physics convention)
@@ -354,10 +355,11 @@ class ConductivityEval(EvalComponentBase):
             with np.errstate(divide="ignore", invalid="ignore"):
                 return 100 * float(np.nanmedian(np.abs(std) / scale))
 
-        parts = {source: rel(spread(np.mean(replicates((source,)), axis=1))) for source in all_sources}
-        logging.info(f"Conductivity uncertainty of the mean of {len(meas_list)} measurement(s) ({count} Monte Carlo "
-                     f"samples, median over the fit range, relative to |sigma|): total "
-                     f"{rel(res['sigma_mean_std']):.2f} %, "
+        cov = opt.coverage_factor
+        parts = {source: cov * rel(spread(np.mean(replicates((source,)), axis=1))) for source in all_sources}
+        logging.info(f"Conductivity uncertainty of the mean of {len(meas_list)} measurement(s) ({cov:g} sigma, "
+                     f"{count} Monte Carlo samples, median over the fit range, relative to |sigma|): total "
+                     f"{cov * rel(res['sigma_mean_std']):.2f} %, "
                      + ", ".join(f"{source} {val:.2f} %" for source, val in parts.items()))
         logging.info(f"Film: {film_unc[0].describe()}" + (f". Substrate: {sub_unc.describe()}" if sub_unc else ""))
         res["uncertainty_parts"] = parts
@@ -420,17 +422,18 @@ class ConductivityEval(EvalComponentBase):
         if res["t_mod"] is not None:
             per_meas["t_mod"] = res["t_mod"]
         formatted = {key: self.format_meas_dict(meas_list, data) for key, data in per_meas.items()}
+        cov = self.settings.eval_opt.uncertainty.coverage_factor
         if "sigma_std" in res:
             # Monte Carlo uncertainty instead of the scatter; of the average the larger of its Monte Carlo
             # uncertainty and the standard error of the mean of the measurements
             for key in ("sigma", "n_film"):
                 for meas, data in formatted[key].items():
                     if isinstance(meas, Measurement):
-                        data[:, 2] = res[f"{key}_std"][meas_list.index(meas)]
+                        data[:, 2] = cov * res[f"{key}_std"][meas_list.index(meas)]
                     else:
                         sem = data[:, 2] / np.sqrt(len(meas_list))
                         mc = res[f"{key}_mean_std"]
-                        data[:, 2] = np.maximum(mc.real, sem.real) + 1j * np.maximum(mc.imag, sem.imag)
+                        data[:, 2] = cov * (np.maximum(mc.real, sem.real) + 1j * np.maximum(mc.imag, sem.imag))
 
         not_converged = int(np.sum(~res["converged"]))
         if not_converged:
@@ -450,6 +453,8 @@ class ConductivityEval(EvalComponentBase):
                 "not_converged_points": not_converged,
                 "timestamp": str(datetime.now().isoformat()),
             }
+            if "sigma_std" in res:
+                single.optimization_info["coverage_factor"] = cov
             for source, val in res.get("uncertainty_parts", {}).items():
                 single.optimization_info[f"uncertainty_{source.replace(' ', '_')}_percent"] = val
 

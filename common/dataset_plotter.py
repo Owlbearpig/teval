@@ -14,6 +14,7 @@ from common.functions import moving_average, f_axis_idx_map, local_minima_1d, ro
 from common.visualization.image_deconvolution import deconvolve_image
 from common.visualization.spectral_explorer import SpectralExplorer
 from common.visualization.spectrogram import Spectrogram
+from common.visualization.diagnostic_plots import DiagnosticPlots, mark_water_lines
 from common.visualization.time_scans import TimeScans
 import logging
 from pathlib import Path
@@ -153,6 +154,8 @@ class DataSetPlotter(DataSetFormatter):
     def plt_show(self):
         for i, fig_num in enumerate(plt.get_fignums()):
             fig = plt.figure(fig_num)
+            if self.settings.plot_opt.mark_water_lines:
+                mark_water_lines(fig)
             self._redraw_legend(fig)
 
             if self.settings.save_settings.save_plots:
@@ -740,6 +743,12 @@ class ImagePlot(DataSetPlotter):
     grid_calc_progress = Float(0, min=0, max=1, read_only=True).tag(
         name="Grid calculation progress", group=image_calc, priority=1004)
 
+    hist_grp = "Histogram"
+    hist_bins = Int(50, min=2, group=hist_grp).tag(name="Bins", priority=1100)
+    hist_in_rectangle = Bool(False, group=hist_grp,
+                             help="Only the pixels inside the rectangle of the average value rectangle "
+                                  "(bottom left / top right)").tag(name="Only inside the rectangle", priority=1101)
+
     waveform_grp = "On-click waveform plot"
     legend_label = Unicode("").tag(name="Legend label", group=waveform_grp, priority=1000)
     averaging = TEnum(Averaging, Averaging.only_avg).tag(name="Average / individual", group=waveform_grp, priority=1001)
@@ -933,6 +942,57 @@ class ImagePlot(DataSetPlotter):
                     filtered_grid[x_idx, y_idx] = empty_grid[x_idx, y_idx]
 
         return filtered_grid
+
+    @action("Histogram of the image", group=hist_grp, priority=1102)
+    def plot_histogram(self, grid_vals=None):
+        if grid_vals is None:
+            self.calculate_grid_vals(callback=self.plot_histogram)
+            return
+        vals = np.asarray(self.real_grid_vals, dtype=float)
+        valid = np.isfinite(vals)
+        missing = getattr(self, "_grid_missing", None)
+        if missing is not None and missing.shape == vals.shape:
+            valid &= ~missing
+        area = ""
+        if self.hist_in_rectangle and self.avg_val_rect is not None:
+            (x0, y0), (x1, y1) = self.avg_val_rect.rect_sel_bot_left.magnitude, self.avg_val_rect.rect_sel_top_right.magnitude
+            if x1 <= x0 or y1 <= y0:
+                logging.warning("Histogram: set the rectangle of the average value rectangle (bottom left < top right)")
+                return
+            ix0, iy0 = self._coords_to_idx(x0, y0)
+            ix1, iy1 = self._coords_to_idx(x1, y1)
+            inside = np.zeros_like(valid)
+            inside[ix0:ix1 + 1, iy0:iy1 + 1] = True
+            valid &= inside
+            area = f", x {x0:g} - {x1:g} mm, y {y0:g} - {y1:g} mm"
+        vals = vals[valid]
+        if self.plot_settings.log_scale:
+            vals = np.log10(vals[vals > 0])
+        if vals.size < 2:
+            logging.warning("Histogram: fewer than two pixels with a value")
+            return
+
+        quant = self.selected_quantity
+        unit = f" ({quant.unit})" if quant.unit else ""
+        x_label = f"log10 {self.quantity_label}" if self.plot_settings.log_scale else f"{self.quantity_label}{unit}"
+        fig = plt.figure("Histogram " + self.image_fig_num)
+        fig.clf()
+        ax = fig.add_subplot(111)
+        ax.hist(vals, bins=self.hist_bins, color="C0", alpha=0.8)
+        ax.xaxis.set_major_locator(plt.MaxNLocator(5))
+        mean, median, std = float(np.mean(vals)), float(np.median(vals)), float(np.std(vals, ddof=1))
+        p5, p95 = np.percentile(vals, [5, 95])
+        ax.axvline(mean, color="C3", label=f"Mean {mean:.4g}")
+        ax.axvline(median, color="C2", ls="--", label=f"Median {median:.4g}")
+        ax.set_xlabel(x_label)
+        ax.set_ylabel("Pixels")
+        ax.set_title(f"{vals.size} pixels{area}, std {std:.3g}", fontsize=12)
+        ax.legend()
+        fig.tight_layout()
+        logging.info(f"Histogram of {quant}{area}: {vals.size} pixels, mean {mean:.4g}, median {median:.4g}, std "
+                     f"{std:.3g}, 5 - 95 % {p5:.4g} - {p95:.4g}")
+        if self.settings.plot_opt.auto_show:
+            self.plt_show()
 
     @action("Clear drawn elements", group=image_grp, priority=3)
     def clear_drawn_elements(self):
@@ -1709,11 +1769,13 @@ class ExtendedDataSetPlotter(DataSetPlotter):
 
     stability_plotter = Instance(StabilityPlots, allow_none=True).tag(toggle=ComponentToggle.en_stability_plots)
     spectrogram = Instance(Spectrogram, allow_none=True).tag(toggle=ComponentToggle.en_spectrogram)
+    diagnostic_plots = Instance(DiagnosticPlots, allow_none=True).tag(toggle=ComponentToggle.en_diagnostic_plots)
 
     def __init__(self, dataset: DataSet, **kwargs):
         super().__init__(dataset=dataset, **kwargs)
         self.stability_plotter = StabilityPlots(self.dataset, object_name="Stability plots")
         self.spectrogram = Spectrogram(self, object_name="Spectrogram")
+        self.diagnostic_plots = DiagnosticPlots(self, object_name="Diagnostic plots")
 
 
     @action("Calculate quantity value", priority=1011)
@@ -1944,43 +2006,37 @@ class ExtendedDataSetPlotter(DataSetPlotter):
         if label:
             self.logger.info(label)
         meas_list = self.measurement_selector.get_selected_measurements()
+        if not meas_list:
+            self.logger.warning("No measurement selected")
+            return
+        d = self.d_sample.to("µm").magnitude
+        if d <= 0:
+            self.logger.warning("Set the nominal sample thickness (DataSet plotter), n, k and alpha scale with 1 / d")
+            return
+        if d <= 1:
+            self.logger.warning(f"Nominal sample thickness {d:g} µm (DataSet plotter): n, k and alpha scale with 1 / d, "
+                                f"set the actual thickness")
+        try:
+            f_list = [float(s) for s in self.printed_freqs.replace(" ", "").split(",") if s]
+        except ValueError:
+            self.logger.warning(f"Printed frequencies: comma separated values in THz, not '{self.printed_freqs}'")
+            return
+        if not f_list:
+            self.logger.warning("No printed frequencies set")
+            return
+
         res = self.dataset.windowing_eval(meas_list, d=self.d_sample)
-        freq_axis = self.freq_axis
+        quantities = {"n": (np.real(res.refr_idx), ""), "k": (np.imag(res.refr_idx), ""),
+                      "alpha": (res.abs_coe, " 1/cm")}
+        formatted = {q: self.format_meas_dict(meas_list, vals) for q, (vals, _) in quantities.items()}
+        f_idx_list = [int(np.argmin(np.abs(f - self.freq_axis))) for f in f_list]
 
-        res = {"n": np.real(res.refr_idx), "k": np.imag(res.refr_idx), "alpha": res.abs_coe, "d": res.d}
-
-        f_str = self.printed_freqs
-        f_str_split = f_str.replace(" ", "").split(",")
-        f_list = [float(s) for s in f_str_split]
-        f_idx_list = np.array([np.argmin(np.abs(f-freq_axis)) for f in f_list])
-
-        printed_quantities = ["d", "n", "alpha", "k"]
-        for meas in [*meas_list, "Average"]:
-            if self.averaging == Averaging.only_avg and meas != "Average":
-                continue
-            elif self.averaging == Averaging.only_individual and meas == "Average":
-                continue
-            self.logger.info(meas)
-            for quantity in printed_quantities:
-                unit = " 1/cm" if quantity == "alpha" else ""
-                unit = " µm" if quantity == "d" else unit
-                res_val = res[quantity]
-
-                if isinstance(res_val, np.ndarray):
-                    formatted_vals = self.format_meas_dict(meas_list, res_val)
-                    array = formatted_vals[meas]
-
-                    for f_idx in f_idx_list:
-                        freq = np.round(array[f_idx, 0], 2)
-                        val_ = np.round(array[f_idx, 1], 2)
-                        uncert_ = np.round(array[f_idx, 2], 2)
-
-                        msg = f"{quantity}: {val_}±{uncert_}{unit} at {freq} THz"
-                        self.logger.info(msg)
-                else:
-                    uncert_ = 0
-                    val_ = np.round(res_val, 2)
-                    msg = f"{quantity}: {val_}±{uncert_}{unit}\n"
-                    self.logger.info(msg)
-
-            self.logger.info("\n")
+        for meas in formatted["n"]:
+            self.logger.info(f"{meas}, d = {d:g} µm")
+            for quantity in ("n", "alpha", "k"):
+                unit = quantities[quantity][1]
+                array = formatted[quantity][meas]
+                for f_idx in f_idx_list:
+                    freq, val, uncert = array[f_idx, 0].real, array[f_idx, 1].real, array[f_idx, 2].real
+                    uncert_text = f" ± {uncert:.2g}" if uncert else ""
+                    self.logger.info(f"{quantity}: {val:.4g}{uncert_text}{unit} at {freq:.3g} THz")

@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import numpy as np
 from scipy.signal import detrend
 
@@ -18,7 +20,60 @@ def fp_round_trip_time(freq_axis, t_exp, d, known_delay=0.0):
 def fp_echo_amplitude(freq_axis, n, d, n_prev=1, n_next=1):
     r_prev = (n - n_prev) / (n + n_prev)
     r_next = (n - n_next) / (n + n_next)
-    return np.abs(r_prev * r_next) * np.exp(-4 * np.pi * freq_axis * np.abs(n.imag) * 2 * d / c_thz)
+    return np.abs(r_prev * r_next) * np.exp(-4 * np.pi * freq_axis * np.abs(n.imag) * d / c_thz)
+
+
+@dataclass
+class EchoVisibility:
+    n_group: float
+    first_echo: np.ndarray  # amplitude of the first echo relative to the main pulse per frequency, flat slab
+    threshold: float
+    count: int  # echoes above the threshold at the frequency of the strongest echo
+    f_max: float | None  # THz, last frequency with the first echo above the threshold
+    expected_ripple: float | None = None  # mean first echo amplitude in the ripple band
+    measured_ripple: float | None = None  # amplitude of the ln|T| oscillation at the round trip time
+    noise_ripple: float | None = None  # median of the ln|T| spectrum between the first and the second echo
+    tau: np.ndarray | None = None  # ps, axis of the ln|T| ripple spectrum
+    ripple_spectrum: np.ndarray | None = None
+
+
+def echo_visibility(freq_axis, t_exp, d, t_rt, threshold, n_prev=1, n_next=1):
+    # a priori echo amplitudes of a flat homogeneous slab (group index from the round trip time, alpha d from |T|) and
+    # the ripple of ln|T| at the round trip time
+    freq_axis, t_abs = np.asarray(freq_axis, dtype=float), np.abs(np.asarray(t_exp))
+    n = c_thz * t_rt / (2 * d)
+    t_fresnel = np.abs(2 * n_prev / (n_prev + n) * 2 * n / (n + n_next))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        alpha_d = np.clip(np.nan_to_num(-2 * np.log(t_abs / t_fresnel), nan=np.inf), 0, None)
+    first = np.abs((n - n_prev) / (n + n_prev) * (n - n_next) / (n + n_next)) * np.exp(-alpha_d)
+    a_max = float(np.max(first)) if len(first) else 0.0
+    count = int(np.floor(np.log(threshold) / np.log(a_max))) if threshold < a_max < 1 else 0
+    above = np.flatnonzero(first >= threshold)
+    vis = EchoVisibility(n_group=float(n), first_echo=first, threshold=threshold, count=count,
+                         f_max=float(freq_axis[above[-1]]) if len(above) else None)
+
+    f_end = max(vis.f_max if vis.f_max is not None else freq_axis[0], freq_axis[0] + 2 / t_rt)
+    band = (freq_axis <= f_end) & (t_abs > 0)
+    if band.sum() < 8:
+        return vis
+    tau, spec, win = ln_ripple_spectrum(freq_axis[band], t_abs[band])
+    at_rt = np.abs(tau - t_rt) <= 1 / np.ptp(freq_axis[band])
+    between = (tau >= 1.3 * t_rt) & (tau <= 1.7 * t_rt)
+    vis.expected_ripple = float(np.sum(first[band] * win) / win.sum())
+    vis.measured_ripple = float(np.max(spec[at_rt])) if at_rt.any() else None
+    vis.noise_ripple = float(np.median(spec[between])) if between.any() else None
+    vis.tau, vis.ripple_spectrum = tau, spec
+    return vis
+
+
+def ln_ripple_spectrum(freq, t_abs, pad_factor=16):
+    # amplitude spectrum of ln|T| without its cubic trend (Hann window): a cosine ripple of amplitude a gives a peak a
+    y = np.log(t_abs)
+    resid = y - np.polyval(np.polyfit(freq - freq.mean(), y, 3), freq - freq.mean())
+    win = np.hanning(len(freq))
+    n_fft = pad_factor * len(freq)
+    spec = np.abs(np.fft.rfft(resid * win, n=n_fft)) * 2 / win.sum()
+    return np.fft.rfftfreq(n_fft, d=np.mean(np.diff(freq))), spec, win
 
 
 def q_space_spectrum(freq_axis, y, pad_factor=16):

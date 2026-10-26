@@ -307,6 +307,9 @@ class DataSet(ComponentBase):
         func_map[QuantityEnum.RefractiveIdx] = partial(self.refractive_idx, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
         func_map[QuantityEnum.ExtCoe] = partial(self.extinction_coe, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
         func_map[QuantityEnum.AbsorptionCoe] = partial(self.absorption_coef, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
+        func_map[QuantityEnum.Permittivity] = partial(self.permittivity, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
+        func_map[QuantityEnum.LossTangent] = partial(self.loss_tangent, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
+        func_map[QuantityEnum.GroupIndex] = partial(self.group_index, d_sam=d_sam)  # 2D (N_meas, Freq_slice)
 
         # quantities provided by evaluation components, e.g. Conductivity (ConductivityEval)
         func_map.update(self.quantity_funcs)
@@ -901,6 +904,19 @@ class DataSet(ComponentBase):
 
     def extinction_coe(self, meas_, d_sam=None):
         return np.imag(self.windowing_eval(meas_, d=d_sam).refr_idx)
+
+    def permittivity(self, meas_, d_sam=None):
+        with np.errstate(over="ignore", invalid="ignore"):
+            return self.windowing_eval(meas_, d=d_sam).refr_idx ** 2
+
+    def loss_tangent(self, meas_, d_sam=None):
+        eps = self.permittivity(meas_, d_sam=d_sam)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return eps.imag / eps.real
+
+    def group_index(self, meas_, d_sam=None):
+        n = np.real(self.windowing_eval(meas_, d=d_sam).refr_idx)
+        return n + self.freq_axis * np.gradient(n, self.freq_axis, axis=1)
 
     def get_ref_abs_argmax(self, meas_):
         ref_meas = self.measurement_selector.get_matching_refs(meas_)
